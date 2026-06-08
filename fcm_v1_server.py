@@ -3,6 +3,12 @@ import json
 import logging
 import os
 import re
+import smtplib
+import hashlib
+import hmac
+import secrets
+from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
 import tempfile
 import time
 from collections import defaultdict
@@ -46,6 +52,15 @@ SB_URL = _env_value("SUPABASE", "_URL", default="https://oafbzceorbjykgoffuaa.su
 SB_ANON = _env_value("SUPABASE", "_ANON", "_KEY")
 SB_SERVICE = _env_value("SUPABASE", "_SERVICE", "_ROLE", "_KEY")
 APP_SHARED_SECRET = os.getenv("APP_SHARED_SECRET", "")
+
+# ================= Auth OTP Email =================
+SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USERNAME = os.getenv("SMTP_USERNAME", "").strip()
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "").strip()
+SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USERNAME or "Respect App <no-reply@respect-app.local>").strip()
+OTP_TTL_MINUTES = int(os.getenv("OTP_TTL_MINUTES", "10"))
+TRUSTED_DEVICE_DAYS = int(os.getenv("TRUSTED_DEVICE_DAYS", "90"))
 
 # ================= Respect AI / Qwen Model Studio =================
 # لا تضع المفتاح داخل الكود. ضعه في Render كمتغير بيئة:
@@ -303,6 +318,28 @@ def get_user_fcm_token(receiver_username: str) -> Optional[str]:
     return str(token).strip() if token else None
 
 
+class AuthOtpSendRequest(BaseModel):
+    email: str
+    purpose: str = Field(default="login")  # login / signup
+    username: str = ""
+    deviceId: str = ""
+
+
+class AuthOtpVerifyRequest(BaseModel):
+    email: str
+    code: str
+    purpose: str = Field(default="login")
+    username: str = ""
+    deviceId: str = ""
+
+
+class TrustedDeviceRequest(BaseModel):
+    username: str
+    deviceId: str
+    deviceName: str = ""
+    days: int = Field(default=90)
+
+
 class PushRequest(BaseModel):
     token: str
     type: str = Field(default="message")
@@ -496,6 +533,224 @@ def health():
         "moderation_endpoint": "/respect-ai/moderate",
         "story_moderation_endpoint": "/respect-ai/moderate-story",
     }
+
+
+def _otp_secret() -> bytes:
+    secret = APP_SHARED_SECRET or SB_SERVICE or SB_ANON or PROJECT_ID
+    return secret.encode("utf-8")
+
+
+def _hash_otp(email: str, code: str, purpose: str, device_id: str = "") -> str:
+    payload = f"{email.strip().lower()}|{purpose.strip().lower()}|{code.strip()}|{device_id.strip()}"
+    return hmac.new(_otp_secret(), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _normalize_email(value: str) -> str:
+    return str(value or "").strip().lower()
+
+
+def _valid_email(value: str) -> bool:
+    return bool(re.match(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", _normalize_email(value)))
+
+
+def _send_otp_email(email: str, code: str, purpose: str) -> str:
+    subject = "رمز تحقق Respect App"
+    action = "إنشاء الحساب" if purpose == "signup" else "تسجيل الدخول"
+    body = f"""مرحبًا،
+
+رمز التحقق الخاص بك في Respect App هو:
+
+{code}
+
+الغرض: {action}
+صلاحية الرمز: {OTP_TTL_MINUTES} دقائق.
+
+إذا لم تطلب هذا الرمز، تجاهل هذه الرسالة.
+"""
+    if not SMTP_HOST or not SMTP_USERNAME or not SMTP_PASSWORD:
+        logger.warning("OTP email SMTP is not configured. OTP for %s (%s): %s", email, purpose, code)
+        return "log_only"
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = SMTP_FROM
+    msg["To"] = email
+    msg.set_content(body)
+
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
+        server.starttls()
+        server.login(SMTP_USERNAME, SMTP_PASSWORD)
+        server.send_message(msg)
+    return "email"
+
+
+def _insert_otp_row(email: str, code_hash: str, purpose: str, username: str, device_id: str) -> None:
+    expires = datetime.now(timezone.utc) + timedelta(minutes=OTP_TTL_MINUTES)
+    payload = {
+        "email": email,
+        "username": display_username(username) if username else "",
+        "purpose": purpose,
+        "code_hash": code_hash,
+        "device_id": device_id,
+        "expires_at": expires.isoformat(),
+        "attempts": 0,
+    }
+    r = requests.post(
+        f"{SB_URL}/rest/v1/respect_auth_otps",
+        headers={**_supabase_headers(use_service_role=True), "Prefer": "return=minimal"},
+        json=payload,
+        timeout=12,
+    )
+    if r.status_code >= 400:
+        raise HTTPException(status_code=500, detail=f"Supabase OTP insert error: {_safe_response_text(r.text)}")
+
+
+def _latest_otp_row(email: str, purpose: str, device_id: str) -> Dict[str, Any]:
+    params = {
+        "select": "*",
+        "email": f"eq.{email}",
+        "purpose": f"eq.{purpose}",
+        "consumed_at": "is.null",
+        "order": "created_at.desc",
+        "limit": "1",
+    }
+    if device_id:
+        params["device_id"] = f"eq.{device_id}"
+    r = requests.get(
+        f"{SB_URL}/rest/v1/respect_auth_otps",
+        headers=_supabase_headers(use_service_role=True),
+        params=params,
+        timeout=12,
+    )
+    if r.status_code >= 400:
+        raise HTTPException(status_code=500, detail=f"Supabase OTP read error: {_safe_response_text(r.text)}")
+    data = r.json()
+    if not isinstance(data, list) or not data:
+        raise HTTPException(status_code=400, detail="رمز التحقق غير موجود أو انتهت صلاحيته")
+    return data[0]
+
+
+def _mark_otp_attempt(row_id: str, attempts: int, consumed: bool = False) -> None:
+    payload: Dict[str, Any] = {"attempts": attempts}
+    if consumed:
+        payload["consumed_at"] = datetime.now(timezone.utc).isoformat()
+    try:
+        requests.patch(
+            f"{SB_URL}/rest/v1/respect_auth_otps",
+            headers={**_supabase_headers(use_service_role=True), "Prefer": "return=minimal"},
+            params={"id": f"eq.{row_id}"},
+            json=payload,
+            timeout=10,
+        )
+    except Exception:
+        pass
+
+
+@app.post("/auth/send-otp")
+def auth_send_otp(req: AuthOtpSendRequest, x_app_secret: Optional[str] = Header(default=None)):
+    _check_secret(x_app_secret)
+    email = _normalize_email(req.email)
+    purpose = (req.purpose or "login").strip().lower()
+    if purpose not in {"login", "signup"}:
+        raise HTTPException(status_code=400, detail="purpose غير صحيح")
+    if not _valid_email(email):
+        raise HTTPException(status_code=400, detail="الإيميل غير صحيح")
+
+    code = f"{secrets.randbelow(1000000):06d}"
+    code_hash = _hash_otp(email, code, purpose, req.deviceId)
+    _insert_otp_row(email, code_hash, purpose, req.username, req.deviceId)
+    delivery = _send_otp_email(email, code, purpose)
+    return {"ok": True, "delivery": delivery, "expiresInMinutes": OTP_TTL_MINUTES}
+
+
+@app.post("/auth/verify-otp")
+def auth_verify_otp(req: AuthOtpVerifyRequest, x_app_secret: Optional[str] = Header(default=None)):
+    _check_secret(x_app_secret)
+    email = _normalize_email(req.email)
+    purpose = (req.purpose or "login").strip().lower()
+    code = str(req.code or "").strip()
+    if purpose not in {"login", "signup"}:
+        raise HTTPException(status_code=400, detail="purpose غير صحيح")
+    if not _valid_email(email) or not re.fullmatch(r"\d{6}", code):
+        raise HTTPException(status_code=400, detail="رمز التحقق غير صحيح")
+
+    row = _latest_otp_row(email, purpose, req.deviceId)
+    row_id = str(row.get("id", ""))
+    attempts = int(row.get("attempts") or 0)
+    if attempts >= 5:
+        raise HTTPException(status_code=429, detail="تم تجاوز عدد المحاولات. اطلب رمزًا جديدًا")
+
+    expires_raw = str(row.get("expires_at") or "")
+    try:
+        expires = datetime.fromisoformat(expires_raw.replace("Z", "+00:00"))
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+    except Exception:
+        expires = datetime.now(timezone.utc) - timedelta(seconds=1)
+    if expires <= datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="انتهت صلاحية رمز التحقق")
+
+    expected = str(row.get("code_hash") or "")
+    actual = _hash_otp(email, code, purpose, req.deviceId)
+    if not hmac.compare_digest(expected, actual):
+        _mark_otp_attempt(row_id, attempts + 1, consumed=False)
+        raise HTTPException(status_code=400, detail="رمز التحقق غير صحيح")
+
+    _mark_otp_attempt(row_id, attempts + 1, consumed=True)
+    return {"ok": True}
+
+
+@app.post("/auth/is-trusted-device")
+def auth_is_trusted_device(req: TrustedDeviceRequest, x_app_secret: Optional[str] = Header(default=None)):
+    _check_secret(x_app_secret)
+    username = display_username(req.username)
+    device_id = (req.deviceId or "").strip()
+    if not normalize_username(username) or not device_id:
+        return {"ok": True, "trusted": False}
+    now = datetime.now(timezone.utc).isoformat()
+    r = requests.get(
+        f"{SB_URL}/rest/v1/respect_trusted_devices",
+        headers=_supabase_headers(use_service_role=True),
+        params={
+            "select": "id,trusted_until",
+            "username": f"eq.{username}",
+            "device_id": f"eq.{device_id}",
+            "trusted_until": f"gt.{now}",
+            "limit": "1",
+        },
+        timeout=10,
+    )
+    if r.status_code >= 400:
+        return {"ok": True, "trusted": False}
+    data = r.json()
+    return {"ok": True, "trusted": bool(isinstance(data, list) and data)}
+
+
+@app.post("/auth/trust-device")
+def auth_trust_device(req: TrustedDeviceRequest, x_app_secret: Optional[str] = Header(default=None)):
+    _check_secret(x_app_secret)
+    username = display_username(req.username)
+    device_id = (req.deviceId or "").strip()
+    if not normalize_username(username) or not device_id:
+        raise HTTPException(status_code=400, detail="بيانات الجهاز غير مكتملة")
+    days = max(1, min(int(req.days or TRUSTED_DEVICE_DAYS), 365))
+    trusted_until = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+    payload = {
+        "username": username,
+        "device_id": device_id,
+        "device_name": req.deviceName or "device",
+        "trusted_until": trusted_until,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    r = requests.post(
+        f"{SB_URL}/rest/v1/respect_trusted_devices",
+        headers={**_supabase_headers(use_service_role=True), "Prefer": "resolution=merge-duplicates,return=minimal"},
+        json=payload,
+        timeout=12,
+    )
+    if r.status_code >= 400:
+        raise HTTPException(status_code=500, detail=f"تعذر حفظ الجهاز الموثوق: {_safe_response_text(r.text)}")
+    return {"ok": True, "trustedUntil": trusted_until}
 
 
 @app.post("/send_push")
