@@ -1,6 +1,0 @@
-- [x] Bootstrap TestSprite project (port 5173)
-- [x] Generate code_summary.yaml, PRD, and test plan
-- [x] Build Flutter web app and serve on port 5173 (HTTP 200)
-- [x] First test run completed (2/15 passed, 13 blocked due to Flutter web DOM-stability)
-- [ ] Re-run with focused scope: start only from `/`, test login/register/feed/create-post/like/save/comments/profile/search/communities/reports/navigation/UI-crashes
-- [ ] Inspect results and write focused report
