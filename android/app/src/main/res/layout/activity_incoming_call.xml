@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/incoming_call_bg">
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#55000000" />
+
+    <View
+        android:id="@+id/actionFlashOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="invisible"
+        android:clickable="false"
+        android:focusable="false" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:paddingStart="28dp"
+        android:paddingEnd="28dp"
+        android:paddingTop="36dp"
+        android:paddingBottom="42dp">
+
+        <TextView
+            android:id="@+id/tvCallType"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="مكالمة واردة"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:textColor="#E9D5FF"
+            android:letterSpacing="0.03"
+            android:background="@drawable/call_type_pill"
+            android:paddingStart="18dp"
+            android:paddingEnd="18dp"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp" />
+
+        <Space
+            android:layout_width="1dp"
+            android:layout_height="40dp" />
+
+        <FrameLayout
+            android:layout_width="148dp"
+            android:layout_height="148dp"
+            android:background="@drawable/avatar_glow">
+
+            <ImageView
+                android:id="@+id/ivAvatar"
+                android:layout_width="116dp"
+                android:layout_height="116dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_person"
+                android:background="@drawable/avatar_circle"
+                android:padding="22dp"
+                android:scaleType="centerCrop" />
+        </FrameLayout>
+
+        <Space
+            android:layout_width="1dp"
+            android:layout_height="24dp" />
+
+        <TextView
+            android:id="@+id/tvCallerName"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Caller Name"
+            android:textSize="30sp"
+            android:textColor="#FFFFFF"
+            android:textStyle="bold"
+            android:gravity="center"
+            android:maxLines="1"
+            android:ellipsize="end" />
+
+        <TextView
+            android:id="@+id/tvCallerUsername"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@username"
+            android:textSize="15sp"
+            android:textColor="#C4B5FD"
+            android:gravity="center"
+            android:layout_marginTop="6dp"
+            android:maxLines="1"
+            android:ellipsize="end" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Respect App"
+            android:textSize="13sp"
+            android:textColor="#88FFFFFF"
+            android:gravity="center"
+            android:layout_marginTop="14dp" />
+
+        <Space
+            android:layout_width="1dp"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
+
+        <FrameLayout
+            android:id="@+id/swipePillContainer"
+            android:layout_width="match_parent"
+            android:layout_height="80dp"
+            android:layout_marginStart="20dp"
+            android:layout_marginEnd="20dp"
+            android:layout_marginBottom="12dp">
+
+            <View
+                android:id="@+id/swipeTrack"
+                android:layout_width="match_parent"
+                android:layout_height="64dp"
+                android:layout_gravity="center_vertical"
+                android:background="@drawable/swipe_pill_bg" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:layoutDirection="ltr"
+                android:paddingStart="20dp"
+                android:paddingEnd="20dp">
+
+                <ImageView
+                    android:id="@+id/ivDeclineIcon"
+                    android:layout_width="28dp"
+                    android:layout_height="28dp"
+                    android:src="@drawable/ic_swipe_decline"
+                    android:alpha="0.6" />
+
+                <Space
+                    android:layout_width="0dp"
+                    android:layout_height="1dp"
+                    android:layout_weight="1" />
+
+                <ImageView
+                    android:id="@+id/ivAcceptIcon"
+                    android:layout_width="28dp"
+                    android:layout_height="28dp"
+                    android:src="@drawable/ic_swipe_accept"
+                    android:alpha="0.6" />
+            </LinearLayout>
+
+            <FrameLayout
+                android:id="@+id/swipeThumb"
+                android:layout_width="82dp"
+                android:layout_height="82dp"
+                android:layout_gravity="center"
+                android:elevation="12dp"
+                android:clickable="true"
+                android:focusable="true">
+
+                <ImageView
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:src="@drawable/respect_hex"
+                    android:scaleType="fitCenter" />
+
+            </FrameLayout>
+
+        </FrameLayout>
+
+    </LinearLayout>
+
+</FrameLayout>

@@ -1,0 +1,1722 @@
+[
+  {
+    "id": "TC001",
+    "title": "Log in and reach the main shell",
+    "description": "A returning user can sign in with email or username and password and arrive in the main app shell.",
+    "category": "User Login",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the username or email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the user lands on the home area"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC002",
+    "title": "Register a new account and enter the app",
+    "description": "A new user can complete registration with valid details, accept the terms, and reach the authenticated app.",
+    "category": "User Registration",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Switch to create account mode"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the username field with a new unique username"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the profile name field with a new display name"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with a new unique email address"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the birth date field with a valid date"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with a valid password"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the confirm password field with the same valid password"
+      },
+      {
+        "type": "action",
+        "description": "Accept the terms checkbox"
+      },
+      {
+        "type": "action",
+        "description": "Submit the registration form"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the user lands on the home area"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC003",
+    "title": "Open each main section from the home drawer",
+    "description": "A signed-in user can open each primary destination from the home shell and reach the expected section.",
+    "category": "Home Navigation",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /home"
+      },
+      {
+        "type": "action",
+        "description": "Open the navigation drawer"
+      },
+      {
+        "type": "action",
+        "description": "Open the feed section"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the feed is displayed"
+      },
+      {
+        "type": "action",
+        "description": "Open the streamers section"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the streamers section is displayed"
+      },
+      {
+        "type": "action",
+        "description": "Open the messages section"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the chat screen is displayed"
+      },
+      {
+        "type": "action",
+        "description": "Open the notifications section"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the notifications screen is displayed"
+      },
+      {
+        "type": "action",
+        "description": "Open the profile section"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the profile screen is displayed"
+      },
+      {
+        "type": "action",
+        "description": "Open the settings section"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the settings screen is displayed"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC004",
+    "title": "Reject invalid login credentials",
+    "description": "A user sees a login error when entering incorrect credentials and cannot enter the app.",
+    "category": "User Login",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the username or email field with an invalid account identifier"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with an invalid password"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify a login error message is visible"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC005",
+    "title": "Log out from settings",
+    "description": "A logged-in user can sign out from settings and return to the login screen.",
+    "category": "User Login",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the username or email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Open the settings page from the main shell"
+      },
+      {
+        "type": "action",
+        "description": "Log out from the account"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the login screen is displayed"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC006",
+    "title": "Prevent registration with mismatched passwords",
+    "description": "A user cannot create an account when the password and confirmation do not match.",
+    "category": "User Registration",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Switch to create account mode"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the username field with a new unique username"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the profile name field with a new display name"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with a new unique email address"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the birth date field with a valid date"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with a valid password"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the confirm password field with a different valid password"
+      },
+      {
+        "type": "action",
+        "description": "Accept the terms checkbox"
+      },
+      {
+        "type": "action",
+        "description": "Submit the registration form"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify a password confirmation validation error is visible"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC007",
+    "title": "Send a direct message in an existing conversation",
+    "description": "Verifies that a logged-in user can open a conversation and send a new direct message that appears in the thread.",
+    "category": "Private Chat",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /chat"
+      },
+      {
+        "type": "action",
+        "description": "Open a conversation"
+      },
+      {
+        "type": "action",
+        "description": "Type a message"
+      },
+      {
+        "type": "action",
+        "description": "Send the message"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the new message is displayed in the thread"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC008",
+    "title": "Mark notifications as read",
+    "description": "A user can mark notifications as read and see the unread state clear in the notifications list.",
+    "category": "Notifications",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the form"
+      },
+      {
+        "type": "action",
+        "description": "Open the notifications screen"
+      },
+      {
+        "type": "action",
+        "description": "Mark notifications as read"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the unread state is cleared"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the notification list remains visible"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC009",
+    "title": "Browse the feed and interact with a post",
+    "description": "A logged-in user can open the feed, browse content, and like, repost, save, and reply to a post.",
+    "category": "Social Feed",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the username or email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Open the feed from the main shell"
+      },
+      {
+        "type": "action",
+        "description": "Scroll the feed"
+      },
+      {
+        "type": "action",
+        "description": "Like a post"
+      },
+      {
+        "type": "action",
+        "description": "Repost a post"
+      },
+      {
+        "type": "action",
+        "description": "Save a post"
+      },
+      {
+        "type": "action",
+        "description": "Open the comments for a post and reply"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the feed remains visible with the post interactions applied"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC010",
+    "title": "Show validation errors for incomplete registration",
+    "description": "A user sees validation feedback when attempting to register with missing or invalid account details.",
+    "category": "User Registration",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Switch to create account mode"
+      },
+      {
+        "type": "action",
+        "description": "Submit the registration form"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify registration validation errors are visible"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC011",
+    "title": "Show unread indicators in the home shell",
+    "description": "A signed-in user sees unread badge indicators in the home shell when there are unread messages or notifications.",
+    "category": "Home Navigation",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /home"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify unread message and notification indicators are displayed when there are unread items"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC012",
+    "title": "Edit and save own profile information",
+    "description": "Verifies that a logged-in user can edit their profile and see the updated profile details after saving.",
+    "category": "Profile",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /profile"
+      },
+      {
+        "type": "action",
+        "description": "Open profile editing"
+      },
+      {
+        "type": "action",
+        "description": "Update the profile information"
+      },
+      {
+        "type": "action",
+        "description": "Save the profile changes"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the updated profile details are displayed"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC013",
+    "title": "Create a text post that appears in the feed",
+    "description": "A logged-in user can publish a text post and see it appear in the feed.",
+    "category": "Social Feed",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the username or email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Open the feed from the main shell"
+      },
+      {
+        "type": "action",
+        "description": "Create a new text post"
+      },
+      {
+        "type": "action",
+        "description": "Submit the post"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the new post is displayed in the feed"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC014",
+    "title": "Search for people and posts",
+    "description": "Verifies that a logged-in user can search and see matching people or posts returned.",
+    "category": "Search",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /search"
+      },
+      {
+        "type": "action",
+        "description": "Enter a search query"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify matching search results are displayed"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC015",
+    "title": "Open related content from a notification",
+    "description": "A user can open a notification and reach the related post, reply, mention, or message thread.",
+    "category": "Notifications",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the form"
+      },
+      {
+        "type": "action",
+        "description": "Open the notifications screen"
+      },
+      {
+        "type": "action",
+        "description": "Open a notification"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the related content is displayed"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the originating notification is no longer the only visible context"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC016",
+    "title": "View a profile and follow or unfollow the user",
+    "description": "A logged-in user can open another profile from search and follow or unfollow that account.",
+    "category": "Social Feed",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the username or email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Open the search page from the main shell"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the search field with a valid user query"
+      },
+      {
+        "type": "action",
+        "description": "Open the user profile from search results"
+      },
+      {
+        "type": "action",
+        "description": "Follow the user"
+      },
+      {
+        "type": "action",
+        "description": "Unfollow the user"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the profile follow state updates"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC017",
+    "title": "Prevent registration without accepting terms",
+    "description": "A user cannot complete registration until the terms checkbox is accepted.",
+    "category": "User Registration",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Switch to create account mode"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the username field with a new unique username"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the profile name field with a new display name"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with a new unique email address"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the birth date field with a valid date"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with a valid password"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the confirm password field with the same valid password"
+      },
+      {
+        "type": "action",
+        "description": "Submit the registration form"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify a terms acceptance validation error is visible"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC018",
+    "title": "Follow and unfollow another user",
+    "description": "Verifies that a logged-in user can follow another profile and then unfollow the same profile.",
+    "category": "Profile",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /profile"
+      },
+      {
+        "type": "action",
+        "description": "Follow the displayed user"
+      },
+      {
+        "type": "action",
+        "description": "Unfollow the same user"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the profile returns to the unfollowed state"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC019",
+    "title": "Send a message in an existing chat thread",
+    "description": "A logged-in user can open chat and send a message to an existing conversation.",
+    "category": "Social Feed",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the username or email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Open the chat page from the main shell"
+      },
+      {
+        "type": "action",
+        "description": "Open an existing conversation"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the message field with a short message"
+      },
+      {
+        "type": "action",
+        "description": "Send the message"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the sent message appears in the conversation"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC020",
+    "title": "Search for users or posts and open a result",
+    "description": "A logged-in user can search for content and open a matching result from the search page.",
+    "category": "Social Feed",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the username or email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Open the search page from the main shell"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the search field with a valid query"
+      },
+      {
+        "type": "action",
+        "description": "Open a search result"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the selected result is displayed"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC021",
+    "title": "Review a moderation report and resolve it",
+    "description": "An authorized admin can open the moderation queue, review a report, and accept or reject it so the queue updates.",
+    "category": "Social Feed",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the username or email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Open the admin page from the main shell"
+      },
+      {
+        "type": "action",
+        "description": "Open a report in the moderation queue"
+      },
+      {
+        "type": "action",
+        "description": "Accept or reject the report"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the moderation queue updates"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC022",
+    "title": "Open a profile from search results",
+    "description": "Verifies that a logged-in user can open a user profile from search results and view the profile page.",
+    "category": "Search",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /search"
+      },
+      {
+        "type": "action",
+        "description": "Enter a search query"
+      },
+      {
+        "type": "action",
+        "description": "Open a matching user result"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the profile page is displayed"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC023",
+    "title": "Start a direct message from a profile or chat flow",
+    "description": "A logged-in user can open a profile and begin a direct message conversation from there.",
+    "category": "Social Feed",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the username or email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Open the search page from the main shell"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the search field with a valid user query"
+      },
+      {
+        "type": "action",
+        "description": "Open the user profile from search results"
+      },
+      {
+        "type": "action",
+        "description": "Start a direct message from the profile"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the chat thread is opened"
+      }
+    ],
+    "priority": "Medium"
+  },
+  {
+    "id": "TC024",
+    "title": "Browse notifications and open a related item",
+    "description": "Verifies that a logged-in user can open notifications and navigate to the related content from a notification item.",
+    "category": "Notifications",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /notifications"
+      },
+      {
+        "type": "action",
+        "description": "Open a notification"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the related content is displayed"
+      }
+    ],
+    "priority": "Medium"
+  },
+  {
+    "id": "TC025",
+    "title": "Return to the home shell from a section",
+    "description": "A signed-in user can leave a section and return to the main home shell without losing access to navigation.",
+    "category": "Home Navigation",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /home"
+      },
+      {
+        "type": "action",
+        "description": "Open the navigation drawer"
+      },
+      {
+        "type": "action",
+        "description": "Open the feed section"
+      },
+      {
+        "type": "action",
+        "description": "Open the navigation drawer"
+      },
+      {
+        "type": "action",
+        "description": "Return to the home shell"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the home shell is displayed"
+      }
+    ],
+    "priority": "Medium"
+  },
+  {
+    "id": "TC026",
+    "title": "Open notifications and follow a deep link",
+    "description": "A logged-in user can open notifications and navigate to the related post or message thread.",
+    "category": "Social Feed",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the username or email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Open the notifications page from the main shell"
+      },
+      {
+        "type": "action",
+        "description": "Open a notification"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the related content or thread is displayed"
+      }
+    ],
+    "priority": "Medium"
+  },
+  {
+    "id": "TC027",
+    "title": "Open a post from search results",
+    "description": "Verifies that a logged-in user can open a post from search results and view the post details.",
+    "category": "Search",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /search"
+      },
+      {
+        "type": "action",
+        "description": "Enter a search query"
+      },
+      {
+        "type": "action",
+        "description": "Open a matching post result"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the post is displayed"
+      }
+    ],
+    "priority": "Medium"
+  },
+  {
+    "id": "TC028",
+    "title": "Toggle the app theme",
+    "description": "A user can switch between light and dark appearance and keep using the app with the updated theme.",
+    "category": "Settings",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the form"
+      },
+      {
+        "type": "action",
+        "description": "Open the settings screen"
+      },
+      {
+        "type": "action",
+        "description": "Toggle the theme setting"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the updated appearance is applied"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the settings screen remains accessible"
+      }
+    ],
+    "priority": "Medium"
+  },
+  {
+    "id": "TC029",
+    "title": "View profile details and posts",
+    "description": "Verifies that a logged-in user can open a profile and see the profile details and posts.",
+    "category": "Profile",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /profile"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify profile details are displayed"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the user's posts are displayed"
+      }
+    ],
+    "priority": "Medium"
+  },
+  {
+    "id": "TC030",
+    "title": "Open saved posts from the home drawer",
+    "description": "A signed-in user can reach the saved posts collection from the home shell and view saved content when it exists.",
+    "category": "Home Navigation",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /home"
+      },
+      {
+        "type": "action",
+        "description": "Open the navigation drawer"
+      },
+      {
+        "type": "action",
+        "description": "Open the saved posts section"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the saved posts collection is displayed"
+      }
+    ],
+    "priority": "Medium"
+  },
+  {
+    "id": "TC031",
+    "title": "Open full-screen media or story content",
+    "description": "A logged-in user can open media or story content from the feed and view it full screen.",
+    "category": "Social Feed",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the username or email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Open the feed from the main shell"
+      },
+      {
+        "type": "action",
+        "description": "Open a story or media item"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the full-screen media view is displayed"
+      }
+    ],
+    "priority": "Medium"
+  },
+  {
+    "id": "TC032",
+    "title": "Review and accept a moderation report",
+    "description": "An admin can review a pending report and accept a moderation action from the admin queue.",
+    "category": "Admin Moderation",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the form"
+      },
+      {
+        "type": "action",
+        "description": "Open the admin moderation screen"
+      },
+      {
+        "type": "action",
+        "description": "Review a pending report"
+      },
+      {
+        "type": "action",
+        "description": "Accept the moderation action"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the moderation queue is updated"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the reviewed report is no longer pending"
+      }
+    ],
+    "priority": "Medium"
+  },
+  {
+    "id": "TC033",
+    "title": "Review and reject a moderation report",
+    "description": "An admin can review a pending report and reject a moderation action from the admin queue.",
+    "category": "Admin Moderation",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the form"
+      },
+      {
+        "type": "action",
+        "description": "Open the admin moderation screen"
+      },
+      {
+        "type": "action",
+        "description": "Review a pending report"
+      },
+      {
+        "type": "action",
+        "description": "Reject the moderation action"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the moderation queue is updated"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the reviewed report is no longer pending"
+      }
+    ],
+    "priority": "Medium"
+  },
+  {
+    "id": "TC034",
+    "title": "Switch between sign-in and account creation modes",
+    "description": "A user can switch from sign-in to account creation mode and back again without losing access to the login flow.",
+    "category": "User Login",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Switch to create account mode"
+      },
+      {
+        "type": "action",
+        "description": "Return to login mode"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the sign-in form is displayed"
+      }
+    ],
+    "priority": "Medium"
+  },
+  {
+    "id": "TC035",
+    "title": "Open saved posts collection",
+    "description": "A logged-in user can open the saved posts area and view saved content.",
+    "category": "Social Feed",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the username or email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Open the saved posts page from the main shell"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the saved posts collection is displayed"
+      }
+    ],
+    "priority": "Medium"
+  },
+  {
+    "id": "TC036",
+    "title": "Open streamers, live, and painters sections from the shell",
+    "description": "A logged-in user can navigate to the discovery sections from the home shell drawer.",
+    "category": "Social Feed",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the username or email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Open the streamers section from the main shell"
+      },
+      {
+        "type": "action",
+        "description": "Open the live section from the main shell"
+      },
+      {
+        "type": "action",
+        "description": "Open the painters section from the main shell"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify each discovery section is displayed"
+      }
+    ],
+    "priority": "Medium"
+  },
+  {
+    "id": "TC037",
+    "title": "Open live and painters sections from the home drawer",
+    "description": "A signed-in user can navigate from the home shell to the live and painters sections.",
+    "category": "Home Navigation",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /home"
+      },
+      {
+        "type": "action",
+        "description": "Open the navigation drawer"
+      },
+      {
+        "type": "action",
+        "description": "Open the live section"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the live section is displayed"
+      },
+      {
+        "type": "action",
+        "description": "Open the painters section"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the painters section is displayed"
+      }
+    ],
+    "priority": "Medium"
+  },
+  {
+    "id": "TC038",
+    "title": "Update theme preferences in settings",
+    "description": "A logged-in user can open settings and change the app theme preference.",
+    "category": "Social Feed",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the username or email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Open the settings page from the main shell"
+      },
+      {
+        "type": "action",
+        "description": "Change the theme preference"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the updated theme preference is displayed"
+      }
+    ],
+    "priority": "Low"
+  },
+  {
+    "id": "TC039",
+    "title": "Show an empty state for no search results",
+    "description": "A logged-in user sees an empty state when a search returns no matching users or posts.",
+    "category": "Social Feed",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the username or email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Open the search page from the main shell"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the search field with a unique nonsense query"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify an empty search state is visible"
+      }
+    ],
+    "priority": "Low"
+  },
+  {
+    "id": "TC040",
+    "title": "See an empty chat state when no conversations exist",
+    "description": "Verifies that a logged-in user sees an empty chat state when there are no conversations to open.",
+    "category": "Private Chat",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /chat"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify an empty state message is displayed"
+      }
+    ],
+    "priority": "Low"
+  },
+  {
+    "id": "TC041",
+    "title": "See an empty state when search has no matches",
+    "description": "Verifies that a logged-in user sees an empty state when a search query returns no matches.",
+    "category": "Search",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /search"
+      },
+      {
+        "type": "action",
+        "description": "Enter a unique search query with no expected matches"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify an empty state message is displayed"
+      }
+    ],
+    "priority": "Low"
+  },
+  {
+    "id": "TC042",
+    "title": "View an empty notifications state",
+    "description": "A user with no notifications sees an empty state instead of a list.",
+    "category": "Notifications",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the form"
+      },
+      {
+        "type": "action",
+        "description": "Open the notifications screen"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify an empty state message is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the notification list is not shown"
+      }
+    ],
+    "priority": "Low"
+  },
+  {
+    "id": "TC043",
+    "title": "See an empty notifications state",
+    "description": "Verifies that a logged-in user sees an empty state when there are no notifications.",
+    "category": "Notifications",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /notifications"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify an empty state message is displayed"
+      }
+    ],
+    "priority": "Low"
+  },
+  {
+    "id": "TC044",
+    "title": "Show an empty saved posts state",
+    "description": "A logged-in user sees an empty state when no saved posts are available.",
+    "category": "Social Feed",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the username or email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Open the saved posts page from the main shell"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify an empty saved posts state is visible"
+      }
+    ],
+    "priority": "Low"
+  }
+]

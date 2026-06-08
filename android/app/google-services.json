@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "384970345898",
+    "project_id": "respect-app-dbc77",
+    "storage_bucket": "respect-app-dbc77.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:384970345898:android:05bc6f2383c6a818f46fd3",
+        "android_client_info": {
+          "package_name": "com.example.rp_stream_hub"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAAxGvf1PauhZYwN6WlE2c5XAxCfPDv9To"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

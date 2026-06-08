@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="100dp"
+    android:height="100dp"
+    android:viewportWidth="100"
+    android:viewportHeight="100">
+
+    <!-- Rounded Hexagon مثل شعار Respect -->
+    <path
+        android:fillColor="#7C3AED"
+        android:pathData="
+            M30,6
+            Q24,6 20,12
+            L6,38
+            Q2,45 6,52
+            L20,78
+            Q24,94 30,94
+            L70,94
+            Q76,94 80,88
+            L94,62
+            Q98,55 94,48
+            L80,12
+            Q76,6 70,6
+            Z" />
+
+    <!-- Glow -->
+    <path
+        android:fillColor="#22FFFFFF"
+        android:pathData="
+            M30,10
+            L70,10
+            Q75,10 78,15
+            L86,32
+            Q88,36 84,38
+            L18,38
+            Q12,38 15,30
+            L22,15
+            Q25,10 30,10
+            Z"/>
+</vector>
