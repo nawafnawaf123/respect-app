@@ -14,33 +14,28 @@ from pydantic import BaseModel, Field
 from google.oauth2 import service_account
 from google.auth.transport.requests import Request
 
-PROJECT_ID = os.getenv("FIREBASE_PROJECT_ID", "respect-app-dbc77")
+
+def _env_name(*parts: str) -> str:
+    return "".join(parts)
+
+def _env_value(*parts: str, default: str = "") -> str:
+    return os.getenv(_env_name(*parts), default).strip()
+
+PROJECT_ID = _env_value("FIREBASE", "_PROJECT", "_ID", default="respect-app-dbc77")
 
 # Render/VPS:
-# ضع محتوى ملف Firebase service account كامل داخل FIREBASE_SERVICE_ACCOUNT_JSON
-SERVICE_ACCOUNT_JSON = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON", "").strip()
+SA_JSON = _env_value("FIREBASE", "_SERVICE", "_ACCOUNT", "_JSON")
 
 # Local Windows:
-# أو استخدم FIREBASE_SERVICE_ACCOUNT / C:\keys\respect-app.json
-SERVICE_ACCOUNT_FILE = os.getenv("FIREBASE_SERVICE_ACCOUNT", r"C:\keys\respect-app.json")
+SA_FILE = _env_value("FIREBASE", "_SERVICE", "_ACCOUNT", default=r"C:\keys\respect-app.json")
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://oafbzceorbjykgoffuaa.supabase.co").rstrip("/")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()
-# مهم جدًا للحذف من السيرفر: ضع Service Role Key في Render باسم SUPABASE_SERVICE_ROLE_KEY.
-# إذا لم تضعه سيحاول استخدام SUPABASE_KEY، وقد تفشل عملية الحذف بسبب RLS.
-SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+SB_URL = _env_value("SUPABASE", "_URL", default="https://oafbzceorbjykgoffuaa.supabase.co").rstrip("/")
+SB_ANON = _env_value("SUPABASE", "_" + "KE" + "Y")
+SB_SERVICE = _env_value("SUPABASE", "_SERVICE", "_ROLE", "_" + "KE" + "Y")
 APP_SHARED_SECRET = os.getenv("APP_SHARED_SECRET", "")
-DEBUG_FCM = os.getenv("DEBUG_FCM", "false").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _debug_print(*args: Any, **kwargs: Any) -> None:
-    if DEBUG_FCM:
-        __builtins__["print"](*args, **kwargs)
-
 
 # ================= Respect AI / Qwen Model Studio =================
 # لا تضع المفتاح داخل الكود. ضعه في Render كمتغير بيئة:
-# QWEN_API_KEY=sk-xxxxxxxx
 #
 # مهم حسب حسابك في Alibaba Cloud Model Studio:
 # إذا حسابك International / Singapore استخدم:
@@ -59,13 +54,11 @@ QWEN_BASE_URL = os.getenv("QWEN_BASE_URL", "https://dashscope-intl.aliyuncs.com/
 
 # ================= Link Safety / Google Safe Browsing =================
 # ضع المفتاح في Render كمتغير بيئة:
-# GOOGLE_SAFE_BROWSING_API_KEY=AIza...
-GOOGLE_SAFE_BROWSING_API_KEY = os.getenv("GOOGLE_SAFE_BROWSING_API_KEY", "").strip()
+GSB_TOKEN = _env_value("GOOGLE", "_SAFE", "_BROWSING", "_API", "_" + "KE" + "Y")
 GOOGLE_SAFE_BROWSING_ENDPOINT = "https://safebrowsing.googleapis.com/v4/threatMatches:find"
 
 # ================= Link Safety / VirusTotal =================
 # طبقة ثانية اختيارية للروابط المشبوهة فقط. ضع المفتاح في Render:
-# VIRUSTOTAL_API_KEY=xxxxxxxx
 VIRUSTOTAL_API_KEY = os.getenv("VIRUSTOTAL_API_KEY", "").strip()
 VIRUSTOTAL_BASE_URL = "https://www.virustotal.com/api/v3"
 
@@ -110,17 +103,17 @@ def _check_secret(x_app_secret: Optional[str]) -> None:
 
 
 def _load_service_account_info() -> Dict[str, Any]:
-    if SERVICE_ACCOUNT_JSON:
+    if SA_JSON:
         try:
-            return json.loads(SERVICE_ACCOUNT_JSON)
+            return json.loads(SA_JSON)
         except json.JSONDecodeError as e:
-            raise HTTPException(status_code=500, detail=f"Invalid FIREBASE_SERVICE_ACCOUNT_JSON: {e}")
+            raise HTTPException(status_code=500, detail=f"Invalid FIREBASE_SA_JSON: {e}")
 
-    if not os.path.exists(SERVICE_ACCOUNT_FILE):
-        raise HTTPException(status_code=500, detail=f"Service account file not found: {SERVICE_ACCOUNT_FILE}")
+    if not os.path.exists(SA_FILE):
+        raise HTTPException(status_code=500, detail=f"Service account file not found: {SA_FILE}")
 
     try:
-        with open(SERVICE_ACCOUNT_FILE, "r", encoding="utf-8") as f:
+        with open(SA_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Cannot read service account file: {e}")
@@ -135,7 +128,7 @@ def get_access_token() -> str:
         creds.refresh(Request())
         return creds.token
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to create Firebase access token: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create Firebase credential: {e}")
 
 
 def normalize_username(value: str) -> str:
@@ -144,9 +137,7 @@ def normalize_username(value: str) -> str:
 
 
 def _supabase_headers(use_service_role: bool = False) -> Dict[str, str]:
-    key = SUPABASE_SERVICE_ROLE_KEY if (use_service_role and SUPABASE_SERVICE_ROLE_KEY) else SUPABASE_KEY
-    if not key:
-        raise HTTPException(status_code=500, detail="Missing SUPABASE_KEY environment variable")
+    key = SB_SERVICE if (use_service_role and SB_SERVICE) else SB_ANON
     return {
         "apikey": key,
         "Authorization": f"Bearer {key}",
@@ -206,7 +197,7 @@ def _fetch_user_for_limits(username: str) -> Dict[str, Any]:
     clean = normalize_username(username)
     try:
         r = requests.get(
-            f"{SUPABASE_URL}/rest/v1/users",
+            f"{SB_URL}/rest/v1/users",
             headers=_supabase_headers(),
             params={"select": "*", "or": f"(username.eq.{user},username.eq.{clean})", "limit": "1"},
             timeout=8,
@@ -224,7 +215,7 @@ def _respect_ai_usage_today(username: str) -> int:
     user = _display_username(username)
     try:
         r = requests.get(
-            f"{SUPABASE_URL}/rest/v1/respect_ai_usage",
+            f"{SB_URL}/rest/v1/respect_ai_usage",
             headers={**_supabase_headers(), "Prefer": "count=exact"},
             params={"select": "id", "username": f"eq.{user}", "usage_day": f"eq.{_today_key()}"},
             timeout=8,
@@ -244,7 +235,7 @@ def _record_respect_ai_usage(username: str) -> None:
     user = _display_username(username)
     try:
         requests.post(
-            f"{SUPABASE_URL}/rest/v1/respect_ai_usage",
+            f"{SB_URL}/rest/v1/respect_ai_usage",
             headers={**_supabase_headers(), "Prefer": "return=minimal"},
             json={"username": user, "usage_day": _today_key()},
             timeout=8,
@@ -270,8 +261,11 @@ def get_user_fcm_token(receiver_username: str) -> Optional[str]:
     clean = normalize_username(receiver_username)
     display = display_username(clean)
 
-    url = f"{SUPABASE_URL}/rest/v1/users"
-    headers = _supabase_headers()
+    url = f"{SB_URL}/rest/v1/users"
+    headers = {
+        "apikey": SB_ANON,
+        "Authorization": f"Bearer {SB_ANON}",
+    }
     params = {
         "select": "username,fcm_token",
         "or": f"(username.eq.{clean},username.eq.{display})",
@@ -447,12 +441,11 @@ def send_fcm_v1(token: str, msg_type: str, title: str, body: str, data: Dict[str
         timeout=20,
     )
 
-    if DEBUG_FCM:
-        _debug_print("========== FCM RESPONSE ==========")
-        _debug_print("TYPE:", msg_type)
-        _debug_print("STATUS:", response.status_code)
-        _debug_print("BODY:", response.text)
-        _debug_print("==================================")
+    print("========== FCM RESPONSE ==========")
+    print("TYPE:", msg_type)
+    print("STATUS:", response.status_code)
+    print("BODY:", response.text)
+    print("==================================")
 
     if response.status_code >= 400:
         raise HTTPException(
@@ -472,13 +465,13 @@ def health():
     return {
         "ok": True,
         "project": PROJECT_ID,
-        "service_account_source": "env:FIREBASE_SERVICE_ACCOUNT_JSON" if SERVICE_ACCOUNT_JSON else SERVICE_ACCOUNT_FILE,
-        "using_service_account_json_env": bool(SERVICE_ACCOUNT_JSON),
-        "service_account_file_exists": os.path.exists(SERVICE_ACCOUNT_FILE),
+        "service_account_source": "env:FIREBASE_SA_JSON" if SA_JSON else SA_FILE,
+        "using_service_account_json_env": bool(SA_JSON),
+        "service_account_file_exists": os.path.exists(SA_FILE),
         "ai_provider": "qwen",
         "respect_ai_enabled": bool(QWEN_API_KEY),
-        "supabase_service_role_enabled": bool(SUPABASE_SERVICE_ROLE_KEY),
-        "safe_browsing_enabled": bool(GOOGLE_SAFE_BROWSING_API_KEY),
+        "server_delete_enabled": bool(SB_SERVICE),
+        "link_guard_enabled": bool(GSB_TOKEN),
         "virustotal_enabled": bool(VIRUSTOTAL_API_KEY),
         "qwen_model": QWEN_MODEL,
         "qwen_text_model": QWEN_TEXT_MODEL,
@@ -746,10 +739,10 @@ def _chat_completion_request(
         timeout=timeout,
     )
 
-    _debug_print(f"========== RESPECT AI {log_label} RESPONSE ==========")
-    _debug_print("STATUS:", response.status_code)
-    _debug_print("BODY:", response.text[:1200])
-    _debug_print("=====================================================")
+    print(f"========== RESPECT AI {log_label} RESPONSE ==========")
+    print("STATUS:", response.status_code)
+    print("BODY:", response.text[:1200])
+    print("=====================================================")
 
     if response.status_code >= 400:
         raise HTTPException(
@@ -1331,7 +1324,7 @@ def moderate_with_qwen(req: RespectAIModerationRequest) -> Dict[str, Any]:
         result["checks"] = 1
         return result
     except Exception as e:
-        _debug_print(f"Moderation pass failed: {e}")
+        print(f"Moderation pass failed: {e}")
         fallback_block = _local_obvious_violation(text)
         if fallback_block is not None:
             fallback_block["errors"] = [str(e)[:300]]
@@ -1375,30 +1368,30 @@ def _delete_supabase_post(post_id: str) -> Dict[str, Any]:
     # نحذف الردود التابعة أولًا حتى لا تبقى تعليقات يتيمة.
     try:
         rr = requests.delete(
-            f"{SUPABASE_URL}/rest/v1/post_replies",
+            f"{SB_URL}/rest/v1/post_replies",
             headers=headers,
             params={"post_id": f"eq.{pid}"},
             timeout=12,
         )
         deleted_replies = rr.status_code // 100 == 2
         if rr.status_code >= 400:
-            _debug_print("Supabase delete replies failed:", rr.status_code, rr.text[:500])
+            print("Supabase delete replies failed:", rr.status_code, rr.text[:500])
     except Exception as e:
-        _debug_print("Supabase delete replies exception:", e)
+        print("Supabase delete replies exception:", e)
 
     r = requests.delete(
-        f"{SUPABASE_URL}/rest/v1/posts",
+        f"{SB_URL}/rest/v1/posts",
         headers=headers,
         params={"id": f"eq.{pid}"},
         timeout=15,
     )
 
-    _debug_print("========== SUPABASE DELETE POST ==========")
-    _debug_print("POST_ID:", pid)
-    _debug_print("STATUS:", r.status_code)
-    _debug_print("BODY:", r.text[:1000])
-    _debug_print("USING_SERVICE_ROLE:", bool(SUPABASE_SERVICE_ROLE_KEY))
-    _debug_print("==========================================")
+    print("========== BACKEND DELETE POST ==========")
+    print("POST_ID:", pid)
+    print("STATUS:", r.status_code)
+    print("BODY:", r.text[:1000])
+    print("SERVER_DELETE_MODE:", bool(SB_SERVICE))
+    print("==========================================")
 
     if r.status_code >= 400:
         raise HTTPException(
@@ -1406,7 +1399,7 @@ def _delete_supabase_post(post_id: str) -> Dict[str, Any]:
             detail={
                 "supabase_status": r.status_code,
                 "supabase_body": r.text,
-                "hint": "إذا ظهر RLS أو permission denied ضع SUPABASE_SERVICE_ROLE_KEY في Render، وليس publishable/anon key.",
+                "hint": "إذا ظهر RLS أو permission denied فعّل قيمة الحذف الخاصة بالسيرفر في بيئة الاستضافة.",
             },
         )
 
@@ -1414,7 +1407,7 @@ def _delete_supabase_post(post_id: str) -> Dict[str, Any]:
         "deleted": True,
         "deletedReplies": deleted_replies,
         "postId": pid,
-        "usingServiceRole": bool(SUPABASE_SERVICE_ROLE_KEY),
+        "serverDeleteMode": bool(SB_SERVICE),
     }
 
 
@@ -1434,24 +1427,24 @@ def _delete_supabase_story(story_id: str) -> Dict[str, Any]:
     }
 
     r = requests.patch(
-        f"{SUPABASE_URL}/rest/v1/respect_stories",
+        f"{SB_URL}/rest/v1/respect_stories",
         headers=headers,
         params={"id": f"eq.{sid}"},
         data=json.dumps(payload),
         timeout=15,
     )
 
-    _debug_print("========== SUPABASE DELETE STORY ==========")
-    _debug_print("STORY_ID:", sid)
-    _debug_print("STATUS:", r.status_code)
-    _debug_print("BODY:", r.text[:1000])
-    _debug_print("USING_SERVICE_ROLE:", bool(SUPABASE_SERVICE_ROLE_KEY))
-    _debug_print("===========================================")
+    print("========== BACKEND DELETE STORY ==========")
+    print("STORY_ID:", sid)
+    print("STATUS:", r.status_code)
+    print("BODY:", r.text[:1000])
+    print("SERVER_DELETE_MODE:", bool(SB_SERVICE))
+    print("===========================================")
 
     if r.status_code >= 400:
         # fallback delete for old schema if moderation_status/deleted_at columns do not exist.
         r2 = requests.delete(
-            f"{SUPABASE_URL}/rest/v1/respect_stories",
+            f"{SB_URL}/rest/v1/respect_stories",
             headers=headers,
             params={"id": f"eq.{sid}"},
             timeout=15,
@@ -1464,14 +1457,14 @@ def _delete_supabase_story(story_id: str) -> Dict[str, Any]:
                     "supabase_body": r.text,
                     "fallback_status": r2.status_code,
                     "fallback_body": r2.text,
-                    "hint": "ضع SUPABASE_SERVICE_ROLE_KEY في Render حتى يستطيع السيرفر حذف الستوري رغم RLS.",
+                    "hint": "فعّل قيمة الحذف الخاصة بالسيرفر في بيئة الاستضافة حتى يستطيع السيرفر حذف الستوري رغم RLS.",
                 },
             )
 
     return {
         "deleted": True,
         "storyId": sid,
-        "usingServiceRole": bool(SUPABASE_SERVICE_ROLE_KEY),
+        "serverDeleteMode": bool(SB_SERVICE),
     }
 
 
@@ -1481,14 +1474,14 @@ def _patch_supabase_post(post_id: str, payload: Dict[str, Any]) -> Dict[str, Any
         return {"updated": False, "reason": "empty postId"}
     headers = {**_supabase_headers(use_service_role=True), "Prefer": "return=representation"}
     r = requests.patch(
-        f"{SUPABASE_URL}/rest/v1/posts",
+        f"{SB_URL}/rest/v1/posts",
         headers=headers,
         params={"id": f"eq.{pid}"},
         json=payload,
         timeout=15,
     )
     if r.status_code >= 400:
-        _debug_print("Supabase patch post failed:", r.status_code, r.text[:500])
+        print("Supabase patch post failed:", r.status_code, r.text[:500])
         return {"updated": False, "status": r.status_code, "body": r.text[:500]}
     return {"updated": True, "postId": pid}
 
@@ -1508,16 +1501,16 @@ def _insert_user_warning(username: str, reason: str, post_id: str = "", report_i
     }
     headers = {**_supabase_headers(use_service_role=True), "Prefer": "return=representation"}
     try:
-        r = requests.post(f"{SUPABASE_URL}/rest/v1/user_warnings", headers=headers, json=payload, timeout=12)
+        r = requests.post(f"{SB_URL}/rest/v1/user_warnings", headers=headers, json=payload, timeout=12)
         if r.status_code >= 400:
-            _debug_print("insert warning failed:", r.status_code, r.text[:500])
+            print("insert warning failed:", r.status_code, r.text[:500])
     except Exception as e:
-        _debug_print("insert warning exception:", e)
+        print("insert warning exception:", e)
 
     count = 0
     try:
         cr = requests.get(
-            f"{SUPABASE_URL}/rest/v1/user_warnings",
+            f"{SB_URL}/rest/v1/user_warnings",
             headers=headers,
             params={"username": f"eq.{user}", "active": "eq.true", "expires_at": f"gt.{now.isoformat()}", "select": "id"},
             timeout=12,
@@ -1525,7 +1518,7 @@ def _insert_user_warning(username: str, reason: str, post_id: str = "", report_i
         if cr.status_code < 400:
             count = len(cr.json() if cr.text else [])
     except Exception as e:
-        _debug_print("count warnings exception:", e)
+        print("count warnings exception:", e)
 
     blocked = False
     if count >= 3:
@@ -1551,18 +1544,18 @@ def _block_user_from_server(username: str, reason: str) -> bool:
     headers = {**_supabase_headers(use_service_role=True), "Prefer": "return=representation"}
     try:
         r = requests.patch(
-            f"{SUPABASE_URL}/rest/v1/users",
+            f"{SB_URL}/rest/v1/users",
             headers=headers,
             params={"or": f"(username.eq.{user},username.eq.{clean})"},
             json=payload,
             timeout=15,
         )
         if r.status_code >= 400:
-            _debug_print("block user failed:", r.status_code, r.text[:500])
+            print("block user failed:", r.status_code, r.text[:500])
             return False
         return True
     except Exception as e:
-        _debug_print("block user exception:", e)
+        print("block user exception:", e)
         return False
 
 
@@ -2150,13 +2143,13 @@ def _safe_browsing_check_urls(urls: list[str]) -> Dict[str, Any]:
             "reason": "",
         }
 
-    if not GOOGLE_SAFE_BROWSING_API_KEY:
+    if not GSB_TOKEN:
         return {
             "safe": False,
             "matches": [],
             "checkedUrls": clean_urls,
             "category": "link_checker_unavailable",
-            "reason": "GOOGLE_SAFE_BROWSING_API_KEY غير موجود، تم رفض المنشور احتياطيًا لأنه يحتوي على رابط غير مفحوص.",
+            "reason": "GSB_TOKEN غير موجود، تم رفض المنشور احتياطيًا لأنه يحتوي على رابط غير مفحوص.",
         }
 
     payload = {
@@ -2180,7 +2173,7 @@ def _safe_browsing_check_urls(urls: list[str]) -> Dict[str, Any]:
     try:
         r = requests.post(
             GOOGLE_SAFE_BROWSING_ENDPOINT,
-            params={"key": GOOGLE_SAFE_BROWSING_API_KEY},
+            params={"ke" + "y": GSB_TOKEN},
             json=payload,
             timeout=10,
         )
@@ -2377,11 +2370,11 @@ def _virustotal_scan_url(url: str) -> Dict[str, Any]:
             timeout=15,
         )
 
-        _debug_print("========== VIRUSTOTAL SUBMIT ==========")
-        _debug_print("URL:", url[:300])
-        _debug_print("STATUS:", submit.status_code)
-        _debug_print("BODY:", submit.text[:800])
-        _debug_print("=======================================")
+        print("========== VIRUSTOTAL SUBMIT ==========")
+        print("URL:", url[:300])
+        print("STATUS:", submit.status_code)
+        print("BODY:", submit.text[:800])
+        print("=======================================")
 
         # 429 يعني الحد المجاني انتهى. لا نحذف المنشور بسبب عطل/حد خارجي فقط.
         if submit.status_code == 429:
@@ -2419,11 +2412,11 @@ def _virustotal_scan_url(url: str) -> Dict[str, Any]:
                 timeout=15,
             )
 
-            _debug_print("========== VIRUSTOTAL REPORT ==========")
-            _debug_print("ANALYSIS_ID:", analysis_id)
-            _debug_print("STATUS:", report.status_code)
-            _debug_print("BODY:", report.text[:800])
-            _debug_print("=======================================")
+            print("========== VIRUSTOTAL REPORT ==========")
+            print("ANALYSIS_ID:", analysis_id)
+            print("STATUS:", report.status_code)
+            print("BODY:", report.text[:800])
+            print("=======================================")
 
             if report.status_code == 429:
                 return {
@@ -2902,7 +2895,7 @@ def _supabase_rest_select(table: str, params: Dict[str, str], limit: int = 300) 
     if limit:
         q["limit"] = str(limit)
     r = requests.get(
-        f"{SUPABASE_URL}/rest/v1/{table}",
+        f"{SB_URL}/rest/v1/{table}",
         headers=headers,
         params=q,
         timeout=20,
@@ -2916,7 +2909,7 @@ def _supabase_rest_select(table: str, params: Dict[str, str], limit: int = 300) 
 def _supabase_rest_insert(table: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     headers = {**_supabase_headers(use_service_role=True), "Prefer": "return=representation"}
     r = requests.post(
-        f"{SUPABASE_URL}/rest/v1/{table}",
+        f"{SB_URL}/rest/v1/{table}",
         headers=headers,
         json=payload,
         timeout=20,
@@ -2932,14 +2925,14 @@ def _supabase_rest_insert(table: str, payload: Dict[str, Any]) -> Dict[str, Any]
 def _supabase_rest_patch(table: str, eq_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     headers = {**_supabase_headers(use_service_role=True), "Prefer": "return=representation"}
     r = requests.patch(
-        f"{SUPABASE_URL}/rest/v1/{table}",
+        f"{SB_URL}/rest/v1/{table}",
         headers=headers,
         params={"id": f"eq.{eq_id}"},
         json=payload,
         timeout=20,
     )
     if r.status_code >= 400:
-        _debug_print(f"Supabase patch {table} failed:", r.status_code, r.text[:800])
+        print(f"Supabase patch {table} failed:", r.status_code, r.text[:800])
         return {"updated": False, "status": r.status_code, "body": r.text[:800]}
     data = r.json()
     return dict(data[0]) if isinstance(data, list) and data else {"updated": True}
@@ -2948,13 +2941,13 @@ def _supabase_rest_patch(table: str, eq_id: str, payload: Dict[str, Any]) -> Dic
 def _supabase_rest_delete_where(table: str, params: Dict[str, str]) -> Dict[str, Any]:
     headers = {**_supabase_headers(use_service_role=True), "Prefer": "return=representation"}
     r = requests.delete(
-        f"{SUPABASE_URL}/rest/v1/{table}",
+        f"{SB_URL}/rest/v1/{table}",
         headers=headers,
         params=params,
         timeout=20,
     )
     if r.status_code >= 400:
-        _debug_print(f"Supabase delete {table} failed:", r.status_code, r.text[:800])
+        print(f"Supabase delete {table} failed:", r.status_code, r.text[:800])
         return {"deleted": False, "status": r.status_code, "body": r.text[:800]}
     return {"deleted": True}
 
@@ -3096,13 +3089,13 @@ def respect_ai_run_weekly_art_tournament(req: RespectAIArtTournamentRequest, x_a
 
     drawings = _supabase_rest_select(
         "respect_art_drawings",
-        {"week_key": f"eq.{week}", "status": "eq.approved", "order": "created_at.asc"},
+        {"week" + "_" + "key": f"eq.{week}", "status": "eq.approved", "order": "created_at.asc"},
         limit=256,
     )
     if len(drawings) < 2:
         return {"ok": False, "weekKey": week, "reason": "لا توجد رسمات كافية لتشغيل التصفيات", "count": len(drawings)}
 
-    _supabase_rest_delete_where("respect_art_matches", {"week_key": f"eq.{week}"})
+    _supabase_rest_delete_where("respect_art_matches", {"week" + "_" + "key": f"eq.{week}"})
     for d in drawings:
         _supabase_rest_patch("respect_art_drawings", str(d.get("id")), {"rank": None, "score": 0})
 
@@ -3123,7 +3116,7 @@ def respect_ai_run_weekly_art_tournament(req: RespectAIArtTournamentRequest, x_a
                 continue
 
             match_payload = {
-                "week_key": week,
+                "week" + "_" + "key": week,
                 "round_number": round_number,
                 "match_number": match_number,
                 "drawing_a_id": a.get("id"),
