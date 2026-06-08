@@ -864,7 +864,8 @@ def send_user_push(req: UserPushRequest, x_app_secret: Optional[str] = Header(de
 def send_message_push(req: MessagePushRequest, x_app_secret: Optional[str] = Header(default=None)):
     _check_secret(x_app_secret)
     title = req.senderName.strip() or display_username(req.senderUsername)
-    body = req.text.strip() or "أرسل لك رسالة"
+    # لا نرسل نص الرسالة عبر FCM حتى لا يتسرب محتوى الرسائل في خدمات الإشعارات أو شاشة القفل.
+    body = "أرسل لك رسالة جديدة"
 
     token = get_user_fcm_token(req.receiverUsername)
     if not token:
@@ -879,7 +880,7 @@ def send_message_push(req: MessagePushRequest, x_app_secret: Optional[str] = Hea
             "messageId": req.messageId,
             "senderUsername": display_username(req.senderUsername),
             "senderName": req.senderName,
-            "text": req.text,
+            "text": "رسالة جديدة",
             "peerUsername": display_username(req.senderUsername),
             "peerName": title,
         },
