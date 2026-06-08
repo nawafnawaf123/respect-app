@@ -340,6 +340,13 @@ class TrustedDeviceRequest(BaseModel):
     days: int = Field(default=90)
 
 
+class AuthPasswordCreateRequest(BaseModel):
+    email: str
+    password: str
+    username: str = ""
+    name: str = ""
+
+
 class PushRequest(BaseModel):
     token: str
     type: str = Field(default="message")
@@ -644,6 +651,74 @@ def _mark_otp_attempt(row_id: str, attempts: int, consumed: bool = False) -> Non
         )
     except Exception:
         pass
+
+
+
+@app.post("/auth/create-password-user")
+def auth_create_password_user(req: AuthPasswordCreateRequest, x_app_secret: Optional[str] = Header(default=None)):
+    _check_secret(x_app_secret)
+
+    if not SB_SERVICE:
+        raise HTTPException(status_code=500, detail="SUPABASE_SERVICE_ROLE_KEY غير موجود في Render")
+
+    email = _normalize_email(req.email)
+    password = str(req.password or "").strip()
+    username = _display_username(req.username or "")
+    name = str(req.name or username or "Respect User").strip()
+
+    if not _valid_email(email):
+        raise HTTPException(status_code=400, detail="الإيميل غير صحيح")
+    if len(password) < 6:
+        raise HTTPException(status_code=400, detail="كلمة المرور لازم تكون 6 أحرف على الأقل")
+
+    payload = {
+        "email": email,
+        "password": password,
+        "email_confirm": True,
+        "user_metadata": {
+            "username": username,
+            "name": name,
+        },
+    }
+
+    headers = {
+        "apikey": SB_SERVICE,
+        "Authorization": f"Bearer {SB_SERVICE}",
+        "Content-Type": "application/json",
+    }
+
+    r = requests.post(
+        f"{SB_URL}/auth/v1/admin/users",
+        headers=headers,
+        json=payload,
+        timeout=20,
+    )
+
+    if 200 <= r.status_code < 300:
+        try:
+            body = r.json()
+        except Exception:
+            body = {}
+        return {"ok": True, "created": True, "authUserId": str(body.get("id") or "")}
+
+    body_text = _safe_response_text(r.text, 800)
+    body_lower = body_text.lower()
+
+    # لو كان المستخدم موجودًا في Auth من محاولة قديمة، لا نرسل إيميل جديد ولا نكسر إنشاء الحساب.
+    # بعدها Flutter سيحاول signInWithPassword بنفس كلمة المرور.
+    if r.status_code in (400, 409, 422) and (
+        "already" in body_lower
+        or "registered" in body_lower
+        or "exists" in body_lower
+        or "duplicate" in body_lower
+        or "user_already_exists" in body_lower
+    ):
+        return {"ok": True, "created": False, "alreadyExists": True}
+
+    raise HTTPException(
+        status_code=400,
+        detail=f"تعذر إنشاء مستخدم Auth بدون رسالة Supabase: {r.status_code} {body_text}",
+    )
 
 
 @app.post("/auth/send-otp")
