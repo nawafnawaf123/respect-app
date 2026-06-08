@@ -17,6 +17,14 @@ import '../services/call_action_handler.dart';
 import '../theme/app_theme.dart';
 import 'theme_provider.dart';
 
+void _respectSafeLog(Object error, [StackTrace? stackTrace]) {
+  if (kDebugMode) {
+    debugPrint('Respect safe catch: $error');
+    if (stackTrace != null) debugPrintStack(stackTrace: stackTrace);
+  }
+}
+
+
 class RPStreamHubApp extends StatelessWidget {
   const RPStreamHubApp({super.key});
 
@@ -65,7 +73,7 @@ class RPStreamHubApp extends StatelessWidget {
       case '/login':
       case '/signin':
       case '/auth':
-        // هذا يحل مشكلة TestSprite عندما يفتح /login مباشرة.
+      // هذا يحل مشكلة TestSprite عندما يفتح /login مباشرة.
         page = const LoginScreen();
         break;
 
@@ -75,7 +83,7 @@ class RPStreamHubApp extends StatelessWidget {
         break;
 
       default:
-        // أي رابط غير معروف يرجع للتطبيق بدل صفحة بيضاء.
+      // أي رابط غير معروف يرجع للتطبيق بدل صفحة بيضاء.
         page = const AuthGate();
         break;
     }
@@ -155,7 +163,7 @@ class _AuthGateState extends State<AuthGate> {
   Future<void> _safe(Future<void> Function() task) async {
     try {
       await task();
-    } catch (_) {}
+    } catch (e, st) { _respectSafeLog(e, st); }
   }
 
   Future<void> _warmUpFeedData() async {
@@ -236,10 +244,10 @@ class BlockedDeviceScreen extends StatelessWidget {
                 height: 118,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: AppColors.danger.withOpacity(0.12),
-                  border: Border.all(color: AppColors.danger.withOpacity(0.45), width: 2),
+                  color: AppColors.danger.withValues(alpha: 0.12),
+                  border: Border.all(color: AppColors.danger.withValues(alpha: 0.45), width: 2),
                   boxShadow: [
-                    BoxShadow(color: AppColors.danger.withOpacity(0.18), blurRadius: 32, spreadRadius: 4),
+                    BoxShadow(color: AppColors.danger.withValues(alpha: 0.18), blurRadius: 32, spreadRadius: 4),
                   ],
                 ),
                 child: const Icon(Icons.phonelink_lock_rounded, color: AppColors.danger, size: 56),
@@ -266,8 +274,8 @@ class BlockedDeviceScreen extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(18),
-                  color: AppColors.purple.withOpacity(0.10),
-                  border: Border.all(color: AppColors.purple.withOpacity(0.22)),
+                  color: AppColors.purple.withValues(alpha: 0.10),
+                  border: Border.all(color: AppColors.purple.withValues(alpha: 0.22)),
                 ),
                 child: const Text(
                   'تواصل مع إدارة Respect إذا تعتقد أن الحظر تم بالخطأ.',

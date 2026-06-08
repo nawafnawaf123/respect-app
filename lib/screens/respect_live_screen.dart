@@ -13,6 +13,14 @@ import '../services/notification_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/glass_card.dart';
 
+void _logIgnoredError(Object error, StackTrace stackTrace) {
+  assert(() {
+    debugPrint('Ignored recoverable error: $error');
+    return true;
+  }());
+}
+
+
 // ---------- شاشة قائمة البثوث المحسنة ----------
 class RespectLiveScreen extends StatefulWidget {
   const RespectLiveScreen({super.key});
@@ -506,7 +514,7 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
       } else {
         await RespectLiveService.decreaseViewer(_streamId);
       }
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
     _viewerJoinRetryTimer?.cancel();
     _hostOfferRetryTimer?.cancel();
@@ -516,18 +524,18 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
     await _signalChannel?.unsubscribe();
 
     for (final pc in _hostPeers.values) {
-      try { await pc.close(); } catch (_) {}
+      try { await pc.close(); } catch (e, st) { _logIgnoredError(e, st); }
     }
     _hostPeers.clear();
     for (final pc in _guestSenderPeers.values) {
-      try { await pc.close(); } catch (_) {}
+      try { await pc.close(); } catch (e, st) { _logIgnoredError(e, st); }
     }
     _guestSenderPeers.clear();
     for (final pc in _guestReceiverPeers.values) {
-      try { await pc.close(); } catch (_) {}
+      try { await pc.close(); } catch (e, st) { _logIgnoredError(e, st); }
     }
     _guestReceiverPeers.clear();
-    try { await _viewerPeer?.close(); } catch (_) {}
+    try { await _viewerPeer?.close(); } catch (e, st) { _logIgnoredError(e, st); }
     try {
       for (final t in _localStream?.getTracks() ?? <MediaStreamTrack>[]) {
         await t.stop();
@@ -537,13 +545,13 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
         await t.stop();
       }
       await _guestLocalStream?.dispose();
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
     await _localRenderer.dispose();
     await _remoteRenderer.dispose();
     await _guestLocalRenderer.dispose();
     for (final r in _guestRemoteRenderers.values) {
-      try { await r.dispose(); } catch (_) {}
+      try { await r.dispose(); } catch (e, st) { _logIgnoredError(e, st); }
     }
     _guestRemoteRenderers.clear();
     _chatCtrl.dispose();
@@ -561,7 +569,7 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
         _viewersCount = max(serverViewers, realtimeViewers);
         _likesCount = max(_likesCount, serverLikes);
       });
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
   }
 
   Future<void> _sendViewerHello() async {
@@ -605,7 +613,8 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
       'video': widget.startWithVideo ? {'facingMode': 'user', 'width': {'ideal': 1080}, 'height': {'ideal': 1920}, 'frameRate': {'ideal': 30, 'max': 30}} : false,
     });
     _localRenderer.srcObject = _localStream;
-    _cameraOff = !_localStream!.getVideoTracks().any((t) => t.enabled);
+    final localStream = _localStream;
+    _cameraOff = localStream == null ? true : !localStream.getVideoTracks().any((t) => t.enabled);
   }
 
   Future<void> _startViewer() async {
@@ -700,12 +709,14 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
         if (action == 'add') {
           _moderators.add(username);
           if (_connectedViewers.containsKey(username)) {
-            _connectedViewers[username]!.role = _ViewerRole.moderator;
+            final viewer = _connectedViewers[username];
+            if (viewer != null) viewer.role = _ViewerRole.moderator;
           }
         } else if (action == 'remove') {
           _moderators.remove(username);
           if (_connectedViewers.containsKey(username)) {
-            _connectedViewers[username]!.role = _ViewerRole.viewer;
+            final viewer = _connectedViewers[username];
+            if (viewer != null) viewer.role = _ViewerRole.viewer;
           }
         }
         if (mounted) setState(() {});
@@ -1679,7 +1690,7 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
     if (!widget.isHost || _localStream == null || viewerId.trim().isEmpty) return;
     RTCPeerConnection? old = _hostPeers[viewerId];
     if (forceNew && old != null) {
-      try { await old.close(); } catch (_) {}
+      try { await old.close(); } catch (e, st) { _logIgnoredError(e, st); }
       _hostPeers.remove(viewerId);
     }
 
@@ -1688,8 +1699,10 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
 
     final senders = await pc.getSenders();
     if (senders.isEmpty) {
-      for (final track in _localStream!.getTracks()) {
-        try { await pc.addTrack(track, _localStream!); } catch (_) {}
+      final localStream = _localStream;
+      if (localStream == null) return;
+      for (final track in localStream.getTracks()) {
+        try { await pc.addTrack(track, localStream); } catch (e, st) { _logIgnoredError(e, st); }
       }
     }
 
@@ -1724,7 +1737,7 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
     await _sendLiveEvent(type: 'answer', to: _hostUsername, data: {'sdp': answer.sdp, 'type': answer.type});
 
     for (final c in List<RTCIceCandidate>.from(_viewerPendingCandidates)) {
-      try { await pc.addCandidate(c); } catch (_) {}
+      try { await pc.addCandidate(c); } catch (e, st) { _logIgnoredError(e, st); }
     }
     _viewerPendingCandidates.clear();
   }
@@ -1732,7 +1745,7 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
   Future<void> _flushPending(String owner, RTCPeerConnection pc) async {
     final list = _pendingCandidates.remove(owner) ?? <RTCIceCandidate>[];
     for (final c in list) {
-      try { await pc.addCandidate(c); } catch (_) {}
+      try { await pc.addCandidate(c); } catch (e, st) { _logIgnoredError(e, st); }
     }
   }
 
@@ -1803,11 +1816,11 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
     guest.accepted = false;
     _guestLayoutModes.remove(guest.username);
     final renderer = _guestRemoteRenderers.remove(guest.username);
-    try { await renderer?.dispose(); } catch (_) {}
+    try { await renderer?.dispose(); } catch (e, st) { _logIgnoredError(e, st); }
     final pc1 = _guestReceiverPeers.remove(guest.username);
     final pc2 = _guestSenderPeers.remove(guest.username);
-    try { await pc1?.close(); } catch (_) {}
-    try { await pc2?.close(); } catch (_) {}
+    try { await pc1?.close(); } catch (e, st) { _logIgnoredError(e, st); }
+    try { await pc2?.close(); } catch (e, st) { _logIgnoredError(e, st); }
     if (mounted) setState(() {});
     await _sendLiveEvent(type: 'guest_kick', to: guest.username);
   }
@@ -1883,11 +1896,11 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
         await t.stop();
       }
       await _guestLocalStream?.dispose();
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
     _guestLocalStream = null;
     _guestLocalRenderer.srcObject = null;
     for (final pc in _guestSenderPeers.values) {
-      try { await pc.close(); } catch (_) {}
+      try { await pc.close(); } catch (e, st) { _logIgnoredError(e, st); }
     }
     _guestSenderPeers.clear();
     if (closeState && mounted) setState(() {});
@@ -1933,11 +1946,13 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
   Future<void> _createGuestOfferForReceiver(String receiver) async {
     if (_guestLocalStream == null || receiver.trim().isEmpty) return;
     final old = _guestSenderPeers.remove(receiver);
-    try { await old?.close(); } catch (_) {}
+    try { await old?.close(); } catch (e, st) { _logIgnoredError(e, st); }
     final pc = await _createGuestPeer(to: receiver, sender: true);
     _guestSenderPeers[receiver] = pc;
-    for (final track in _guestLocalStream!.getTracks()) {
-      try { await pc.addTrack(track, _guestLocalStream!); } catch (_) {}
+    final guestLocalStream = _guestLocalStream;
+    if (guestLocalStream == null) return;
+    for (final track in guestLocalStream.getTracks()) {
+      try { await pc.addTrack(track, guestLocalStream); } catch (e, st) { _logIgnoredError(e, st); }
     }
     final offer = await pc.createOffer(<String, dynamic>{
       'offerToReceiveAudio': false,
@@ -1957,7 +1972,7 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
     if (owner.trim().isEmpty || sdp == null || sdp.trim().isEmpty || descType == null || descType.trim().isEmpty) return;
     _guestLayoutModes[owner] = _guestLayoutFrom(data['layout']);
     final old = _guestReceiverPeers.remove(owner);
-    try { await old?.close(); } catch (_) {}
+    try { await old?.close(); } catch (e, st) { _logIgnoredError(e, st); }
     final pc = await _createGuestPeer(to: owner, sender: false);
     _guestReceiverPeers[owner] = pc;
     await pc.setRemoteDescription(RTCSessionDescription(sdp, descType));
@@ -1984,7 +1999,7 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
   Future<void> _flushGuestPending(String owner, RTCPeerConnection pc) async {
     final list = _guestPendingCandidates.remove(owner) ?? <RTCIceCandidate>[];
     for (final c in list) {
-      try { await pc.addCandidate(c); } catch (_) {}
+      try { await pc.addCandidate(c); } catch (e, st) { _logIgnoredError(e, st); }
     }
   }
 

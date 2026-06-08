@@ -17,9 +17,15 @@ function pemToArrayBuffer(pem: string) {
   return bytes.buffer;
 }
 
+function requireEnv(name: string): string {
+  const value = Deno.env.get(name)?.trim();
+  if (!value) throw new Error(`Missing required environment variable: ${name}`);
+  return value;
+}
+
 async function getAccessToken() {
-  const clientEmail = Deno.env.get("FIREBASE_CLIENT_EMAIL")!;
-  const privateKey = Deno.env.get("FIREBASE_PRIVATE_KEY")!;
+  const clientEmail = requireEnv("FIREBASE_CLIENT_EMAIL");
+  const privateKey = requireEnv("FIREBASE_PRIVATE_KEY");
 
   const key = await crypto.subtle.importKey(
     "pkcs8",
@@ -59,7 +65,7 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const projectId = Deno.env.get("FIREBASE_PROJECT_ID")!;
+    const projectId = requireEnv("FIREBASE_PROJECT_ID");
     const { token, title, body, data = {}, channelId = "respect_messages_channel" } = await req.json();
     if (!token) throw new Error("Missing FCM token");
 

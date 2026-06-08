@@ -2,11 +2,27 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http; // تمت الإضافة
 
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+
+void _logIgnoredError(Object error, StackTrace stackTrace) {
+  assert(() {
+    debugPrint('Ignored recoverable error: $error');
+    return true;
+  }());
+}
+
+void _safeDebugLog(Object? message) {
+  assert(() {
+    debugPrint(message?.toString());
+    return true;
+  }());
+}
+
 
 class SupabaseService {
   SupabaseService._();
@@ -51,7 +67,7 @@ class SupabaseService {
   // لا تضع السر داخل الكود. مرّره وقت البناء:
   // flutter build apk --dart-define=APP_SECRET=your_secret
   static const String pushApiSecret =
-  String.fromEnvironment('APP_SECRET', defaultValue: 'hawk123');
+  String.fromEnvironment('APP_SECRET', defaultValue: '');
 
   static Map<String, String> _jsonSecretHeaders() {
     final headers = <String, String>{'Content-Type': 'application/json'};
@@ -142,7 +158,7 @@ class SupabaseService {
 
   static Future<Map<String, dynamic>> getPostingLimitsForUsername(String username) async {
     Map<String, dynamic>? user;
-    try { user = await getUserByUsername(username); } catch (_) {}
+    try { user = await getUserByUsername(username); } catch (e, st) { _logIgnoredError(e, st); }
     final verified = isVerifiedUser(user);
     final limit = verified ? verifiedPostMaxChars : freePostMaxChars;
     final aiLimit = verified ? verifiedRespectAiDailyLimit : freeRespectAiDailyLimit;
@@ -280,7 +296,7 @@ class SupabaseService {
         try {
           final decoded = jsonDecode(raw);
           if (decoded is List) list.addAll(decoded.whereType<Map>().map((e) => e.map((k, v) => MapEntry(k.toString(), v))));
-        } catch (_) {}
+        } catch (e, st) { _logIgnoredError(e, st); }
       }
       final local = <String, dynamic>{...payload, 'id': 'local_story_${now.microsecondsSinceEpoch}'};
       list.insert(0, local);
@@ -343,7 +359,7 @@ class SupabaseService {
       if (decoded is List) {
         return decoded.map((e) => e.toString()).where((id) => id.trim().isNotEmpty).toSet();
       }
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
     return <String>{};
   }
 
@@ -413,11 +429,11 @@ class SupabaseService {
     try {
       await client.from('users').update(payload).or('username.eq.$user,username.eq.$clean').timeout(const Duration(seconds: 8));
     } catch (_) {
-      try { await client.from('users').update(payload).eq('username', user).timeout(const Duration(seconds: 8)); } catch (_) {}
+      try { await client.from('users').update(payload).eq('username', user).timeout(const Duration(seconds: 8)); } catch (e, st) { _logIgnoredError(e, st); }
     }
 
-    try { await client.from('posts').update({'author_verified': true}).or('username.eq.$user,username.eq.$clean').timeout(const Duration(seconds: 8)); } catch (_) {}
-    try { await client.from('post_replies').update({'author_verified': true}).or('username.eq.$user,username.eq.$clean').timeout(const Duration(seconds: 8)); } catch (_) {}
+    try { await client.from('posts').update({'author_verified': true}).or('username.eq.$user,username.eq.$clean').timeout(const Duration(seconds: 8)); } catch (e, st) { _logIgnoredError(e, st); }
+    try { await client.from('post_replies').update({'author_verified': true}).or('username.eq.$user,username.eq.$clean').timeout(const Duration(seconds: 8)); } catch (e, st) { _logIgnoredError(e, st); }
 
     try {
       await client.from('verification_subscriptions').insert({
@@ -431,7 +447,7 @@ class SupabaseService {
         'expires_at': expires.toIso8601String(),
         'created_at': now.toIso8601String(),
       }).timeout(const Duration(seconds: 8));
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString('respect_accounts_v1');
@@ -440,7 +456,7 @@ class SupabaseService {
       try {
         final decoded = jsonDecode(raw);
         if (decoded is List) accounts.addAll(decoded.whereType<Map>().map((e) => e.map((k, v) => MapEntry(k.toString(), v))));
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     }
     final idx = accounts.indexWhere((a) => normalizeUsername((a['username'] ?? a['id'] ?? '').toString()) == clean);
     if (idx >= 0) {
@@ -456,7 +472,7 @@ class SupabaseService {
       try {
         final decoded = jsonDecode(usersRaw);
         if (decoded is Map) usersMap.addAll(decoded.map((k, v) => MapEntry(k.toString(), v)));
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     }
     final current = usersMap[clean] is Map ? Map<String, dynamic>.from(usersMap[clean] as Map) : <String, dynamic>{};
     usersMap[clean] = {...current, ...payload, 'username': user, 'id': clean};
@@ -515,7 +531,7 @@ class SupabaseService {
     } catch (_) {
       try {
         await client.from('respect_stories').delete().eq('id', id).eq('username', user).timeout(const Duration(seconds: 8));
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     }
 
     final prefs = await SharedPreferences.getInstance();
@@ -530,7 +546,7 @@ class SupabaseService {
           .where((e) => (e['id'] ?? '').toString() != id)
           .toList();
       await prefs.setString(_localStoriesKey, jsonEncode(list));
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
   }
 
   static Future<void> deleteAllActiveStoriesForUser(String username) async {
@@ -542,7 +558,7 @@ class SupabaseService {
           .eq('username', user)
           .eq('is_active', true)
           .timeout(const Duration(seconds: 8));
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_localStoriesKey);
@@ -556,13 +572,13 @@ class SupabaseService {
           .where((e) => displayUsername((e['username'] ?? '').toString()) != user)
           .toList();
       await prefs.setString(_localStoriesKey, jsonEncode(list));
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
   }
 
   static Future<Map<String, dynamic>> _storyActorPayload(String username) async {
     final actor = displayUsername(username);
     Map<String, dynamic>? user;
-    try { user = await getUserByUsername(actor); } catch (_) {}
+    try { user = await getUserByUsername(actor); } catch (e, st) { _logIgnoredError(e, st); }
     return <String, dynamic>{
       'username': actor,
       'name': (user?['name'] ?? user?['profileName'] ?? actor).toString(),
@@ -720,7 +736,7 @@ class SupabaseService {
         try {
           final decoded = jsonDecode(raw);
           if (decoded is List) list.addAll(decoded.whereType<Map>().map((e) => e.map((k, v) => MapEntry(k.toString(), v))));
-        } catch (_) {}
+        } catch (e, st) { _logIgnoredError(e, st); }
       }
       list.insert(0, inserted);
       await prefs.setString(key, jsonEncode(list));
@@ -765,7 +781,7 @@ class SupabaseService {
       try {
         final decoded = jsonDecode(raw);
         if (decoded is List) return decoded.whereType<Map>().map((e) => e.map((k, v) => MapEntry(k.toString(), v))).toList();
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
       return <Map<String, dynamic>>[];
     }
   }
@@ -800,7 +816,7 @@ class SupabaseService {
         try {
           final decoded = jsonDecode(raw);
           if (decoded is List) list.addAll(decoded.whereType<Map>().map((e) => e.map((k, v) => MapEntry(k.toString(), v))));
-        } catch (_) {}
+        } catch (e, st) { _logIgnoredError(e, st); }
       }
       list.insert(0, {
         'id': 'local_story_notification_${DateTime.now().microsecondsSinceEpoch}',
@@ -835,7 +851,7 @@ class SupabaseService {
       try {
         final decoded = jsonDecode(raw);
         if (decoded is List) return decoded.whereType<Map>().map((e) => e.map((k, v) => MapEntry(k.toString(), v))).toList();
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
       return <Map<String, dynamic>>[];
     }
   }
@@ -894,17 +910,17 @@ class SupabaseService {
     try {
       await client.from('users').upsert(payload, onConflict: 'username');
       return;
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
     // احتياط لو ما فيه unique على username.
     try {
       await client.from('users').update(payload).or('username.eq.respectai,username.eq.@respectai');
       return;
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
     try {
       await client.from('users').insert(payload);
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
   }
 
   static Future<String> _recentRepliesContextForAi({
@@ -1119,7 +1135,7 @@ class SupabaseService {
     if (deleteParent && parentReplyId != null && parentReplyId.trim().isNotEmpty) {
       try {
         await deletePostReply(parentReplyId.trim());
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     }
 
     if (shouldDelete) {
@@ -1181,7 +1197,7 @@ class SupabaseService {
       final decoded = jsonDecode(utf8.decode(response.bodyBytes));
       if (decoded is Map) return Map<String, dynamic>.from(decoded);
     } catch (e) {
-      print('Respect AI story moderation failed for $id: $e');
+      _safeDebugLog('Respect AI story moderation failed for $id: $e');
       return <String, dynamic>{
         'ok': false,
         'shouldDelete': false,
@@ -1228,7 +1244,7 @@ class SupabaseService {
 
       if (shouldDelete) {
         if (!deleted) {
-          try { await deleteStoryItem(storyId: id, username: authorUsername); } catch (_) {}
+          try { await deleteStoryItem(storyId: id, username: authorUsername); } catch (e, st) { _logIgnoredError(e, st); }
         }
         final prefs = await SharedPreferences.getInstance();
         final raw = prefs.getString(_localStoriesKey);
@@ -1243,14 +1259,14 @@ class SupabaseService {
                   .toList();
               await prefs.setString(_localStoriesKey, jsonEncode(list));
             }
-          } catch (_) {}
+          } catch (e, st) { _logIgnoredError(e, st); }
         }
-        print('Respect AI deleted story $id ($category): $reason');
+        _safeDebugLog('Respect AI deleted story $id ($category): $reason');
       } else {
-        print('Respect AI approved story $id ($category): $reason');
+        _safeDebugLog('Respect AI approved story $id ($category): $reason');
       }
     } catch (e) {
-      print('Respect AI background story moderation failed for $id: $e');
+      _safeDebugLog('Respect AI background story moderation failed for $id: $e');
     }
   }
 
@@ -1310,7 +1326,7 @@ class SupabaseService {
       final decoded = jsonDecode(utf8.decode(response.bodyBytes));
       if (decoded is Map) return Map<String, dynamic>.from(decoded);
     } catch (e) {
-      print('Respect AI server-side post moderation failed for $id: $e');
+      _safeDebugLog('Respect AI server-side post moderation failed for $id: $e');
 
       // احتياط فقط: إذا السيرفر الجديد لم يرد، نجرب endpoint القديم ثم نحذف محليًا إن قرر الحذف.
       // هذا ليس المسار الأساسي؛ المسار الأساسي هو حذف Render مباشرة من Supabase.
@@ -1339,7 +1355,7 @@ class SupabaseService {
           'fallbackOldModeration': true,
         };
       } catch (fallbackError) {
-        print('Respect AI fallback post moderation failed for $id: $fallbackError');
+        _safeDebugLog('Respect AI fallback post moderation failed for $id: $fallbackError');
         return <String, dynamic>{
           'ok': false,
           'shouldDelete': false,
@@ -1396,14 +1412,14 @@ class SupabaseService {
 
       if (shouldDelete && deleted) {
         _notifyRespectAiDeletedPost(id);
-        print('Respect AI server deleted post $id ($category): $reason');
+        _safeDebugLog('Respect AI server deleted post $id ($category): $reason');
       } else if (shouldDelete && !deleted) {
-        print('Respect AI marked post $id as violation but delete failed ($category): $reason');
+        _safeDebugLog('Respect AI marked post $id as violation but delete failed ($category): $reason');
       } else {
-        print('Respect AI approved post $id ($category): $reason');
+        _safeDebugLog('Respect AI approved post $id ($category): $reason');
       }
     } catch (e) {
-      print('Respect AI background post moderation failed for $id: $e');
+      _safeDebugLog('Respect AI background post moderation failed for $id: $e');
     }
   }
 
@@ -1424,7 +1440,7 @@ class SupabaseService {
         final rows = await getRepliesByIds([parentReplyId.trim()], currentUsername: authorUsername)
             .timeout(const Duration(seconds: 8));
         if (rows.isNotEmpty) parentReplyTextForModeration = (rows.first['text'] ?? '').toString();
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     }
 
     String recentRepliesTextForModeration = '';
@@ -1434,7 +1450,7 @@ class SupabaseService {
         currentUsername: authorUsername,
         excludeReplyId: parentReplyId,
       ).timeout(const Duration(seconds: 8));
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
     try {
       final result = await moderateRespectContent(
@@ -1450,16 +1466,16 @@ class SupabaseService {
           result['blocked'] == true;
       final deleteParent = result['deleteParentReply'] == true;
       if (deleteParent && parentReplyId != null && parentReplyId.trim().isNotEmpty) {
-        try { await deletePostReply(parentReplyId.trim()); } catch (_) {}
+        try { await deletePostReply(parentReplyId.trim()); } catch (e, st) { _logIgnoredError(e, st); }
       }
       if (shouldDelete) {
         await deletePostReply(id);
         final category = (result['category'] ?? 'violation').toString();
         final reason = (result['reason'] ?? '').toString();
-        print('Respect AI background deleted reply $id ($category): $reason');
+        _safeDebugLog('Respect AI background deleted reply $id ($category): $reason');
       }
     } catch (e) {
-      print('Respect AI background reply moderation skipped for $id: $e');
+      _safeDebugLog('Respect AI background reply moderation skipped for $id: $e');
     }
   }
 
@@ -1602,7 +1618,7 @@ class SupabaseService {
         if (isRespectAiUsername(user)) continue;
         addCandidate(user: user, text: (raw['text'] ?? '').toString(), source: 'post');
       }
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
     try {
       final replyRows = await client
@@ -1618,7 +1634,7 @@ class SupabaseService {
         if (isRespectAiUsername(user)) continue;
         addCandidate(user: user, text: (raw['text'] ?? '').toString(), source: 'reply');
       }
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
     final repeated = grouped.entries.where((e) => e.value.length >= 2).toList()
       ..sort((a, b) {
@@ -1809,7 +1825,7 @@ $examples
           .maybeSingle()
           .timeout(const Duration(seconds: 7));
       if (row != null) return Map<String, dynamic>.from(row as Map);
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
     // فحص احتياطي من جدول users لو لم يتم إنشاء جدول respect_device_bans أو تم الحظر من العمود مباشرة.
     try {
@@ -1830,7 +1846,7 @@ $examples
           };
         }
       }
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
     return null;
   }
@@ -1863,7 +1879,7 @@ $examples
     if (clean.isEmpty) throw Exception('username is empty');
 
     Map<String, dynamic>? target;
-    try { target = await getUserByUsername(user); } catch (_) {}
+    try { target = await getUserByUsername(user); } catch (e, st) { _logIgnoredError(e, st); }
 
     final deviceId = (target?['current_device_id'] ?? target?['device_id'] ?? target?['last_device_id'] ?? '').toString().trim();
     final now = DateTime.now().toUtc().toIso8601String();
@@ -1903,7 +1919,7 @@ $examples
           ..remove('blockedReason')
           ..remove('blockedAt');
         await client.from('users').update(fallback).or('username.eq.$user,username.eq.$clean').timeout(const Duration(seconds: 8));
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     }
 
     if (deviceId.isNotEmpty) {
@@ -1918,7 +1934,7 @@ $examples
             'created_at': now,
             'updated_at': now,
           }, onConflict: 'device_id').timeout(const Duration(seconds: 8));
-        } catch (_) {}
+        } catch (e, st) { _logIgnoredError(e, st); }
       } else {
         try {
           await client
@@ -1926,7 +1942,7 @@ $examples
               .update({'is_active': false, 'updated_at': now})
               .eq('device_id', deviceId)
               .timeout(const Duration(seconds: 8));
-        } catch (_) {}
+        } catch (e, st) { _logIgnoredError(e, st); }
       }
     }
   }
@@ -2197,7 +2213,7 @@ $examples
           .from('posts')
           .update({'avatar_url': url, 'avatarPath': url})
           .or('username.eq.@$clean,username.eq.$clean');
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
     final currentId = await SupabaseService.currentUserId();
     if (currentId != null && normalizeUsername(currentId) == clean) {
@@ -2315,7 +2331,7 @@ $examples
             .map<String>((e) => (e['post_id'] ?? '').toString())
             .where((e) => e.isNotEmpty)
             .toSet();
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     }
     return <String>{};
   }
@@ -2330,7 +2346,7 @@ $examples
             .eq('username', displayUsername(username))
             .limit(1);
         return table;
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     }
     throw Exception('saved table not found');
   }
@@ -2410,7 +2426,7 @@ $examples
     };
 
     // نحدّث أعمدة posts كاش احتياطيًا حتى تبقى الأرقام متزامنة مع الجداول.
-    try { await _updatePostCounters(postId, counters); } catch (_) {}
+    try { await _updatePostCounters(postId, counters); } catch (e, st) { _logIgnoredError(e, st); }
     return counters;
   }
 
@@ -2652,7 +2668,7 @@ $examples
     counters['shares'] = max(0, (counters['shares'] ?? 0) + 1);
     try {
       await client.from('posts').update({'shares': counters['shares'] ?? 0}).eq('id', postId);
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
     return await _readGlobalPostCounters(postId);
   }
 
@@ -2752,7 +2768,7 @@ $examples
         final found = strictUsername((row['username'] ?? '').toString());
         if (found.isNotEmpty && found != except) return true;
       }
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
     return false;
   }
 
@@ -2772,7 +2788,7 @@ $examples
         final found = strictUsername((row['username'] ?? '').toString());
         if (found != except) return true;
       }
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
     return false;
   }
 
@@ -2793,7 +2809,7 @@ $examples
         final n1 = cleanProfileName((row['name'] ?? '').toString()).toLowerCase();
         if (n1 == clean) return true;
       }
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
     return false;
   }
 
@@ -2874,7 +2890,7 @@ $examples
       try {
         final decoded = jsonDecode(usersRaw);
         if (decoded is Map) users.addAll(decoded.map((k, v) => MapEntry(k.toString(), v)));
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     }
     users[username] = normalized;
     await prefs.setString('respect_users_map', jsonEncode(users));
@@ -2887,7 +2903,7 @@ $examples
         if (decoded is List) {
           accounts.addAll(decoded.whereType<Map>().map((e) => e.map((k, v) => MapEntry(k.toString(), v))));
         }
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     }
     final index = accounts.indexWhere((a) => normalizeUsername((a['username'] ?? a['id'] ?? '').toString()) == username);
     if (index >= 0) {
@@ -3094,7 +3110,7 @@ $examples
     // تنظيف جلسة Google القديمة يمنع رجوع نفس النتيجة العالقة أحيانًا بعد فشل سابق.
     try {
       await googleSignIn.signOut();
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
     final googleUser = await googleSignIn.signIn();
     if (googleUser == null) return null;
@@ -3153,7 +3169,7 @@ $examples
           await saveCurrentUser(fresh);
           return fresh;
         }
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
 
       return existing;
     }
@@ -3312,7 +3328,7 @@ $examples
           post['avatarPath'] = avatar;
         }
       }
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
     // نقرأ العدادات العالمية من جداول التفاعل بدل تحديث جدول posts مباشرة.
     // هذا يمنع خطأ RLS على جدول posts عند الضغط على لايك/إعادة نشر.
@@ -3346,7 +3362,7 @@ $examples
         post['views'] = viewCounts[id] ?? _asInt(post['views']);
         post['shares'] = _asInt(post['shares']);
       }
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
     try {
       final ids = posts.map((p) => (p['id'] ?? '').toString()).where((id) => id.isNotEmpty).toList();
@@ -3357,7 +3373,7 @@ $examples
         post['replies'] = list;
         post['comments'] = list.length;
       }
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
     return posts;
   }
@@ -3376,7 +3392,7 @@ $examples
         post['avatar_url'] = avatar;
         post['avatarPath'] = avatar;
       }
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
     try {
       final counters = await _readGlobalPostCounters(postId);
@@ -3384,13 +3400,13 @@ $examples
       post['reposts'] = counters['reposts'] ?? _asInt(post['reposts']);
       post['views'] = counters['views'] ?? _asInt(post['views']);
       post['shares'] = counters['shares'] ?? _asInt(post['shares']);
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
     try {
       final replies = await getPostReplies(postId);
       post['replies'] = replies;
       post['comments'] = replies.length;
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
     return post;
   }
@@ -3482,7 +3498,7 @@ $examples
     } catch (_) {
       try {
         await client.from('post_replies').update({'likes': payload['likes']}).eq('id', replyId);
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     }
   }
 
@@ -3735,7 +3751,7 @@ $examples
     try {
       final repliesCount = await client.from('post_replies').select('id').eq('post_id', postId);
       await client.from('posts').update({'comments': repliesCount.length}).eq('id', postId);
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
     final row = Map<String, dynamic>.from(inserted);
     final normalized = _normalizeReplyRows([row]);
@@ -3982,7 +3998,7 @@ $examples
           targetUsername: target,
           enabled: false,
         );
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     }
 
     return {'isFollowing': follow};
@@ -4061,7 +4077,7 @@ $examples
       final post = postById[postId];
       if (post == null) continue;
       Map<String, dynamic>? actorUser;
-      try { actorUser = await getUserByUsername(actor); } catch (_) {}
+      try { actorUser = await getUserByUsername(actor); } catch (e, st) { _logIgnoredError(e, st); }
       out.add({
         'id': row['id'],
         'type': 'like',
@@ -4090,7 +4106,7 @@ $examples
       final actor = displayUsername((row['follower_username'] ?? '').toString());
       if (actor == target) continue;
       Map<String, dynamic>? actorUser;
-      try { actorUser = await getUserByUsername(actor); } catch (_) {}
+      try { actorUser = await getUserByUsername(actor); } catch (e, st) { _logIgnoredError(e, st); }
       out.add({
         'id': row['id'],
         'type': 'follow',
@@ -4132,7 +4148,7 @@ $examples
       final post = postById[postId];
       if (post == null) continue;
       Map<String, dynamic>? actorUser;
-      try { actorUser = await getUserByUsername(actor); } catch (_) {}
+      try { actorUser = await getUserByUsername(actor); } catch (e, st) { _logIgnoredError(e, st); }
       out.add({
         'id': row['id'],
         'type': 'repost',
@@ -4391,7 +4407,7 @@ $examples
         'created_at': now.toIso8601String(),
         'expires_at': now.add(const Duration(days: 30)).toIso8601String(),
       }).timeout(const Duration(seconds: 8));
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
     final count = await activeWarningCount(user);
     if (count >= 3) {
@@ -5030,7 +5046,7 @@ $examples
       for (final p in posts) {
         try {
           p['replies'] = await getPostReplies((p['id'] ?? '').toString());
-        } catch (_) {}
+        } catch (e, st) { _logIgnoredError(e, st); }
       }
       return posts;
     } catch (_) {
@@ -5077,30 +5093,30 @@ $examples
       if (row != null) {
         postId = (row['post_id'] ?? '').toString();
       }
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
-    try { await client.from('reply_likes').delete().eq('reply_id', id); } catch (_) {}
-    try { await client.from('reply_reposts').delete().eq('reply_id', id); } catch (_) {}
-    try { await client.from('reply_views').delete().eq('reply_id', id); } catch (_) {}
-    try { await client.from('post_replies').delete().eq('parent_reply_id', id); } catch (_) {}
-    try { await client.from('post_replies').delete().eq('id', id); } catch (_) {}
+    try { await client.from('reply_likes').delete().eq('reply_id', id); } catch (e, st) { _logIgnoredError(e, st); }
+    try { await client.from('reply_reposts').delete().eq('reply_id', id); } catch (e, st) { _logIgnoredError(e, st); }
+    try { await client.from('reply_views').delete().eq('reply_id', id); } catch (e, st) { _logIgnoredError(e, st); }
+    try { await client.from('post_replies').delete().eq('parent_reply_id', id); } catch (e, st) { _logIgnoredError(e, st); }
+    try { await client.from('post_replies').delete().eq('id', id); } catch (e, st) { _logIgnoredError(e, st); }
 
     if (postId.isNotEmpty) {
       try {
         final repliesCount = await client.from('post_replies').select('id').eq('post_id', postId);
         await client.from('posts').update({'comments': repliesCount.length}).eq('id', postId);
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     }
   }
 
   static Future<void> deletePost(String postId) async {
     final id = postId.trim();
     if (id.isEmpty) return;
-    try { await client.from('post_replies').delete().eq('post_id', id); } catch (_) {}
-    try { await client.from('post_likes').delete().eq('post_id', id); } catch (_) {}
-    try { await client.from('post_reposts').delete().eq('post_id', id); } catch (_) {}
-    try { await client.from('post_views').delete().eq('post_id', id); } catch (_) {}
-    try { await client.from('post_events').delete().eq('post_id', id); } catch (_) {}
+    try { await client.from('post_replies').delete().eq('post_id', id); } catch (e, st) { _logIgnoredError(e, st); }
+    try { await client.from('post_likes').delete().eq('post_id', id); } catch (e, st) { _logIgnoredError(e, st); }
+    try { await client.from('post_reposts').delete().eq('post_id', id); } catch (e, st) { _logIgnoredError(e, st); }
+    try { await client.from('post_views').delete().eq('post_id', id); } catch (e, st) { _logIgnoredError(e, st); }
+    try { await client.from('post_events').delete().eq('post_id', id); } catch (e, st) { _logIgnoredError(e, st); }
     await client.from('posts').delete().eq('id', id);
   }
 
@@ -5132,7 +5148,7 @@ $examples
     } catch (_) {
       // Postgres realtime + polling fallback في ChatScreen سيغطي أي فشل هنا.
     } finally {
-      try { await channel.unsubscribe(); } catch (_) {}
+      try { await channel.unsubscribe(); } catch (e, st) { _logIgnoredError(e, st); }
     }
   }
 
@@ -5148,7 +5164,7 @@ $examples
         'fcm_updated_at': DateTime.now().toUtc().toIso8601String(),
       })
           .or('username.eq.${normalizeUsername(username)},username.eq.$username');
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -5193,9 +5209,9 @@ $examples
         }),
       ).timeout(const Duration(seconds: 12));
 
-      print('Push API response for $type: ${response.statusCode} - ${response.body}');
+      _safeDebugLog('Push API response for $type: ${response.statusCode} - ${response.body}');
     } catch (e) {
-      print('Error calling Push API: $e');
+      _safeDebugLog('Error calling Push API: $e');
     }
   }
 
@@ -5222,9 +5238,9 @@ $examples
         }),
       ).timeout(const Duration(seconds: 12));
 
-      print('Message push response: ${response.statusCode} - ${response.body}');
+      _safeDebugLog('Message push response: ${response.statusCode} - ${response.body}');
     } catch (e) {
-      print('Error sending message push: $e');
+      _safeDebugLog('Error sending message push: $e');
     }
   }
 
@@ -5253,9 +5269,9 @@ $examples
         }),
       ).timeout(const Duration(seconds: 12));
 
-      print('Call push response: ${response.statusCode} - ${response.body}');
+      _safeDebugLog('Call push response: ${response.statusCode} - ${response.body}');
     } catch (e) {
-      print('Error sending call push: $e');
+      _safeDebugLog('Error sending call push: $e');
     }
   }
 
@@ -5278,7 +5294,7 @@ $examples
       if (sender.isNotEmpty) {
         unawaited(sendUserBroadcast(username: sender, event: 'message_status', payload: {'message_id': id, 'status': 'delivered'}));
       }
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
   }
 
   static Future<void> markMessageRead(String messageId, String username) async {
@@ -5296,7 +5312,7 @@ $examples
         unawaited(sendUserBroadcast(username: sender, event: 'message_status', payload: {'message_id': id, 'status': 'read'}));
       }
     } catch (_) {
-      try { await client.from('messages').update({'is_read': true}).eq('id', id); } catch (_) {}
+      try { await client.from('messages').update({'is_read': true}).eq('id', id); } catch (e, st) { _logIgnoredError(e, st); }
     }
   }
 
@@ -5502,7 +5518,7 @@ $examples
       if (sender.isNotEmpty && sender != displayUsername(username)) {
         unawaited(sendUserBroadcast(username: sender, event: 'message_status', payload: {'message_id': id, 'status': 'delivered'}));
       }
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
   }
 
   static Future<void> markGroupMessageRead(String messageId, String username) async {
@@ -5520,14 +5536,14 @@ $examples
       if (sender.isNotEmpty && sender != displayUsername(username)) {
         unawaited(sendUserBroadcast(username: sender, event: 'message_status', payload: {'message_id': id, 'status': 'read'}));
       }
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
   }
 
   static Future<void> deleteChatMessage({required String messageId, required bool group}) async {
     final id = messageId.trim();
     if (id.isEmpty) return;
     if (group) {
-      try { await client.from('respect_group_message_receipts').delete().eq('message_id', id); } catch (_) {}
+      try { await client.from('respect_group_message_receipts').delete().eq('message_id', id); } catch (e, st) { _logIgnoredError(e, st); }
       await client.from('respect_group_messages').delete().eq('id', id);
     } else {
       await client.from('messages').delete().eq('id', id);

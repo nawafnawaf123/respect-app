@@ -24,6 +24,14 @@ import '../services/notification_service.dart';
 import 'chat_screen.dart';
 import 'search_screen.dart';
 
+void _logIgnoredError(Object error, StackTrace stackTrace) {
+  assert(() {
+    assert(() { debugPrint('Ignored recoverable error: $error'); return true; }());
+    return true;
+  }());
+}
+
+
 
 class _PreloadedFeedData {
   final List<Map<String, dynamic>> postRows;
@@ -150,7 +158,7 @@ class FeedScreen extends StatefulWidget {
       final followed = <String>{};
       try {
         followed.addAll((await SupabaseService.getFollowingUsernames(me)).map(SupabaseService.displayUsername));
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
       if (me != '@user') followed.add(me);
       if (followed.isEmpty) return <Map<String, dynamic>>[];
 
@@ -597,7 +605,7 @@ class _FeedScreenState extends State<FeedScreen> {
           name = (user['name'] ?? user['profileName'] ?? actor).toString();
           avatar = (user['avatar_url'] ?? user['imagePath'] ?? user['profileImagePath'])?.toString();
         }
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
       final data = <String, String>{
         'name': name.trim().isEmpty ? actor : name,
         'avatar': avatar?.trim() ?? '',
@@ -789,7 +797,7 @@ class _FeedScreenState extends State<FeedScreen> {
         NotificationService.showTopSuccess('Respect AI نشر سؤال اليوم من سؤال متكرر');
       }
     } catch (e) {
-      debugPrint('Respect AI daily post error: $e');
+      assert(() { debugPrint('Respect AI daily post error: $e'); return true; }());
     }
   }
 
@@ -835,7 +843,7 @@ class _FeedScreenState extends State<FeedScreen> {
     if (me == '@user') return;
     try {
       await _replyNotificationChannel?.unsubscribe();
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
     _replyNotificationChannel = SupabaseService.client
         .channel('respect_reply_notifications_${me}_${DateTime.now().microsecondsSinceEpoch}')
         .onPostgresChanges(
@@ -883,7 +891,7 @@ class _FeedScreenState extends State<FeedScreen> {
         ..clear()
         ..addAll(_sortedReplies(freshReplies.map(CityReply.fromJson)));
       post.replyCount = post.replies.length;
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
     if (!_isReplyTargetingMe(row, post)) return;
 
@@ -909,7 +917,7 @@ class _FeedScreenState extends State<FeedScreen> {
     try {
       final decoded = jsonDecode(raw);
       if (decoded is List) return decoded.map((e) => e.toString()).toSet();
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
     return <String>{};
   }
 
@@ -933,7 +941,7 @@ class _FeedScreenState extends State<FeedScreen> {
             if (id.isNotEmpty && text.trim().isNotEmpty) _editedPostTexts[id] = text;
           });
         }
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     }
 
     _localPostStats.clear();
@@ -953,7 +961,7 @@ class _FeedScreenState extends State<FeedScreen> {
             }
           });
         }
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     }
 
     _localQuotePosts.clear();
@@ -964,7 +972,7 @@ class _FeedScreenState extends State<FeedScreen> {
         if (decoded is List) {
           _localQuotePosts.addAll(decoded.whereType<Map>().map((e) => CityPost.fromJson(e.map((k, v) => MapEntry(k.toString(), v)))));
         }
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     }
 
     // مزامنة حالة اللايك وإعادة النشر من السيرفر حسب المستخدم الحالي.
@@ -987,7 +995,7 @@ class _FeedScreenState extends State<FeedScreen> {
       _repostedReplyIds
         ..clear()
         ..addAll(serverReplyReposted);
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
   }
 
   Future<void> _saveLocalPostState() async {
@@ -1123,7 +1131,7 @@ class _FeedScreenState extends State<FeedScreen> {
         } else if (decoded is Map) {
           for (final item in decoded.values.whereType<Map>()) addUser(item);
         }
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     }
     return out;
   }
@@ -1385,7 +1393,7 @@ class _FeedScreenState extends State<FeedScreen> {
       try {
         final decoded = jsonDecode(raw);
         if (decoded is List) items.addAll(decoded.whereType<Map>().map((e) => e.map((k, v) => MapEntry(k.toString(), v))));
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     }
     final now = DateTime.now().toIso8601String();
     for (final target in mentioned) {
@@ -1410,7 +1418,7 @@ class _FeedScreenState extends State<FeedScreen> {
         authorName: post.user,
         text: post.text,
       );
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
   }
 
   String _postShareText(CityPost post) => '${post.user} ${post.username}\n${post.text}\nrespect://post/${post.id}';
@@ -1431,7 +1439,7 @@ class _FeedScreenState extends State<FeedScreen> {
       try {
         final decoded = jsonDecode(raw);
         if (decoded is List) items.addAll(decoded.whereType<Map>().map((e) => e.map((k, v) => MapEntry(k.toString(), v))));
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     }
     items.insert(0, {
       'id': '${type}_${postId}_${DateTime.now().microsecondsSinceEpoch}',
@@ -1453,7 +1461,7 @@ class _FeedScreenState extends State<FeedScreen> {
         postId: postId,
         text: text,
       );
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
   }
 
   Future<void> _repostPost(CityPost post) async {
@@ -1642,7 +1650,7 @@ class _FeedScreenState extends State<FeedScreen> {
           post.shares = counters['shares'] ?? post.shares;
         });
       }
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
     await Clipboard.setData(ClipboardData(text: _postShareText(post)));
     await _savePosts();
     if (!mounted) return;
@@ -1676,7 +1684,7 @@ class _FeedScreenState extends State<FeedScreen> {
       try {
         final decoded = jsonDecode(raw);
         if (decoded is List) return decoded.map((e) => _cleanUsername(e.toString())).toSet();
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
       return <String>{};
     }
     if (!mounted) return;
@@ -1772,7 +1780,7 @@ class _FeedScreenState extends State<FeedScreen> {
         if (decoded is List) {
           items.addAll(decoded.whereType<Map>().map((e) => e.map((k, v) => MapEntry(k.toString(), v))));
         }
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     }
     final type = validReport ? 'community_report_accepted' : 'community_report_rejected';
     items.insert(0, {
@@ -1829,7 +1837,7 @@ class _FeedScreenState extends State<FeedScreen> {
           postId: post.id,
           text: post.text,
         );
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
       if (!valid && SupabaseService.displayUsername(report.reporterUsername) == SupabaseService.displayUsername(_profileUsername)) {
         NotificationService.showTopNotification(
           'راجعنا البلاغ داخل ${community.name}، والتغريدة سليمة ولا يوجد عليها إجراء.',
@@ -1838,7 +1846,7 @@ class _FeedScreenState extends State<FeedScreen> {
           accentColor: AppColors.success,
         );
       }
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
   }
 
   Future<void> _reportCommunityPostFromFeed(CityCommunity community, CityPost post) async {
@@ -1868,7 +1876,7 @@ class _FeedScreenState extends State<FeedScreen> {
         postUsername: post.username,
         postText: post.text,
       );
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
     unawaited(_reviewCommunityReportFromFeedWithAi(community, report, post));
     if (!mounted) return;
     NotificationService.showTopSuccess('تم إرسال البلاغ للمشرفين');
@@ -1999,7 +2007,7 @@ class _FeedScreenState extends State<FeedScreen> {
           if (decoded is List) {
             reports.addAll(decoded.whereType<Map>().map((e) => e.map((k, v) => MapEntry(k.toString(), v))));
           }
-        } catch (_) {}
+        } catch (e, st) { _logIgnoredError(e, st); }
       }
       for (final r in reports) {
         if ((r['id'] ?? '').toString() == (report['id'] ?? '').toString()) {
@@ -2042,7 +2050,7 @@ class _FeedScreenState extends State<FeedScreen> {
         }
       }
     } catch (e) {
-      debugPrint('Respect AI normal report review error: $e');
+      assert(() { debugPrint('Respect AI normal report review error: $e'); return true; }());
     }
   }
 
@@ -2127,7 +2135,7 @@ class _FeedScreenState extends State<FeedScreen> {
         postUsername: post.username,
         postText: post.text,
       );
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_postReportsKey);
@@ -2136,7 +2144,7 @@ class _FeedScreenState extends State<FeedScreen> {
       try {
         final decoded = jsonDecode(raw);
         if (decoded is List) reports.addAll(decoded.whereType<Map>().map((e) => e.map((k, v) => MapEntry(k.toString(), v))));
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     }
 
     final localReport = <String, dynamic>{
@@ -2339,13 +2347,13 @@ class _FeedScreenState extends State<FeedScreen> {
             if (value is List) data[key.toString()] = value.map((e) => e.toString()).toSet().toList();
           });
         }
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     }
     // مزامنة المتابعات من Supabase حتى تكون عالمية بين كل الأجهزة.
     try {
       final serverFollowing = await SupabaseService.getFollowingUsernames(_profileUsername);
       data[SupabaseService.displayUsername(_profileUsername)] = serverFollowing.toSet().toList();
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
     if (!mounted) return;
     setState(() => _following = data);
@@ -2362,7 +2370,7 @@ class _FeedScreenState extends State<FeedScreen> {
       final targets = await SupabaseService.getEnabledPostNotificationTargets(_profileUsername);
       if (!mounted) return;
       setState(() => _postNotificationTargets = targets);
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
   }
 
   Future<void> _togglePostNotificationForUser(String targetUsername) async {
@@ -2456,7 +2464,7 @@ class _FeedScreenState extends State<FeedScreen> {
         if (decoded is List) {
           loaded.addAll(decoded.whereType<Map>().map((e) => CityCommunity.fromJson(e.map((k, v) => MapEntry(k.toString(), v)))));
         }
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     }
     if (!mounted) return;
     setState(() {
@@ -2520,7 +2528,7 @@ class _FeedScreenState extends State<FeedScreen> {
 
     try {
       account = await SupabaseService.currentUser();
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
     final prefs = await SharedPreferences.getInstance();
     final localAccount = _currentAccountFromPrefs(prefs);
@@ -2557,7 +2565,7 @@ class _FeedScreenState extends State<FeedScreen> {
             }
           }
         }
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     }
 
     final usersRaw = prefs.getString('respect_users_map');
@@ -2568,7 +2576,7 @@ class _FeedScreenState extends State<FeedScreen> {
           final item = decoded[currentId];
           if (item is Map) return _normalizeAccount(item);
         }
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     }
 
     return null;
@@ -2698,7 +2706,7 @@ class _FeedScreenState extends State<FeedScreen> {
             .where((id) => id.isNotEmpty)
             .toSet();
       }
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
     return <String>{};
   }
 
@@ -2711,7 +2719,7 @@ class _FeedScreenState extends State<FeedScreen> {
         if (decoded is List) {
           items.addAll(decoded.whereType<Map>().map((e) => e.map((k, v) => MapEntry(k.toString(), v))));
         }
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     }
     final filtered = items.where((e) => _savedPostIds.contains((e['id'] ?? '').toString())).toList();
     await prefs.setString(_savedPostsKey, jsonEncode(filtered));
@@ -2769,7 +2777,7 @@ class _FeedScreenState extends State<FeedScreen> {
         if (decoded is List) {
           items.addAll(decoded.whereType<Map>().map((e) => e.map((k, v) => MapEntry(k.toString(), v))));
         }
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     }
 
     final wasSaved = _savedPostIds.contains(post.id) || post.isFavorite;
@@ -2885,7 +2893,7 @@ class _FeedScreenState extends State<FeedScreen> {
       final mediaPath = post.mediaPath?.trim() ?? '';
       final hasMedia = mediaPath.isNotEmpty;
       final hasVideo = post.mediaType == CityMediaType.video;
-      final hasVoice = post.voicePath != null && post.voicePath!.trim().isNotEmpty;
+      final hasVoice = (post.voicePath?.trim().isNotEmpty ?? false);
 
       if (hasVideo) {
         _setPublishProgress(0.18, 'جاري رفع الفيديو...');
@@ -2971,7 +2979,7 @@ class _FeedScreenState extends State<FeedScreen> {
               NotificationService.showTopSuccess('Respect AI رد على التغريدة');
             }
           } catch (e) {
-            debugPrint('Respect AI post reply error: $e');
+            assert(() { debugPrint('Respect AI post reply error: $e'); return true; }());
             if (mounted) NotificationService.showTopError(e.toString().replaceFirst('Exception: ', ''));
           }
         }());
@@ -3063,7 +3071,7 @@ class _FeedScreenState extends State<FeedScreen> {
         avatarPath = (user['avatar_url'] ?? user['imagePath'] ?? user['profileImagePath'] ?? avatarPath)?.toString();
         coverPath = (user['cover_url'] ?? user['coverPath'] ?? user['cover_path'])?.toString();
       }
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
     try {
       final serverPosts = await SupabaseService.getUserPosts(target);
@@ -3092,7 +3100,7 @@ class _FeedScreenState extends State<FeedScreen> {
           ));
         }).toList();
       }
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
     if (!mounted) return;
     await Navigator.of(context).push(MaterialPageRoute(builder: (_) => UserProfileViewScreen(
@@ -3148,7 +3156,7 @@ class _FeedScreenState extends State<FeedScreen> {
         );
       }
     });
-    try { await SupabaseService.updatePostText(postId: post.id, text: text); } catch (_) {}
+    try { await SupabaseService.updatePostText(postId: post.id, text: text); } catch (e, st) { _logIgnoredError(e, st); }
     await _savePosts();
     await _loadPosts();
   }
@@ -3159,7 +3167,7 @@ class _FeedScreenState extends State<FeedScreen> {
     _localQuotePosts.removeWhere((p) => p.id == post.id || p.quotedPost?.id == post.id);
     setState(() => _posts.removeWhere((p) => p.id == post.id || p.quotedPost?.id == post.id));
     await _savePosts();
-    try { await SupabaseService.deletePost(post.id); } catch (_) {}
+    try { await SupabaseService.deletePost(post.id); } catch (e, st) { _logIgnoredError(e, st); }
     if (!mounted) return;
     await _loadPosts();
   }
@@ -4488,7 +4496,7 @@ class _RepliesScreenState extends State<RepliesScreen> {
       });
       NotificationService.showTopNotification('بدأ تسجيل الصوتية');
     } catch (e) {
-      debugPrint('Reply record start error: $e');
+      assert(() { debugPrint('Reply record start error: $e'); return true; }());
       NotificationService.showTopError('تعذر بدء التسجيل');
     }
   }
@@ -4508,7 +4516,7 @@ class _RepliesScreenState extends State<RepliesScreen> {
         NotificationService.showTopSuccess('تم حفظ الصوتية، اضغط إرسال');
       }
     } catch (e) {
-      debugPrint('Reply record stop error: $e');
+      assert(() { debugPrint('Reply record stop error: $e'); return true; }());
       if (mounted) setState(() => _recordingReply = false);
       NotificationService.showTopError('تعذر إيقاف التسجيل');
     }
@@ -4560,7 +4568,7 @@ class _RepliesScreenState extends State<RepliesScreen> {
         final updated = _findReplyById(_replyStack[i].id);
         if (updated != null) _replyStack[i] = updated;
       }
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
   }
 
   Future<void> _saveReplyNotification(String text) async {
@@ -4575,7 +4583,7 @@ class _RepliesScreenState extends State<RepliesScreen> {
       try {
         final decoded = jsonDecode(raw);
         if (decoded is List) items.addAll(decoded.whereType<Map>().map((e) => e.map((k, v) => MapEntry(k.toString(), v))));
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     }
     items.insert(0, {
       'id': 'reply_${widget.post.id}_${DateTime.now().microsecondsSinceEpoch}',
@@ -4640,7 +4648,7 @@ class _RepliesScreenState extends State<RepliesScreen> {
 
         reply = CityReply.fromJson(inserted);
       } catch (e) {
-        debugPrint('Reply insert error: $e');
+        assert(() { debugPrint('Reply insert error: $e'); return true; }());
         if (mounted) {
           final msg = e.toString().contains('Respect AI') || e.toString().contains('تم حذف') || e.toString().contains('تم رفض')
               ? e.toString().replaceFirst('Exception: ', '')
@@ -4681,7 +4689,7 @@ class _RepliesScreenState extends State<RepliesScreen> {
               NotificationService.showTopSuccess('Respect AI رد على تعليقك');
             }
           } catch (e) {
-            debugPrint('Respect AI reply error: $e');
+            assert(() { debugPrint('Respect AI reply error: $e'); return true; }());
             if (mounted) {
               NotificationService.showTopError(e.toString().replaceFirst('Exception: ', ''));
             }
@@ -4700,7 +4708,7 @@ class _RepliesScreenState extends State<RepliesScreen> {
 
       if (mounted) setState(() => _sending = false);
     } catch (e) {
-      debugPrint('Reply fatal error: $e');
+      assert(() { debugPrint('Reply fatal error: $e'); return true; }());
       if (mounted) setState(() => _sending = false);
       NotificationService.showTopError('تعذر إرسال الرد');
     }
@@ -4970,7 +4978,7 @@ class _RepliesScreenState extends State<RepliesScreen> {
               ),
             ],
           ),
-          if (opened.parentUser != null && opened.parentUser!.trim().isNotEmpty) ...[
+          if ((opened.parentUser?.trim().isNotEmpty ?? false)) ...[
             const SizedBox(height: 8),
             Text('ردًا على ${opened.parentUser}', style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w800)),
           ],
@@ -5056,7 +5064,7 @@ class _RepliesScreenState extends State<RepliesScreen> {
                         Text(r.time, style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, fontSize: 11)),
                       ],
                     ),
-                    if (r.parentUser != null && r.parentUser!.trim().isNotEmpty) ...[
+                    if ((r.parentUser?.trim().isNotEmpty ?? false)) ...[
                       const SizedBox(height: 4),
                       Text('ردًا على ${r.parentUser}', style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w700, fontSize: 12)),
                     ],
@@ -5228,7 +5236,7 @@ class _RepliesScreenState extends State<RepliesScreen> {
                                 color: Colors.black26,
                                 child: const Icon(Icons.videocam_rounded, color: AppColors.purple),
                               )
-                                  : Image.file(File(_selectedMedia!.path), width: 130, height: 80, fit: BoxFit.cover),
+                                  : Image.file(File(_selectedMedia?.path ?? ''), width: 130, height: 80, fit: BoxFit.cover),
                             ),
                             PositionedDirectional(
                               top: 4,
@@ -6870,7 +6878,7 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
                       if (_selectedMedia != null && _selectedMediaType != null) ...[
                         const SizedBox(height: 14),
                         _MediaPreview(
-                          path: _selectedMedia!.path,
+                          path: _selectedMedia?.path ?? '',
                           type: _selectedMediaType!,
                           onRemove: _removeMedia,
                         ).animate().fadeIn(duration: 240.ms).slideY(begin: 0.08, end: 0),
@@ -8060,7 +8068,7 @@ class _PostCard extends StatelessWidget {
                                   behavior: HitTestBehavior.opaque,
                                   onTap: () {
                                     if (onMore != null) {
-                                      onMore!.call();
+                                      onMore?.call();
                                     }
                                   },
                                   child: Center(
@@ -8891,7 +8899,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
     try {
       final me = await SupabaseService.currentUser();
       _currentUsername = SupabaseService.displayUsername((me?['username'] ?? '').toString());
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
     await _setupVideoIfNeeded();
     await _loadStats();
     unawaited(SupabaseService.markStoriesSeen([_story]));
@@ -8912,7 +8920,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
         _comments = results[1] as int;
         _liked = results[2] as bool;
       });
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
   }
 
   Future<void> _setupVideoIfNeeded() async {
@@ -9407,11 +9415,12 @@ class _FullscreenVideoPlayerState extends State<_FullscreenVideoPlayer> {
       if (_isRemote) {
         await _initCachedRemoteVideo();
       } else {
-        _fileController = VideoPlayerController.file(
+        final fileController = VideoPlayerController.file(
           File(widget.path.trim()),
           videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
         );
-        await _fileController!.initialize();
+        _fileController = fileController;
+        await fileController.initialize();
       }
       final controller = _controller;
       if (controller == null) throw Exception('Video controller was not initialized');
@@ -9428,15 +9437,16 @@ class _FullscreenVideoPlayerState extends State<_FullscreenVideoPlayer> {
   Future<void> _initCachedRemoteVideo() async {
     final uri = Uri.parse(widget.path.trim());
     try {
-      _cachedController = CachedVideoPlayerPlusController.networkUrl(
+      final cachedController = CachedVideoPlayerPlusController.networkUrl(
         uri,
         invalidateCacheIfOlderThan: const Duration(days: 7),
         videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
       );
-      await _cachedController!.initialize().timeout(const Duration(seconds: 8));
+      _cachedController = cachedController;
+      await cachedController.initialize().timeout(const Duration(seconds: 8));
       _usingNetworkFallback = false;
     } catch (_) {
-      try { await _cachedController?.dispose(); } catch (_) {}
+      try { await _cachedController?.dispose(); } catch (e, st) { _logIgnoredError(e, st); }
       _cachedController = null;
       _usingNetworkFallback = true;
       final safeUri = uri.replace(
@@ -9445,11 +9455,12 @@ class _FullscreenVideoPlayerState extends State<_FullscreenVideoPlayer> {
           'respect_cache_fix': DateTime.now().millisecondsSinceEpoch.toString(),
         },
       );
-      _networkController = VideoPlayerController.networkUrl(
+      final networkController = VideoPlayerController.networkUrl(
         safeUri,
         videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
       );
-      await _networkController!.initialize().timeout(const Duration(seconds: 12));
+      _networkController = networkController;
+      await networkController.initialize().timeout(const Duration(seconds: 12));
     }
   }
 
@@ -9462,15 +9473,15 @@ class _FullscreenVideoPlayerState extends State<_FullscreenVideoPlayer> {
         setState(() => _hasError = true);
         return;
       }
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
     setState(() {});
   }
 
   @override
   void dispose() {
-    try { _cachedController?.removeListener(_onVideoChanged); } catch (_) {}
-    try { _networkController?.removeListener(_onVideoChanged); } catch (_) {}
-    try { _fileController?.removeListener(_onVideoChanged); } catch (_) {}
+    try { _cachedController?.removeListener(_onVideoChanged); } catch (e, st) { _logIgnoredError(e, st); }
+    try { _networkController?.removeListener(_onVideoChanged); } catch (e, st) { _logIgnoredError(e, st); }
+    try { _fileController?.removeListener(_onVideoChanged); } catch (e, st) { _logIgnoredError(e, st); }
     _cachedController?.dispose();
     _networkController?.dispose();
     _fileController?.dispose();
@@ -9816,7 +9827,7 @@ class _PostDetailsScreenState extends State<PostDetailsScreen> {
         widget.post.replyCount = widget.post.replies.length;
       });
       await widget.onChanged();
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
   }
 
   Future<void> _pickInlineReplyAttachment(_AttachmentChoice choice) async {
@@ -10076,7 +10087,7 @@ class _PostDetailsScreenState extends State<PostDetailsScreen> {
         ).timeout(const Duration(seconds: 12));
         reply = CityReply.fromJson(inserted);
       } catch (e) {
-        debugPrint('Inline reply insert error: $e');
+        assert(() { debugPrint('Inline reply insert error: $e'); return true; }());
       }
 
       if (!mounted) return;
@@ -10099,7 +10110,7 @@ class _PostDetailsScreenState extends State<PostDetailsScreen> {
       if (!mounted) return;
       NotificationService.showTopSuccess('تم نشر الرد');
     } catch (e) {
-      debugPrint('Inline reply fatal error: $e');
+      assert(() { debugPrint('Inline reply fatal error: $e'); return true; }());
       if (mounted) {
         NotificationService.showTopError('تعذر نشر الرد');
       }
@@ -10161,7 +10172,7 @@ class _PostDetailsScreenState extends State<PostDetailsScreen> {
             ],
             if (_replyMedia != null && _replyMediaType != null) ...[
               _InlineReplyAttachmentPreview(
-                mediaPath: _replyMedia!.path,
+                mediaPath: _replyMedia?.path ?? '',
                 mediaType: _replyMediaType!,
                 onRemove: _clearInlineReplyAttachment,
               ),
@@ -10322,7 +10333,7 @@ class _PostDetailsScreenState extends State<PostDetailsScreen> {
                                     Text(r.time, style: TextStyle(color: muted, fontSize: 11, fontWeight: FontWeight.w700)),
                                   ],
                                 ),
-                                if (r.parentUser != null && r.parentUser!.trim().isNotEmpty) ...[
+                                if ((r.parentUser?.trim().isNotEmpty ?? false)) ...[
                                   const SizedBox(height: 4),
                                   Text('ردًا على ${r.parentUser}', style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w800, fontSize: 12)),
                                 ],
@@ -11052,7 +11063,7 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
       try {
         final decoded = jsonDecode(raw);
         if (decoded is List) items.addAll(decoded.whereType<Map>().map((e) => e.map((k, v) => MapEntry(k.toString(), v))));
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     }
     items.insert(0, {
       'id': '${type}_${postId}_${DateTime.now().microsecondsSinceEpoch}',
@@ -11255,7 +11266,7 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
         if (decoded is List) {
           items.addAll(decoded.whereType<Map>().map((e) => e.map((k, v) => MapEntry(k.toString(), v))));
         }
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     }
     final type = validReport ? 'community_report_accepted' : 'community_report_rejected';
     items.insert(0, {
@@ -11349,7 +11360,7 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
         postUsername: post.username,
         postText: post.text,
       );
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
     unawaited(_reviewCommunityReportWithAi(report, post));
     if (mounted) NotificationService.showTopSuccess('تم إرسال البلاغ للمشرفين');
   }
@@ -11392,7 +11403,7 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
           postId: post.id,
           text: post.text,
         );
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
       try {
         await SupabaseService.sendPushToUser(
           receiverUsername: report.reporterUsername,
@@ -11409,7 +11420,7 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
             'text': post.text,
           },
         );
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
       if (!valid && SupabaseService.displayUsername(report.reporterUsername) == SupabaseService.displayUsername(widget.currentUsername)) {
         NotificationService.showTopNotification(
           'راجعنا البلاغ داخل ${widget.community.name}، والتغريدة سليمة ولا يوجد عليها أي مشكلة.',
@@ -11418,7 +11429,7 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
           accentColor: AppColors.success,
         );
       }
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
   }
 
   Future<void> _deletePost(CityPost post) => _hidePost(post);

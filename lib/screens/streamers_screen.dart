@@ -2,15 +2,23 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
-import 'package:webview_flutter_android/webview_flutter_android.dart';
 import '../theme/app_theme.dart';
 import '../widgets/glass_card.dart';
+
+void _respectSafeLog(Object error, [StackTrace? stackTrace]) {
+  if (kDebugMode) {
+    debugPrint('Respect safe catch: $error');
+    if (stackTrace != null) debugPrintStack(stackTrace: stackTrace);
+  }
+}
+
 
 class StreamersScreen extends StatefulWidget {
   const StreamersScreen({super.key});
@@ -59,7 +67,7 @@ class _StreamersScreenState extends State<StreamersScreen> with SingleTickerProv
         if (decoded is List) {
           accounts.addAll(decoded.whereType<Map>().map((e) => e.map((k, v) => MapEntry(k.toString(), v))));
         }
-      } catch (_) {}
+      } catch (e, st) { _respectSafeLog(e, st); }
     }
 
     if (accounts.isEmpty) {
@@ -75,7 +83,7 @@ class _StreamersScreenState extends State<StreamersScreen> with SingleTickerProv
               }
             });
           }
-        } catch (_) {}
+        } catch (e, st) { _respectSafeLog(e, st); }
       }
     }
 
@@ -130,7 +138,7 @@ class _StreamersScreenState extends State<StreamersScreen> with SingleTickerProv
             }
             await prefs.setString(_usersKey, jsonEncode(decoded));
           }
-        } catch (_) {}
+        } catch (e, st) { _respectSafeLog(e, st); }
       }
     }
 
@@ -191,7 +199,7 @@ class _StreamersScreenState extends State<StreamersScreen> with SingleTickerProv
                     width: 44,
                     height: 44,
                     decoration: BoxDecoration(
-                      color: AppColors.purple.withOpacity(0.15),
+                      color: AppColors.purple.withValues(alpha: 0.15),
                       shape: BoxShape.circle,
                     ),
                     child: const Icon(Icons.open_in_browser_rounded, color: AppColors.purple),
@@ -210,7 +218,7 @@ class _StreamersScreenState extends State<StreamersScreen> with SingleTickerProv
                     width: 44,
                     height: 44,
                     decoration: BoxDecoration(
-                      color: AppColors.purple.withOpacity(0.15),
+                      color: AppColors.purple.withValues(alpha: 0.15),
                       shape: BoxShape.circle,
                     ),
                     child: const Icon(Icons.play_circle_fill_rounded, color: AppColors.purple),
@@ -303,7 +311,7 @@ class _StreamersScreenState extends State<StreamersScreen> with SingleTickerProv
                           ),
                           boxShadow: [
                             BoxShadow(
-                              color: AppColors.purple.withOpacity(.22),
+                              color: AppColors.purple.withValues(alpha: .22),
                               blurRadius: 18,
                               offset: const Offset(0, 8),
                             ),
@@ -343,9 +351,9 @@ class _StreamersScreenState extends State<StreamersScreen> with SingleTickerProv
                     height: 46,
                     padding: const EdgeInsets.all(4),
                     decoration: BoxDecoration(
-                      color: isDark ? Colors.white.withOpacity(.055) : Colors.white.withOpacity(.80),
+                      color: isDark ? Colors.white.withValues(alpha: .055) : Colors.white.withValues(alpha: .80),
                       borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: AppColors.purple.withOpacity(.12)),
+                      border: Border.all(color: AppColors.purple.withValues(alpha: .12)),
                     ),
                     child: TabBar(
                       controller: _tabController,
@@ -356,7 +364,7 @@ class _StreamersScreenState extends State<StreamersScreen> with SingleTickerProv
                         borderRadius: BorderRadius.circular(12),
                         boxShadow: [
                           BoxShadow(
-                            color: AppColors.purple.withOpacity(.20),
+                            color: AppColors.purple.withValues(alpha: .20),
                             blurRadius: 14,
                             offset: const Offset(0, 6),
                           ),
@@ -439,9 +447,9 @@ class _StreamersList extends StatelessWidget {
                 width: 72,
                 height: 72,
                 decoration: BoxDecoration(
-                  color: AppColors.purple.withOpacity(.09),
+                  color: AppColors.purple.withValues(alpha: .09),
                   borderRadius: BorderRadius.circular(26),
-                  border: Border.all(color: AppColors.purple.withOpacity(.14)),
+                  border: Border.all(color: AppColors.purple.withValues(alpha: .14)),
                 ),
                 child: Icon(
                   liveLayout ? Icons.live_tv_rounded : Icons.video_library_rounded,
@@ -521,7 +529,7 @@ class _LiveStreamCard extends StatelessWidget {
                       gradient: LinearGradient(
                         begin: Alignment.topCenter,
                         end: Alignment.bottomCenter,
-                        colors: [Colors.black.withOpacity(0.12), Colors.black.withOpacity(0.72)],
+                        colors: [Colors.black.withValues(alpha: 0.12), Colors.black.withValues(alpha: 0.72)],
                       ),
                     ),
                   ),
@@ -625,11 +633,11 @@ class _ChannelCard extends StatelessWidget {
             padding: const EdgeInsets.all(2),
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              border: Border.all(color: AppColors.purple.withOpacity(.18)),
+              border: Border.all(color: AppColors.purple.withValues(alpha: .18)),
             ),
             child: CircleAvatar(
               radius: 26,
-              backgroundColor: AppColors.purple.withOpacity(.15),
+              backgroundColor: AppColors.purple.withValues(alpha: .15),
               backgroundImage: avatar,
               child: avatar == null
                   ? Text(
@@ -666,7 +674,7 @@ class _ChannelCard extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 10),
-          Icon(Icons.open_in_new_rounded, color: AppColors.purple.withOpacity(.55), size: 20),
+          Icon(Icons.open_in_new_rounded, color: AppColors.purple.withValues(alpha: .55), size: 20),
         ],
       ),
     );
@@ -704,7 +712,7 @@ class _LiveBadge extends StatelessWidget {
         const SizedBox(width: 6),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-          decoration: BoxDecoration(color: Colors.black.withOpacity(0.58), borderRadius: BorderRadius.circular(999)),
+          decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.58), borderRadius: BorderRadius.circular(999)),
           child: Text('${_formatNumber(viewers)} مشاهد',
               style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12)),
         ),
@@ -892,7 +900,7 @@ Future<String> _cacheBestStreamThumbnail(String url, {String platform = '', Stri
         ]);
         final path = await _cacheStreamThumbnail(extracted, platform: platform);
         if (path.isNotEmpty) return path;
-      } catch (_) {}
+      } catch (e, st) { _respectSafeLog(e, st); }
       continue;
     }
 
@@ -1046,7 +1054,7 @@ Future<_StreamMetadata> _fetchKickMetadata(String url, String channel, {required
           thumbnailUrl: thumbnail,
           isLive: isLive,
           viewers: viewers);
-    } catch (_) {}
+    } catch (e, st) { _respectSafeLog(e, st); }
   }
   return await _fetchGenericMetadata(url, fallbackName: fallbackName, platform: 'Kick', channel: channel);
 }
@@ -1066,7 +1074,7 @@ Future<_StreamMetadata> _fetchTwitchMetadata(String url, String channel, {requir
       channelName = _firstNonEmpty([(decoded['author_name'] ?? '').toString(), channelName, fallbackName]);
       thumbnail = (decoded['thumbnail_url'] ?? '').toString();
     }
-  } catch (_) {}
+  } catch (e, st) { _respectSafeLog(e, st); }
 
   try {
     final gqlBody = jsonEncode([
@@ -1105,7 +1113,7 @@ Future<_StreamMetadata> _fetchTwitchMetadata(String url, String channel, {requir
         channelName = _firstNonEmpty([user['displayName']?.toString() ?? '', channelName, fallbackName]);
       }
     }
-  } catch (_) {}
+  } catch (e, st) { _respectSafeLog(e, st); }
 
   if (thumbnail.contains('{width}')) thumbnail = thumbnail.replaceAll('{width}', '1280');
   if (thumbnail.contains('{height}')) thumbnail = thumbnail.replaceAll('{height}', '720');
@@ -1118,7 +1126,7 @@ Future<_StreamMetadata> _fetchTwitchMetadata(String url, String channel, {requir
       isLive = isLive || generic.isLive;
       viewers = viewers > 0 ? viewers : generic.viewers;
       channelName = _firstNonEmpty([channelName, generic.channelName]);
-    } catch (_) {}
+    } catch (e, st) { _respectSafeLog(e, st); }
   }
 
   return _StreamMetadata(
@@ -1144,7 +1152,7 @@ Future<_StreamMetadata> _fetchYouTubeMetadata(String url, {required String fallb
       channelName = _firstNonEmpty([(decoded['author_name'] ?? '').toString(), channelName, fallbackName]);
       thumbnail = (decoded['thumbnail_url'] ?? '').toString();
     }
-  } catch (_) {}
+  } catch (e, st) { _respectSafeLog(e, st); }
   try {
     final html = await _readUrl(url);
     final generic = _metadataFromHtml(html, fallbackName: fallbackName, platform: 'YouTube', channel: channelName);
@@ -1153,7 +1161,7 @@ Future<_StreamMetadata> _fetchYouTubeMetadata(String url, {required String fallb
     viewers = generic.viewers;
     isLive = generic.isLive;
     channelName = _firstNonEmpty([channelName, generic.channelName, fallbackName]);
-  } catch (_) {}
+  } catch (e, st) { _respectSafeLog(e, st); }
   return _StreamMetadata(
       platform: 'YouTube',
       channelName: channelName.isNotEmpty ? channelName : fallbackName,
@@ -1481,13 +1489,6 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen> with WidgetsBin
           },
         ),
       );
-    try {
-      if (_controller.platform is AndroidWebViewController) {
-        AndroidWebViewController.enableDebugging(true);
-        final android = _controller.platform as AndroidWebViewController;
-        android.setMediaPlaybackRequiresUserGesture(false);
-      }
-    } catch (_) {}
   }
 
   // نستخدم WebViewWidget العادي بدون Hybrid Composition لتجنب مشاكل التوافق
@@ -1532,7 +1533,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen> with WidgetsBin
           });
         }catch(e){}
       ''');
-    } catch (_) {}
+    } catch (e, st) { _respectSafeLog(e, st); }
   }
 
   // ----- طرق التحميل المختلفة -----
@@ -1688,7 +1689,7 @@ iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:#000
             ),
           if (_hasError)
             Container(
-              color: Colors.black.withOpacity(0.86),
+              color: Colors.black.withValues(alpha: 0.86),
               padding: const EdgeInsets.all(18),
               child: Center(
                 child: GlassCard(

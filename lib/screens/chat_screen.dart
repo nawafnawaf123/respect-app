@@ -24,6 +24,14 @@ import '../services/notification_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/glass_card.dart';
 
+void _logIgnoredError(Object error, StackTrace stackTrace) {
+  assert(() {
+    debugPrint('Ignored recoverable error: $error');
+    return true;
+  }());
+}
+
+
 class ChatScreen extends StatefulWidget {
   final String? peerUsername;
   final String? peerName;
@@ -620,14 +628,14 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       _locallyDeletedMessageIds
         ..clear()
         ..addAll(prefs.getStringList(_localDeletePrefsKey) ?? const <String>[]);
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
   }
 
   Future<void> _saveLocallyDeletedMessages() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setStringList(_localDeletePrefsKey, _locallyDeletedMessageIds.toList());
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
   }
 
   void _toggleMessageSelection(_DirectMessage msg) {
@@ -932,7 +940,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       final key = _limitedMediaPrefsKey(msg);
       final current = prefs.getInt(key) ?? 0;
       await prefs.setInt(key, current + 1);
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
   }
 
   Future<void> _openMediaViewer(_DirectMessage msg, {int initialIndex = 0}) async {
@@ -1084,7 +1092,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
           }
           _recordingVoiceWaveform = merged;
         }
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     });
   }
 
@@ -1172,7 +1180,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     if (!_recordingVoice) return;
     try {
       await _voiceRecorder.stop();
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
     _voiceAmplitudeTimer?.cancel();
     _stopVoiceTypingBroadcast();
     if (mounted) {
@@ -1239,7 +1247,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     final path = _pendingVoicePath;
     await _audioPlayer.stop();
     if (path != null && path.trim().isNotEmpty) {
-      try { await File(path).delete(); } catch (_) {}
+      try { await File(path).delete(); } catch (e, st) { _logIgnoredError(e, st); }
     }
     if (mounted) {
       setState(() {
@@ -1722,7 +1730,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     try {
       await _audioPlayer.seek(position);
       if (mounted) setState(() => _voicePosition = position);
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
   }
 
   Future<void> _changeVoiceSpeed() async {
@@ -1731,7 +1739,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     final next = speeds[(index + 1) % speeds.length];
     try {
       await _audioPlayer.setPlaybackRate(next);
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
     if (mounted) setState(() => _voiceSpeed = next);
   }
 
@@ -2519,14 +2527,20 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
           Container(width: double.infinity, padding: const EdgeInsets.all(12), color: AppColors.danger.withOpacity(.10), child: const Text('الدردشة مقفلة، الإرسال متاح للمشرفين فقط', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w800))),
         if (_editingMessage != null)
           _EditPreviewBar(
-            text: _editingMessage!.text,
+            text: _editingMessage?.text ?? '',
             onClose: _cancelEditingMessage,
           ),
         if (_replyToMessage != null && _editingMessage == null)
-          _ReplyPreviewBar(
-            sender: _replyToMessage!.senderUsername == _currentUsername ? 'أنت' : (_replyToMessage!.senderName ?? _replyToMessage!.senderUsername),
-            text: _messagePreview(_replyToMessage!),
-            onClose: () => setState(() => _replyToMessage = null),
+          Builder(
+            builder: (_) {
+              final reply = _replyToMessage;
+              if (reply == null) return const SizedBox.shrink();
+              return _ReplyPreviewBar(
+                sender: reply.senderUsername == _currentUsername ? 'أنت' : (reply.senderName ?? reply.senderUsername),
+                text: _messagePreview(reply),
+                onClose: () => setState(() => _replyToMessage = null),
+              );
+            },
           ),
         if (_recordingVoice && _lockedVoiceRecording)
           _LockedVoiceRecorderBar(
@@ -3319,8 +3333,8 @@ class _MediaViewerPageState extends State<_MediaViewerPage> {
     _position = Duration.zero;
     _duration = Duration.zero;
     if (c != null) {
-      try { c.removeListener(_videoTick); } catch (_) {}
-      try { await c.dispose(); } catch (_) {}
+      try { c.removeListener(_videoTick); } catch (e, st) { _logIgnoredError(e, st); }
+      try { await c.dispose(); } catch (e, st) { _logIgnoredError(e, st); }
     }
   }
 
@@ -4002,7 +4016,7 @@ class _DirectMessage {
               .where((e) => e.url.trim().isNotEmpty)
               .toList();
         }
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     }
     if (mediaType == 'image' || mediaType == 'video') {
       return <_ChatMediaItem>[_ChatMediaItem(url: raw, type: mediaType == 'video' ? 'video' : 'image')];
@@ -4178,9 +4192,10 @@ class _LockedVoiceRecorderBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bars = (waveform == null || waveform!.isEmpty)
+    final wave = waveform;
+    final bars = (wave == null || wave.isEmpty)
         ? List<double>.filled(22, 0.35)
-        : waveform!.take(28).toList();
+        : wave.take(28).toList();
 
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 8, 12, 6),
@@ -4295,9 +4310,10 @@ class _PendingVoicePreviewBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final shownSeconds = duration?.inSeconds ?? seconds;
-    final bars = (waveform == null || waveform!.isEmpty)
+    final wave = waveform;
+    final bars = (wave == null || wave.isEmpty)
         ? List<double>.filled(24, 0.38)
-        : waveform!.take(30).toList();
+        : wave.take(30).toList();
 
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 8, 12, 6),
@@ -4675,7 +4691,8 @@ class _ChatMediaGalleryMessage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final rawItems = mediaUrls != null ? mediaUrls!.map((e) => _ChatMediaItem(url: e, type: _looksVideo(e) ? 'video' : 'image')).toList() : items;
+    final urls = mediaUrls;
+    final rawItems = urls != null ? urls.map((e) => _ChatMediaItem(url: e, type: _looksVideo(e) ? 'video' : 'image')).toList() : items;
     final media = rawItems
         .map(_mediaItemOf)
         .where((e) => e.url.trim().isNotEmpty && !e.url.startsWith('Instance of'))
@@ -4827,7 +4844,7 @@ class _InAppChatCameraPageState extends State<_InAppChatCameraPage> with Widgets
       await SystemChrome.setPreferredOrientations(const [
         DeviceOrientation.portraitUp,
       ]);
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
   }
 
   Future<void> _restoreAppPortrait() async {
@@ -4835,7 +4852,7 @@ class _InAppChatCameraPageState extends State<_InAppChatCameraPage> with Widgets
       await SystemChrome.setPreferredOrientations(const [
         DeviceOrientation.portraitUp,
       ]);
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
   }
 
   Future<void> _initializeCamera({bool keepIndex = false}) async {
@@ -4883,7 +4900,7 @@ class _InAppChatCameraPageState extends State<_InAppChatCameraPage> with Widgets
       );
       _controller = controller;
       await controller.initialize();
-      try { await _lockCameraPortrait(); } catch (_) {}
+      try { await _lockCameraPortrait(); } catch (e, st) { _logIgnoredError(e, st); }
       try {
         _minZoom = await controller.getMinZoomLevel();
         _maxZoom = await controller.getMaxZoomLevel();
@@ -4908,13 +4925,13 @@ class _InAppChatCameraPageState extends State<_InAppChatCameraPage> with Widgets
       }
       try {
         await controller.setFocusMode(FocusMode.auto);
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
       try {
         await controller.setExposureMode(ExposureMode.auto);
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
       try {
         await controller.setFlashMode(_flashOn ? FlashMode.torch : FlashMode.off);
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
 
       if (!mounted) return;
       setState(() => _loading = false);
@@ -5006,7 +5023,7 @@ class _InAppChatCameraPageState extends State<_InAppChatCameraPage> with Widgets
       if (c == null || !c.value.isInitialized) return;
       try {
         await c.setZoomLevel(_pendingZoom);
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     });
   }
 
@@ -5024,7 +5041,7 @@ class _InAppChatCameraPageState extends State<_InAppChatCameraPage> with Widgets
       if (c == null || !c.value.isInitialized) return;
       try {
         await c.setExposureOffset(_pendingExposure);
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     });
   }
 
@@ -5045,8 +5062,8 @@ class _InAppChatCameraPageState extends State<_InAppChatCameraPage> with Widgets
       });
     }
 
-    try { await controller.setFocusPoint(normalized); } catch (_) {}
-    try { await controller.setExposurePoint(normalized); } catch (_) {}
+    try { await controller.setFocusPoint(normalized); } catch (e, st) { _logIgnoredError(e, st); }
+    try { await controller.setExposurePoint(normalized); } catch (e, st) { _logIgnoredError(e, st); }
 
     _focusTimer = Timer(const Duration(milliseconds: 850), () {
       if (mounted) setState(() => _focusPoint = null);
@@ -5120,7 +5137,7 @@ class _InAppChatCameraPageState extends State<_InAppChatCameraPage> with Widgets
               'تأخر استكمال التسجيل قبل الحفظ',
             );
             await Future<void>.delayed(const Duration(milliseconds: 180));
-          } catch (_) {}
+          } catch (e, st) { _logIgnoredError(e, st); }
         }
 
         final file = await guarded(
@@ -5147,8 +5164,8 @@ class _InAppChatCameraPageState extends State<_InAppChatCameraPage> with Widgets
       }
 
       await _lockCameraPortrait();
-      try { await controller.setFocusMode(FocusMode.auto); } catch (_) {}
-      try { await controller.setExposureMode(ExposureMode.auto); } catch (_) {}
+      try { await controller.setFocusMode(FocusMode.auto); } catch (e, st) { _logIgnoredError(e, st); }
+      try { await controller.setExposureMode(ExposureMode.auto); } catch (e, st) { _logIgnoredError(e, st); }
 
       await guarded(
         controller.prepareForVideoRecording(),
@@ -5208,7 +5225,7 @@ class _InAppChatCameraPageState extends State<_InAppChatCameraPage> with Widgets
             'تأخر استكمال التسجيل قبل الإلغاء',
           );
           await Future<void>.delayed(const Duration(milliseconds: 120));
-        } catch (_) {}
+        } catch (e, st) { _logIgnoredError(e, st); }
       }
 
       XFile? file;
@@ -5218,13 +5235,13 @@ class _InAppChatCameraPageState extends State<_InAppChatCameraPage> with Widgets
           const Duration(seconds: 6),
           'تأخر إلغاء التسجيل',
         );
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
 
       _recordTimer?.cancel();
       await _lockCameraPortrait();
 
       if (file != null && file.path.trim().isNotEmpty) {
-        try { await File(file.path).delete(); } catch (_) {}
+        try { await File(file.path).delete(); } catch (e, st) { _logIgnoredError(e, st); }
       }
 
       if (!mounted) return;
@@ -5361,28 +5378,34 @@ class _InAppChatCameraPageState extends State<_InAppChatCameraPage> with Widgets
             children: [
               _buildRawCameraPreview(controller),
               if (_focusPoint != null)
-                Positioned(
-                  left: (_focusPoint!.dx - 34).clamp(10.0, math.max(10.0, size.width - 78)),
-                  top: (_focusPoint!.dy - 34).clamp(10.0, math.max(10.0, size.height - 78)),
-                  child: IgnorePointer(
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 140),
-                      width: 68,
-                      height: 68,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        border: Border.all(color: _cameraPurple, width: 2.4),
-                        boxShadow: [BoxShadow(color: _cameraPurple.withOpacity(.45), blurRadius: 12)],
-                      ),
-                      child: Center(
-                        child: Container(
-                          width: 6,
-                          height: 6,
-                          decoration: const BoxDecoration(color: _cameraPurple, shape: BoxShape.circle),
+                Builder(
+                  builder: (_) {
+                    final focusPoint = _focusPoint;
+                    if (focusPoint == null) return const SizedBox.shrink();
+                    return Positioned(
+                      left: (focusPoint.dx - 34).clamp(10.0, math.max(10.0, size.width - 78)),
+                      top: (focusPoint.dy - 34).clamp(10.0, math.max(10.0, size.height - 78)),
+                      child: IgnorePointer(
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 140),
+                          width: 68,
+                          height: 68,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: Border.all(color: _cameraPurple, width: 2.4),
+                            boxShadow: [BoxShadow(color: _cameraPurple.withOpacity(.45), blurRadius: 12)],
+                          ),
+                          child: Center(
+                            child: Container(
+                              width: 6,
+                              height: 6,
+                              decoration: const BoxDecoration(color: _cameraPurple, shape: BoxShape.circle),
+                            ),
+                          ),
                         ),
                       ),
-                    ),
-                  ),
+                    );
+                  },
                 ),
               if (_showExposureControl && _maxExposure > _minExposure)
                 Positioned(

@@ -25,22 +25,22 @@ class DefaultFirebaseOptions {
       case TargetPlatform.iOS:
         throw UnsupportedError(
           'DefaultFirebaseOptions have not been configured for ios - '
-          'you can reconfigure this by running the FlutterFire CLI again.',
+              'you can reconfigure this by running the FlutterFire CLI again.',
         );
       case TargetPlatform.macOS:
         throw UnsupportedError(
           'DefaultFirebaseOptions have not been configured for macos - '
-          'you can reconfigure this by running the FlutterFire CLI again.',
+              'you can reconfigure this by running the FlutterFire CLI again.',
         );
       case TargetPlatform.windows:
         throw UnsupportedError(
           'DefaultFirebaseOptions have not been configured for windows - '
-          'you can reconfigure this by running the FlutterFire CLI again.',
+              'you can reconfigure this by running the FlutterFire CLI again.',
         );
       case TargetPlatform.linux:
         throw UnsupportedError(
           'DefaultFirebaseOptions have not been configured for linux - '
-          'you can reconfigure this by running the FlutterFire CLI again.',
+              'you can reconfigure this by running the FlutterFire CLI again.',
         );
       default:
         throw UnsupportedError(
@@ -50,7 +50,7 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions web = FirebaseOptions(
-    apiKey: 'AIzaSyC-3BVGHFlK3Gumj-Hp5y_d3fz5jPfj1ns',
+    apiKey: String.fromEnvironment('FIREBASE_WEB_API_KEY'),
     appId: '1:384970345898:web:bc23c9dd6245e603f46fd3',
     messagingSenderId: '384970345898',
     projectId: 'respect-app-dbc77',
@@ -60,7 +60,7 @@ class DefaultFirebaseOptions {
   );
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyAAxGvf1PauhZYwN6WlE2c5XAxCfPDv9To',
+    apiKey: String.fromEnvironment('FIREBASE_ANDROID_API_KEY'),
     appId: '1:384970345898:android:05bc6f2383c6a818f46fd3',
     messagingSenderId: '384970345898',
     projectId: 'respect-app-dbc77',

@@ -7,6 +7,14 @@ import 'package:flutter/foundation.dart';
 import 'notification_service.dart';
 import 'supabase_service.dart';
 
+void _respectSafeLog(Object error, [StackTrace? stackTrace]) {
+  if (kDebugMode) {
+    debugPrint('Respect safe catch: $error');
+    if (stackTrace != null) debugPrintStack(stackTrace: stackTrace);
+  }
+}
+
+
 class PushNotificationService {
   PushNotificationService._();
 
@@ -64,8 +72,8 @@ class PushNotificationService {
       if (token != null && token.trim().isNotEmpty) {
         await SupabaseService.updateCurrentUserFcmToken(token);
       }
-    } catch (e) {
-      debugPrint('FCM token error: $e');
+    } catch (e, st) {
+      _respectSafeLog(e, st);
     }
   }
 
@@ -73,7 +81,7 @@ class PushNotificationService {
     try {
       await SupabaseService.updateCurrentUserFcmToken(null);
       await _messaging.deleteToken();
-    } catch (_) {}
+    } catch (e, st) { _respectSafeLog(e, st); }
   }
 
   static Future<void> _handleRemoteMessage(RemoteMessage message, {required bool fromTap}) async {

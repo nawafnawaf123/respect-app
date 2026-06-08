@@ -1,9 +1,18 @@
 import 'dart:async';
 import 'dart:io' show Platform;
+import 'package:flutter/foundation.dart';
 
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+void _logIgnoredError(Object error, StackTrace stackTrace) {
+  assert(() {
+    debugPrint('Ignored recoverable error: $error');
+    return true;
+  }());
+}
+
 
 class CallService {
   static final SupabaseClient _client = Supabase.instance.client;
@@ -199,7 +208,9 @@ class CallService {
 
     _localStream = await _createLocalStream(video);
     if (_localStream == null) return false;
-    onLocalStream?.call(_localStream!);
+    final localStream = _localStream;
+    if (localStream == null) return false;
+    onLocalStream?.call(localStream);
     onLocalVideoChanged?.call(_localVideoEnabled);
 
     await _createPeerConnection();
@@ -209,8 +220,8 @@ class CallService {
     // مهم جدًا: نستقبل الفيديو دائمًا حتى لو بدأت المكالمة صوت فقط.
     // هذا يحل مشكلة أن صورة الطرف الثاني لا تظهر إذا كان أحد الطرفين بدأ صوت.
 
-    for (final track in _localStream!.getTracks()) {
-      await pc.addTrack(track, _localStream!);
+    for (final track in localStream.getTracks()) {
+      await pc.addTrack(track, localStream);
     }
 
     await Future<void>.delayed(const Duration(milliseconds: 250));
@@ -277,7 +288,7 @@ class CallService {
 
     try {
       await _signalChannel?.unsubscribe();
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
     _signalChannel = _client.channel('call_signals_${roomId}_$_instanceId');
 
@@ -299,7 +310,7 @@ class CallService {
   Future<void> _clearOldSignals(String roomId) async {
     try {
       await _client.from('call_signals').delete().eq('room_id', roomId);
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
   }
 
   Future<void> _loadExistingSignals(String roomId) async {
@@ -520,7 +531,7 @@ class CallService {
     if (_remoteDescriptionSet) {
       try {
         await pc.addCandidate(candidate);
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     } else {
       _pendingCandidates.add(candidate);
     }
@@ -536,7 +547,7 @@ class CallService {
     for (final candidate in list) {
       try {
         await pc.addCandidate(candidate);
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
     }
   }
 
@@ -548,7 +559,7 @@ class CallService {
     final started = DateTime.now();
 
     while (!_ending && _peerConnection != null) {
-      final state = _peerConnection!.signalingState;
+      final state = _peerConnection?.signalingState;
       if (state == null && allowNullAsReady) return true;
       if (state != null && allowed.contains(state)) return true;
 
@@ -579,8 +590,9 @@ class CallService {
   void _startHealthWatch() {
     _healthTimer?.cancel();
     _healthTimer = Timer.periodic(const Duration(seconds: 6), (_) async {
-      if (_ending || _peerConnection == null) return;
-      final pc = _peerConnection!;
+      if (_ending) return;
+      final pc = _peerConnection;
+      if (pc == null) return;
       final ice = pc.iceConnectionState;
       final conn = pc.connectionState;
       if (ice == RTCIceConnectionState.RTCIceConnectionStateConnected ||
@@ -619,7 +631,9 @@ class CallService {
     if (_ending || _peerConnection == null || _localStream == null) return false;
 
     if (!enable) {
-      for (final track in _localStream!.getVideoTracks()) {
+      final localStream = _localStream;
+      if (localStream == null) return false;
+      for (final track in localStream.getVideoTracks()) {
         track.enabled = false;
       }
       _localVideoEnabled = false;
@@ -634,7 +648,7 @@ class CallService {
       return false;
     }
 
-    final currentVideoTracks = _localStream!.getVideoTracks();
+    final currentVideoTracks = _localStream?.getVideoTracks() ?? <MediaStreamTrack>[];
     if (currentVideoTracks.isNotEmpty) {
       _cameraVideoTrack ??= currentVideoTracks.first;
       for (final track in currentVideoTracks) {
@@ -700,32 +714,32 @@ class CallService {
 
     try {
       _signalChannel?.unsubscribe();
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
     try {
       for (final track in _localStream?.getTracks() ?? <MediaStreamTrack>[]) {
         track.stop();
       }
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
     try {
       for (final track in _screenStream?.getTracks() ?? <MediaStreamTrack>[]) {
         track.stop();
       }
       _screenStream?.dispose();
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
     try {
       _localStream?.dispose();
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
     try {
       _remoteStream?.dispose();
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
     try {
       _peerConnection?.close();
-    } catch (_) {}
+    } catch (e, st) { _logIgnoredError(e, st); }
 
     _localStream = null;
     _remoteStream = null;
@@ -833,7 +847,7 @@ class CallService {
 
       final tracks = displayStream.getVideoTracks();
       if (tracks.isEmpty) {
-        try { await displayStream.dispose(); } catch (_) {}
+        try { await displayStream.dispose(); } catch (e, st) { _logIgnoredError(e, st); }
         _safeError('تعذر الحصول على مسار مشاركة الشاشة');
         return false;
       }
@@ -841,18 +855,24 @@ class CallService {
       _screenStream = displayStream;
       _screenVideoTrack = tracks.first;
 
-      _cameraVideoTrack ??= _localStream!.getVideoTracks().isNotEmpty ? _localStream!.getVideoTracks().first : null;
+      final localVideoTracks = _localStream?.getVideoTracks() ?? <MediaStreamTrack>[];
+      _cameraVideoTrack ??= localVideoTracks.isNotEmpty ? localVideoTracks.first : null;
 
       final sender = await _videoSender();
       if (sender != null) {
         await sender.replaceTrack(_screenVideoTrack);
       } else {
-        await _peerConnection!.addTrack(_screenVideoTrack!, _screenStream!);
+        final pc = _peerConnection;
+        final screenVideoTrack = _screenVideoTrack;
+        final screenStream = _screenStream;
+        if (pc == null || screenVideoTrack == null || screenStream == null) return false;
+        await pc.addTrack(screenVideoTrack, screenStream);
         await _createAndSendOffer(true, signalType: 'renegotiate_offer');
       }
 
       _screenSharing = true;
-      onLocalStream?.call(_screenStream!);
+      final activeScreenStream = _screenStream;
+      if (activeScreenStream != null) onLocalStream?.call(activeScreenStream);
       onScreenShareChanged?.call(true);
       await _sendSignal('screen_share_state', {'enabled': true});
       return true;
@@ -862,7 +882,7 @@ class CallService {
           track.stop();
         }
         await displayStream?.dispose();
-      } catch (_) {}
+      } catch (e, st) { _logIgnoredError(e, st); }
       _screenStream = null;
       _screenVideoTrack = null;
       _screenSharing = false;
@@ -877,7 +897,7 @@ class CallService {
 
     try {
       final sender = await _videoSender();
-      final cameraTrack = _cameraVideoTrack ?? (_localStream?.getVideoTracks().isNotEmpty == true ? _localStream!.getVideoTracks().first : null);
+      final cameraTrack = _cameraVideoTrack ?? (_localStream?.getVideoTracks().isNotEmpty == true ? _localStream?.getVideoTracks().first : null);
 
       if (sender != null && cameraTrack != null) {
         await sender.replaceTrack(cameraTrack);
@@ -892,7 +912,8 @@ class CallService {
       _screenVideoTrack = null;
       _screenSharing = false;
 
-      if (_localStream != null) onLocalStream?.call(_localStream!);
+      final localStream = _localStream;
+      if (localStream != null) onLocalStream?.call(localStream);
       onScreenShareChanged?.call(false);
       await _sendSignal('screen_share_state', {'enabled': false});
       return true;

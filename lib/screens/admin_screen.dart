@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -8,6 +9,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../theme/app_theme.dart';
 import '../widgets/glass_card.dart';
 import '../services/supabase_service.dart';
+
+void _respectSafeLog(Object error, [StackTrace? stackTrace]) {
+  if (kDebugMode) {
+    debugPrint('Respect safe catch: $error');
+    if (stackTrace != null) debugPrintStack(stackTrace: stackTrace);
+  }
+}
+
 
 class AdminScreen extends StatefulWidget {
   const AdminScreen({super.key});
@@ -102,7 +111,7 @@ class _AdminScreenState extends State<AdminScreen> {
           'name': (u['name'] ?? u['profileName'] ?? id).toString(),
         };
       }
-    } catch (_) {}
+    } catch (e, st) { _respectSafeLog(e, st); }
 
     _ensurePrimaryAdminUser(users);
 
@@ -135,7 +144,7 @@ class _AdminScreenState extends State<AdminScreen> {
     try {
       final decoded = jsonDecode(raw);
       if (decoded is Map) return decoded.map((k, v) => MapEntry(k.toString(), v));
-    } catch (_) {}
+    } catch (e, st) { _respectSafeLog(e, st); }
     return <String, dynamic>{};
   }
 
@@ -144,7 +153,7 @@ class _AdminScreenState extends State<AdminScreen> {
     try {
       final decoded = jsonDecode(raw);
       if (decoded is List) return decoded;
-    } catch (_) {}
+    } catch (e, st) { _respectSafeLog(e, st); }
     return <dynamic>[];
   }
 
@@ -154,7 +163,7 @@ class _AdminScreenState extends State<AdminScreen> {
       final decoded = jsonDecode(raw);
       if (decoded is List) return decoded.map((e) => e.toString()).toSet();
       if (decoded is Map) return decoded.keys.map((e) => e.toString()).toSet();
-    } catch (_) {}
+    } catch (e, st) { _respectSafeLog(e, st); }
     return <String>{};
   }
 
@@ -538,9 +547,9 @@ class _AdminScreenState extends State<AdminScreen> {
                     width: double.infinity,
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: (blocked || user.deviceBanned ? AppColors.danger : AppColors.purple).withOpacity(0.10),
+                      color: (blocked || user.deviceBanned ? AppColors.danger : AppColors.purple).withValues(alpha: 0.10),
                       borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: (blocked || user.deviceBanned ? AppColors.danger : AppColors.purple).withOpacity(0.25)),
+                      border: Border.all(color: (blocked || user.deviceBanned ? AppColors.danger : AppColors.purple).withValues(alpha: 0.25)),
                     ),
                     child: Row(
                       children: [
@@ -851,7 +860,7 @@ class _AdminScreenState extends State<AdminScreen> {
                     Container(
                       width: 44,
                       height: 44,
-                      decoration: BoxDecoration(color: AppColors.success.withOpacity(0.14), shape: BoxShape.circle),
+                      decoration: BoxDecoration(color: AppColors.success.withValues(alpha: 0.14), shape: BoxShape.circle),
                       child: const Icon(Icons.verified_rounded, color: AppColors.success),
                     ),
                     const SizedBox(width: 12),
@@ -990,7 +999,7 @@ class _ReportDetailsScreen extends StatelessWidget {
                       width: 46,
                       height: 46,
                       decoration: BoxDecoration(
-                        color: AppColors.purple.withOpacity(0.16),
+                        color: AppColors.purple.withValues(alpha: 0.16),
                         shape: BoxShape.circle,
                       ),
                       child: const Icon(Icons.article_rounded, color: AppColors.purple),
@@ -1061,7 +1070,7 @@ class _ReportDetailsScreen extends StatelessWidget {
                       width: 46,
                       height: 46,
                       decoration: BoxDecoration(
-                        color: AppColors.danger.withOpacity(0.16),
+                        color: AppColors.danger.withValues(alpha: 0.16),
                         shape: BoxShape.circle,
                       ),
                       child: const Icon(Icons.report_rounded, color: AppColors.danger),
@@ -1089,7 +1098,7 @@ class _ReportDetailsScreen extends StatelessWidget {
                     width: double.infinity,
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: status == 'accepted' ? AppColors.danger.withOpacity(0.10) : AppColors.success.withOpacity(0.10),
+                      color: status == 'accepted' ? AppColors.danger.withValues(alpha: 0.10) : AppColors.success.withValues(alpha: 0.10),
                       borderRadius: BorderRadius.circular(16),
                     ),
                     child: Text(
@@ -1218,7 +1227,7 @@ class _ReportCard extends StatelessWidget {
                 Container(
                   width: 42,
                   height: 42,
-                  decoration: BoxDecoration(color: AppColors.danger.withOpacity(0.14), shape: BoxShape.circle),
+                  decoration: BoxDecoration(color: AppColors.danger.withValues(alpha: 0.14), shape: BoxShape.circle),
                   child: const Icon(Icons.report_rounded, color: AppColors.danger),
                 ),
                 const SizedBox(width: 10),
@@ -1264,7 +1273,7 @@ class _ReportCard extends StatelessWidget {
                 width: double.infinity,
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: status == 'accepted' ? AppColors.danger.withOpacity(0.10) : AppColors.success.withOpacity(0.10),
+                  color: status == 'accepted' ? AppColors.danger.withValues(alpha: 0.10) : AppColors.success.withValues(alpha: 0.10),
                   borderRadius: BorderRadius.circular(14),
                 ),
                 child: Text(
@@ -1315,7 +1324,7 @@ class _AdminHeader extends StatelessWidget {
             width: 54,
             height: 54,
             decoration: BoxDecoration(
-              color: AppColors.purple.withOpacity(0.18),
+              color: AppColors.purple.withValues(alpha: 0.18),
               shape: BoxShape.circle,
             ),
             child: const Icon(Icons.admin_panel_settings_rounded, color: AppColors.purple, size: 30),
@@ -1614,9 +1623,9 @@ class _MiniChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.14),
+        color: color.withValues(alpha: 0.14),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: color.withOpacity(0.35)),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
       ),
       child: Text(
         text,

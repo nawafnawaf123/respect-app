@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:ui';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
@@ -11,6 +12,14 @@ import '../screens/incoming_call_screen.dart';
 import '../screens/feed_screen.dart';
 import '../theme/app_theme.dart';
 import 'supabase_service.dart';
+
+void _respectSafeLog(Object error, [StackTrace? stackTrace]) {
+  if (kDebugMode) {
+    debugPrint('Respect safe catch: $error');
+    if (stackTrace != null) debugPrintStack(stackTrace: stackTrace);
+  }
+}
+
 
 class NotificationService {
   NotificationService._();
@@ -85,7 +94,7 @@ class NotificationService {
           }
           try {
             entry.remove();
-          } catch (_) {}
+          } catch (e, st) { _respectSafeLog(e, st); }
         },
       ),
     );
@@ -96,7 +105,7 @@ class NotificationService {
     _topNotificationTimer = Timer(duration + const Duration(milliseconds: 520), () {
       try {
         entry.remove();
-      } catch (_) {}
+      } catch (e, st) { _respectSafeLog(e, st); }
       if (_topNotificationEntry == entry) _topNotificationEntry = null;
     });
   }
@@ -319,7 +328,7 @@ class NotificationService {
           ),
         ));
       }
-    } catch (_) {}
+    } catch (e, st) { _respectSafeLog(e, st); }
   }
 
 
@@ -551,7 +560,7 @@ class _RespectTopNotificationOverlayState extends State<_RespectTopNotificationO
 
     try {
       await _controller.reverse();
-    } catch (_) {}
+    } catch (e, st) { _respectSafeLog(e, st); }
 
     if (mounted) {
       widget.onDismissed();
@@ -573,7 +582,7 @@ class _RespectTopNotificationOverlayState extends State<_RespectTopNotificationO
     final bg = isDark ? const Color(0xE6110B1F) : const Color(0xF7FFFFFF);
     final textColor = isDark ? Colors.white : const Color(0xFF17131F);
     final mutedColor = isDark ? AppColors.darkMuted : AppColors.lightMuted;
-    final borderColor = widget.accentColor.withOpacity(isDark ? 0.34 : 0.25);
+    final borderColor = widget.accentColor.withValues(alpha: isDark ? 0.34 : 0.25);
 
     return Positioned(
       top: 0,
@@ -620,13 +629,13 @@ class _RespectTopNotificationOverlayState extends State<_RespectTopNotificationO
                               border: Border.all(color: borderColor),
                               boxShadow: [
                                 BoxShadow(
-                                  color: widget.accentColor.withOpacity(isDark ? 0.32 : 0.22),
+                                  color: widget.accentColor.withValues(alpha: isDark ? 0.32 : 0.22),
                                   blurRadius: 34,
                                   spreadRadius: 1,
                                   offset: const Offset(0, 14),
                                 ),
                                 BoxShadow(
-                                  color: Colors.black.withOpacity(isDark ? 0.35 : 0.10),
+                                  color: Colors.black.withValues(alpha: isDark ? 0.35 : 0.10),
                                   blurRadius: 18,
                                   offset: const Offset(0, 8),
                                 ),
@@ -644,13 +653,13 @@ class _RespectTopNotificationOverlayState extends State<_RespectTopNotificationO
                                       begin: Alignment.topLeft,
                                       end: Alignment.bottomRight,
                                       colors: [
-                                        widget.accentColor.withOpacity(0.95),
-                                        AppColors.purple.withOpacity(0.92),
+                                        widget.accentColor.withValues(alpha: 0.95),
+                                        AppColors.purple.withValues(alpha: 0.92),
                                       ],
                                     ),
                                     boxShadow: [
                                       BoxShadow(
-                                        color: widget.accentColor.withOpacity(0.45),
+                                        color: widget.accentColor.withValues(alpha: 0.45),
                                         blurRadius: 18,
                                         spreadRadius: 1,
                                       ),
@@ -700,7 +709,7 @@ class _RespectTopNotificationOverlayState extends State<_RespectTopNotificationO
                                     height: 34,
                                     alignment: Alignment.center,
                                     decoration: BoxDecoration(
-                                      color: (isDark ? Colors.white : Colors.black).withOpacity(0.07),
+                                      color: (isDark ? Colors.white : Colors.black).withValues(alpha: 0.07),
                                       shape: BoxShape.circle,
                                     ),
                                     child: Icon(

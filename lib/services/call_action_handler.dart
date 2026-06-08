@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -62,9 +63,9 @@ class CallActionHandler {
         final callerAvatarPath = args['callerAvatarPath'] as String?;
         final video = args['video'] as bool? ?? false;
 
-        if (action == 'accept') {
+        if (action == 'accept' && callId != null) {
           _openCallScreen(
-            callId: callId!,
+            callId: callId,
             callerName: callerName,
             callerUsername: callerUsername,
             callerAvatarPath: callerAvatarPath,
@@ -74,7 +75,7 @@ class CallActionHandler {
         }
       }
     } catch (e) {
-      debugPrint('Error consuming pending call action: $e');
+      if (kDebugMode) debugPrint('Error consuming pending call action: $e');
     }
   }
 
@@ -87,12 +88,11 @@ class CallActionHandler {
     required bool isCaller,
   }) async {
     final navigatorKey = NotificationService.navigatorKey;
-    final context = navigatorKey.currentContext;
-    if (context == null) return;
-
     final callService = CallService();
     final currentUser = await SupabaseService.currentUser();
     final calleeUsername = SupabaseService.displayUsername((currentUser?['username'] ?? '').toString());
+    final context = navigatorKey.currentContext;
+    if (context == null) return;
 
     await Navigator.of(context).push(
       MaterialPageRoute(
@@ -122,7 +122,7 @@ class CallActionHandler {
       };
       await client.from('call_signals').insert(signalData);
     } catch (e) {
-      debugPrint('Error sending reject signal: $e');
+      if (kDebugMode) debugPrint('Error sending reject signal: $e');
     }
   }
 }
