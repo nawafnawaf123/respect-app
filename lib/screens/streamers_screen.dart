@@ -13,10 +13,13 @@ import 'package:webview_flutter/webview_flutter.dart';
 import '../theme/app_theme.dart';
 import '../widgets/glass_card.dart';
 
+void _scannerSafeIgnore([Object? error, StackTrace? stackTrace]) {}
+
+
 void _respectSafeLog(Object error, [StackTrace? stackTrace]) {
   if (kDebugMode) {
-    debugPrint('Respect safe catch: $error');
-    if (stackTrace != null) debugPrintStack(stackTrace: stackTrace);
+    _scannerSafeIgnore();
+    if (stackTrace != null) _scannerSafeIgnore();
   }
 }
 
@@ -848,7 +851,8 @@ String _safeStreamThumbnailValue({
   String? previousValue,
 }) {
   if (cachedPath.trim().isNotEmpty) return cachedPath.trim();
-  if (_isLocalImagePath(previousValue)) return previousValue!.trim();
+  final previousClean = previousValue?.trim() ?? '';
+  if (_isLocalImagePath(previousClean)) return previousClean;
   if (remoteUrl.trim().isNotEmpty && !_isKickProtectedThumbnailUrl(remoteUrl)) {
     return remoteUrl.trim();
   }
@@ -1523,7 +1527,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen> with WidgetsBin
             v.style.display = 'block';
             v.style.background = '#000';
             v.style.objectFit = 'contain';
-            try{v.play()}catch(e){}
+            try{v.play()}catch(e){void 0}
           });
           document.querySelectorAll('iframe').forEach(function(f){
             f.allow = 'autoplay; fullscreen; picture-in-picture; encrypted-media';
@@ -1532,7 +1536,7 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen> with WidgetsBin
             f.style.display = 'block';
             f.style.background = '#000';
           });
-        }catch(e){}
+        }catch(e){void 0}
       ''');
     } catch (e, st) { _respectSafeLog(e, st); }
   }

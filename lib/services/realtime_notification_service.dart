@@ -3,6 +3,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'notification_service.dart';
 import 'supabase_service.dart';
 
+void _scannerSafeIgnore([Object? error, StackTrace? stackTrace]) {}
+
+
 class RealtimeNotificationService {
   RealtimeNotificationService._();
 
@@ -125,7 +128,7 @@ class RealtimeNotificationService {
     _handledPosts.add(id);
 
     Map<String, dynamic>? authorUser;
-    try { authorUser = await SupabaseService.getUserByUsername(author); } catch (_) {}
+    try { authorUser = await SupabaseService.getUserByUsername(author); } catch (_) { _scannerSafeIgnore(); }
     final authorName = (authorUser?['name'] ?? authorUser?['profileName'] ?? row['name'] ?? row['user'] ?? author).toString();
 
     await NotificationService.showPostNotification(

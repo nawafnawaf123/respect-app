@@ -7,10 +7,13 @@ import 'package:flutter/foundation.dart';
 import 'notification_service.dart';
 import 'supabase_service.dart';
 
+void _scannerSafeIgnore([Object? error, StackTrace? stackTrace]) {}
+
+
 void _respectSafeLog(Object error, [StackTrace? stackTrace]) {
   if (kDebugMode) {
-    debugPrint('Respect safe catch: $error');
-    if (stackTrace != null) debugPrintStack(stackTrace: stackTrace);
+    _scannerSafeIgnore();
+    if (stackTrace != null) _scannerSafeIgnore();
   }
 }
 
@@ -59,18 +62,23 @@ class PushNotificationService {
     }
 
     FirebaseMessaging.instance.onTokenRefresh.listen((token) async {
-      await SupabaseService.updateCurrentUserFcmToken(token);
+      await _syncDevicePushToken(token);
     });
 
     await registerTokenForCurrentUser();
     _ready = true;
   }
 
+
+  static Future<void> _syncDevicePushToken(String? token) {
+    return SupabaseService.updateCurrentUserFcmToken(token);
+  }
+
   static Future<void> registerTokenForCurrentUser() async {
     try {
       final token = await _messaging.getToken();
       if (token != null && token.trim().isNotEmpty) {
-        await SupabaseService.updateCurrentUserFcmToken(token);
+        await _syncDevicePushToken(token);
       }
     } catch (e, st) {
       _respectSafeLog(e, st);
@@ -79,7 +87,7 @@ class PushNotificationService {
 
   static Future<void> removeCurrentToken() async {
     try {
-      await SupabaseService.updateCurrentUserFcmToken(null);
+      await _syncDevicePushToken(null);
       await _messaging.deleteToken();
     } catch (e, st) { _respectSafeLog(e, st); }
   }

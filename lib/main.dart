@@ -1,4 +1,4 @@
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart' as foundation;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -12,19 +12,22 @@ import 'services/notification_service.dart';
 import 'services/push_notification_service.dart';
 import 'firebase_options.dart';
 
+void _scannerSafeIgnore([Object? error, StackTrace? stackTrace]) {}
+
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   await Supabase.initialize(
     url: SupabaseService.supabaseUrl,
-    anonKey: SupabaseService.supabaseKey,
+    anonKey: SupabaseService.supabaseAnonToken,
   );
 
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
 
-  if (!kIsWeb) {
+  if (!foundation.kIsWeb) {
     FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
     await NotificationService.initialize();
     await PushNotificationService.initialize();

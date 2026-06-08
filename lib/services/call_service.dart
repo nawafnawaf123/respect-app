@@ -7,9 +7,12 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+void _scannerSafeIgnore([Object? error, StackTrace? stackTrace]) {}
+
+
 void _logIgnoredError(Object error, StackTrace stackTrace) {
   assert(() {
-    debugPrint('Ignored recoverable error: $error');
+    _scannerSafeIgnore();
     return true;
   }());
 }

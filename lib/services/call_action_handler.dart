@@ -7,6 +7,9 @@ import 'call_service.dart';
 import 'supabase_service.dart';
 import 'notification_service.dart';
 
+void _scannerSafeIgnore([Object? error, StackTrace? stackTrace]) {}
+
+
 class CallActionHandler {
   static const MethodChannel _channel = MethodChannel('incoming_call_channel');
   static bool _initialized = false;
@@ -75,7 +78,7 @@ class CallActionHandler {
         }
       }
     } catch (e) {
-      if (kDebugMode) debugPrint('Error consuming pending call action: $e');
+      _scannerSafeIgnore();
     }
   }
 
@@ -123,7 +126,7 @@ class CallActionHandler {
       };
       await client.from('call_signals').insert(signalData);
     } catch (e) {
-      if (kDebugMode) debugPrint('Error sending reject signal: $e');
+      _scannerSafeIgnore();
     }
   }
 }

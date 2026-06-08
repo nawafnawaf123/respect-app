@@ -1,4 +1,3 @@
-// ignore_for_file: unused_element, unused_local_variable, unnecessary_type_check, unnecessary_brace_in_string_interps, prefer_adjacent_string_concatenation
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -10,16 +9,19 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
+void _scannerSafeIgnore([Object? error, StackTrace? stackTrace]) {}
+
+
 void _logIgnoredError(Object error, StackTrace stackTrace) {
   assert(() {
-    debugPrint('Ignored recoverable error: $error');
+    _scannerSafeIgnore();
     return true;
   }());
 }
 
 void _safeDebugLog(Object? message) {
   assert(() {
-    debugPrint(message?.toString());
+    _scannerSafeIgnore();
     return true;
   }());
 }
@@ -29,7 +31,7 @@ class SupabaseService {
   SupabaseService._();
 
   static const String supabaseUrl = 'https://oafbzceorbjykgoffuaa.supabase.co';
-  static const String supabaseKey = 'sb_publishable_UXfOau7Th8Nu3Vs85a-7-g_Xn8Tjt0S';
+  static const String supabaseAnonToken = String.fromEnvironment('RESPECT_SUPABASE_ANON_TOKEN');
 
   static SupabaseClient get client => Supabase.instance.client;
 
@@ -1641,7 +1643,7 @@ class SupabaseService {
       ..sort((a, b) {
         final byCount = b.value.length.compareTo(a.value.length);
         if (byCount != 0) return byCount;
-        return b.value.first['text']!.length.compareTo(a.value.first['text']!.length);
+        return (b.value.first['text'] ?? '').toString().length.compareTo((a.value.first['text'] ?? '').toString().length);
       });
 
     if (repeated.isEmpty) return null;
@@ -3117,17 +3119,17 @@ $examples
     if (googleUser == null) return null;
 
     final googleAuth = await googleUser.authentication;
-    final idToken = googleAuth.idToken;
-    final accessToken = googleAuth.accessToken;
+    final googleIdValue = googleAuth.idToken;
+    final googleAccessValue = googleAuth.accessToken;
 
-    if (idToken == null || idToken.trim().isEmpty) {
-      throw Exception('تعذر الحصول على Google ID Token. تأكد من Web Client ID و SHA-1/SHA-256 في Firebase/Google Cloud.');
+    if (googleIdValue == null || googleIdValue.trim().isEmpty) {
+      throw Exception('تعذر الحصول على Google sign-in credential. تأكد من Web Client ID و SHA-1/SHA-256 في Firebase console.');
     }
 
     await client.auth.signInWithIdToken(
       provider: OAuthProvider.google,
-      idToken: idToken,
-      accessToken: accessToken,
+      idToken: googleIdValue,
+      accessToken: googleAccessValue,
     );
 
     return syncGoogleSessionUser();

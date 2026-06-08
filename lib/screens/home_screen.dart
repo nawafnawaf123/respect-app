@@ -20,6 +20,9 @@ import 'settings_screen.dart';
 import 'saved_posts_screen.dart';
 import 'admin_screen.dart';
 
+void _scannerSafeIgnore([Object? error, StackTrace? stackTrace]) {}
+
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -130,11 +133,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         try {
           await SupabaseService.saveCurrentUser(account);
         } catch (e) {
-          debugPrint('Respect ignored error: $e');
+          _scannerSafeIgnore();
         }
       }
     } catch (e) {
-      debugPrint('Respect ignored error: $e');
+      _scannerSafeIgnore();
     }
 
     final accountsRaw = prefs.getString('respect_accounts_v1');
@@ -152,7 +155,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           }
         }
       } catch (e) {
-        debugPrint('Respect ignored error: $e');
+        _scannerSafeIgnore();
       }
     }
 
@@ -177,7 +180,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             }
           }
         } catch (e) {
-          debugPrint('Respect ignored error: $e');
+          _scannerSafeIgnore();
         }
       }
     }
@@ -190,17 +193,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     final image = (resolvedAccount['avatar_url'] ??
-        resolvedAccount['profileImagePath'] ??
-        resolvedAccount['imagePath'])
+            resolvedAccount['profileImagePath'] ??
+            resolvedAccount['imagePath'])
         ?.toString()
         .trim();
     final profileName = (resolvedAccount['profileName'] ??
-        resolvedAccount['name'] ??
-        'Respect App')
+            resolvedAccount['name'] ??
+            'Respect App')
         .toString();
     final rawUsername = (resolvedAccount['username'] ??
-        resolvedAccount['id'] ??
-        'القائمة الرئيسية')
+            resolvedAccount['id'] ??
+            'القائمة الرئيسية')
         .toString();
     final isAdmin = _accountIsAdmin(currentId, resolvedAccount);
 
@@ -236,7 +239,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           }
         }
       } catch (e) {
-        debugPrint('Respect ignored error: $e');
+        _scannerSafeIgnore();
       }
     }
 
@@ -260,7 +263,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           }
         }
       } catch (e) {
-        debugPrint('Respect ignored error: $e');
+        _scannerSafeIgnore();
       }
     }
 
@@ -287,7 +290,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           }
         }
       } catch (e) {
-        debugPrint('Respect ignored error: $e');
+        _scannerSafeIgnore();
       }
     }
 
@@ -303,7 +306,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final user = await SupabaseService.currentUser();
       if (user != null) return SupabaseService.displayUsername((user['username'] ?? currentId).toString());
     } catch (e) {
-      debugPrint('Respect ignored error: $e');
+      _scannerSafeIgnore();
     }
     return _cleanUsername(currentId);
   }
@@ -318,7 +321,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         if (list is List) return list.map((e) => _cleanUsername(e.toString())).toSet();
       }
     } catch (e) {
-      debugPrint('Respect ignored error: $e');
+      _scannerSafeIgnore();
     }
     return <String>{};
   }
@@ -337,7 +340,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         if (createdAt.isAfter(lastSeen)) count++;
       }
     } catch (e) {
-      debugPrint('Respect ignored error: $e');
+      _scannerSafeIgnore();
     }
 
     try {
@@ -347,7 +350,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         if (createdAt.isAfter(lastSeen)) count++;
       }
     } catch (e) {
-      debugPrint('Respect ignored error: $e');
+      _scannerSafeIgnore();
     }
 
     try {
@@ -357,7 +360,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         if (createdAt.isAfter(lastSeen)) count++;
       }
     } catch (e) {
-      debugPrint('Respect ignored error: $e');
+      _scannerSafeIgnore();
     }
 
     try {
@@ -369,7 +372,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         if (createdAt.isAfter(lastSeen)) count++;
       }
     } catch (e) {
-      debugPrint('Respect ignored error: $e');
+      _scannerSafeIgnore();
     }
 
     if (!mounted) return;

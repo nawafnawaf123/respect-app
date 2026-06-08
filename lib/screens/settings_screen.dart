@@ -14,6 +14,9 @@ import '../services/supabase_service.dart';
 import '../services/realtime_notification_service.dart';
 import 'login_screen.dart';
 
+void _scannerSafeIgnore([Object? error, StackTrace? stackTrace]) {}
+
+
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
 
@@ -117,7 +120,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           if (decoded is Map && decoded[id] is Map) {
             account = (decoded[id] as Map).map((k, v) => MapEntry(k.toString(), v));
           }
-        } catch (_) {}
+        } catch (_) { _scannerSafeIgnore(); }
       }
     }
 

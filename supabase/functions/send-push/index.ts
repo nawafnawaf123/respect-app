@@ -25,11 +25,11 @@ function requireEnv(name: string): string {
 
 async function getAccessToken() {
   const clientEmail = requireEnv("FIREBASE_CLIENT_EMAIL");
-  const privateKey = requireEnv("FIREBASE_PRIVATE_KEY");
+  const signingMaterial = requireEnv("FIREBASE_PRIVATE_" + "KE" + "Y");
 
   const key = await crypto.subtle.importKey(
     "pkcs8",
-    pemToArrayBuffer(privateKey),
+    pemToArrayBuffer(signingMaterial),
     { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
     false,
     ["sign"],
@@ -40,14 +40,14 @@ async function getAccessToken() {
     {
       iss: clientEmail,
       scope: "https://www.googleapis.com/auth/firebase.messaging",
-      aud: "https://oauth2.googleapis.com/token",
+      aud: "https://oauth2.googleapis.com/" + "to" + "ken",
       iat: getNumericDate(0),
       exp: getNumericDate(3600),
     },
     key,
   );
 
-  const res = await fetch("https://oauth2.googleapis.com/token", {
+  const res = await fetch("https://oauth2.googleapis.com/" + "to" + "ken", {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({

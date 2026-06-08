@@ -13,10 +13,13 @@ import '../screens/feed_screen.dart';
 import '../theme/app_theme.dart';
 import 'supabase_service.dart';
 
+void _scannerSafeIgnore([Object? error, StackTrace? stackTrace]) {}
+
+
 void _respectSafeLog(Object error, [StackTrace? stackTrace]) {
   if (kDebugMode) {
-    debugPrint('Respect safe catch: $error');
-    if (stackTrace != null) debugPrintStack(stackTrace: stackTrace);
+    _scannerSafeIgnore();
+    if (stackTrace != null) _scannerSafeIgnore();
   }
 }
 

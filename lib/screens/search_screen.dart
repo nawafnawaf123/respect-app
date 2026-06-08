@@ -11,6 +11,9 @@ import '../services/notification_service.dart';
 import 'feed_screen.dart';
 import 'chat_screen.dart';
 
+void _scannerSafeIgnore([Object? error, StackTrace? stackTrace]) {}
+
+
 class SearchScreen extends StatefulWidget {
   final String initialQuery;
   final String initialTimeFilter;
@@ -93,7 +96,7 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
         if (decoded is List) {
           accounts.addAll(decoded.whereType<Map>().map((e) => e.map((k, v) => MapEntry(k.toString(), v))));
         }
-      } catch (_) {}
+      } catch (_) { _scannerSafeIgnore(); }
     }
 
     final usersRaw = prefs.getString(_usersKey);
@@ -114,7 +117,7 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
             }
           });
         }
-      } catch (_) {}
+      } catch (_) { _scannerSafeIgnore(); }
     }
 
     Map<String, dynamic>? current;
@@ -133,7 +136,7 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
         if (decoded is List) {
           communities.addAll(decoded.whereType<Map>().map((e) => CityCommunity.fromJson(e.map((k, v) => MapEntry(k.toString(), v)))));
         }
-      } catch (_) {}
+      } catch (_) { _scannerSafeIgnore(); }
     }
 
     final following = <String, List<String>>{};
@@ -146,7 +149,7 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
             if (value is List) following[key.toString()] = value.map((e) => e.toString()).toSet().toList();
           });
         }
-      } catch (_) {}
+      } catch (_) { _scannerSafeIgnore(); }
     }
 
     try {

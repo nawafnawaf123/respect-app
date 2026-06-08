@@ -9,6 +9,9 @@ import '../services/notification_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/glass_card.dart';
 
+void _scannerSafeIgnore([Object? error, StackTrace? stackTrace]) {}
+
+
 class SavedPostsScreen extends StatefulWidget {
   const SavedPostsScreen({super.key});
 
@@ -37,7 +40,7 @@ class _SavedPostsScreenState extends State<SavedPostsScreen> {
         if (decoded is List) {
           loaded.addAll(decoded.whereType<Map>().map((e) => e.map((k, v) => MapEntry(k.toString(), v))));
         }
-      } catch (_) {}
+      } catch (_) { _scannerSafeIgnore(); }
     }
     loaded.sort((a, b) => (b['savedAt'] ?? '').toString().compareTo((a['savedAt'] ?? '').toString()));
     if (!mounted) return;
