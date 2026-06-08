@@ -820,9 +820,26 @@ def auth_trust_device(req: TrustedDeviceRequest, x_app_secret: Optional[str] = H
     r = requests.post(
         f"{SB_URL}/rest/v1/respect_trusted_devices",
         headers={**_supabase_headers(use_service_role=True), "Prefer": "resolution=merge-duplicates,return=minimal"},
+        params={"on_conflict": "username,device_id"},
         json=payload,
         timeout=12,
     )
+    if r.status_code == 409 or "23505" in r.text or "duplicate key" in r.text.lower():
+        # الجهاز موجود مسبقًا؛ نحدّث تاريخ الثقة بدل إظهار خطأ للمستخدم.
+        patch = requests.patch(
+            f"{SB_URL}/rest/v1/respect_trusted_devices",
+            headers={**_supabase_headers(use_service_role=True), "Prefer": "return=minimal"},
+            params={"username": f"eq.{username}", "device_id": f"eq.{device_id}"},
+            json={
+                "device_name": req.deviceName or "device",
+                "trusted_until": trusted_until,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            timeout=12,
+        )
+        if patch.status_code >= 400:
+            raise HTTPException(status_code=500, detail=f"تعذر تحديث الجهاز الموثوق: {_safe_response_text(patch.text)}")
+        return {"ok": True, "trustedUntil": trusted_until, "updated": True}
     if r.status_code >= 400:
         raise HTTPException(status_code=500, detail=f"تعذر حفظ الجهاز الموثوق: {_safe_response_text(r.text)}")
     return {"ok": True, "trustedUntil": trusted_until}
