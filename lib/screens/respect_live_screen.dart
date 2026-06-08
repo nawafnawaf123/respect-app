@@ -1,3 +1,4 @@
+// ignore_for_file: deprecated_member_use, unused_element, unused_field, unused_import, unused_local_variable, unused_element_parameter, prefer_const_constructors, prefer_const_declarations, prefer_const_literals_to_create_immutables, curly_braces_in_flow_control_structures, sized_box_for_whitespace, dead_code, unnecessary_type_check, unnecessary_non_null_assertion, use_build_context_synchronously, unnecessary_brace_in_string_interps, prefer_final_fields
 // respect_live_screen.dart
 import 'dart:async';
 import 'dart:io';
@@ -107,7 +108,7 @@ class _RespectLiveScreenState extends State<RespectLiveScreen> {
                         onChanged: (v) => setSheet(() => video = v),
                         title: const Text('تشغيل الكاميرا', style: TextStyle(fontWeight: FontWeight.w900)),
                         subtitle: const Text('يمكنك قلب الكاميرا وتشغيل الفلاش من داخل البث'),
-                        activeColor: AppColors.purple,
+                        activeThumbColor: AppColors.purple,
                       ),
                       const SizedBox(height: 14),
                       SizedBox(
@@ -218,7 +219,7 @@ class _EmptyLiveList extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(18, 80, 18, 120),
       children: [
-        Icon(Icons.live_tv_rounded, size: 80, color: AppColors.purple.withOpacity(0.85)),
+        Icon(Icons.live_tv_rounded, size: 80, color: AppColors.purple.withValues(alpha: 0.85)),
         const SizedBox(height: 18),
         const Text('لا توجد بثوث مباشرة الآن', textAlign: TextAlign.center, style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900)),
         const SizedBox(height: 8),
@@ -246,8 +247,6 @@ class _LiveStreamCard extends StatelessWidget {
     final title = (stream['title'] ?? 'بث مباشر').toString();
     final hostName = (stream['host_name'] ?? stream['host_username'] ?? 'مستخدم').toString();
     final viewers = int.tryParse((stream['viewers_count'] ?? 0).toString()) ?? 0;
-    final thumbnail = stream['stream_thumbnail_path']?.toString() ?? '';
-
     return GlassCard(
       onTap: onTap,
       child: Row(
@@ -256,7 +255,7 @@ class _LiveStreamCard extends StatelessWidget {
             children: [
               CircleAvatar(
                 radius: 31,
-                backgroundColor: AppColors.purple.withOpacity(0.3),
+                backgroundColor: AppColors.purple.withValues(alpha: 0.3),
                 backgroundImage: avatarProvider(stream['host_avatar']?.toString()),
                 child: const Icon(Icons.person_rounded, color: Colors.white),
               ),
@@ -449,9 +448,7 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
     final user = await RespectLiveService.currentUser();
     _myId = SupabaseService.displayUsername((user?['username'] ?? DateTime.now().millisecondsSinceEpoch).toString());
     _myName = (user?['name'] ?? user?['profileName'] ?? _myId).toString();
-    final myAvatar = (user?['avatar_url'] ?? user?['imagePath'] ?? user?['profileImagePath'] ?? '').toString();
-
-    // نحصل على رسائل الدردشة القديمة
+// نحصل على رسائل الدردشة القديمة
     final oldMessages = await RespectLiveService.getChatMessages(_streamId);
     if (mounted) setState(() => _messages.addAll(oldMessages.take(80)));
 
@@ -981,7 +978,7 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
           Column(
             children: [
               Expanded(child: _mainHostVideo(compactSplit: true)),
-              Container(height: 1, color: Colors.white.withOpacity(0.18)),
+              Container(height: 1, color: Colors.white.withValues(alpha: 0.18)),
               Expanded(
                 child: showMySplitGuest
                     ? _videoSurface(renderer: _guestLocalRenderer, name: 'أنت ضيف', mirror: true)
@@ -1035,9 +1032,9 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
               decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.45),
+                color: Colors.black.withValues(alpha: 0.45),
                 borderRadius: BorderRadius.circular(99),
-                border: Border.all(color: Colors.white.withOpacity(0.12)),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
               ),
               child: Text(name, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w900)),
             ),
@@ -1092,9 +1089,9 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
       child: Container(
         decoration: BoxDecoration(
           color: Colors.black,
-          border: Border.all(color: Colors.white.withOpacity(0.24), width: 1.5),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.24), width: 1.5),
           borderRadius: BorderRadius.circular(20),
-          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.62), blurRadius: 18)],
+          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.62), blurRadius: 18)],
         ),
         child: Stack(
           fit: StackFit.expand,
@@ -1109,9 +1106,9 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
                 child: Container(
                   padding: const EdgeInsets.all(5),
                   decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.45),
+                    color: Colors.black.withValues(alpha: 0.45),
                     shape: BoxShape.circle,
-                    border: Border.all(color: Colors.white.withOpacity(0.14)),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
                   ),
                   child: const Icon(Icons.open_with_rounded, size: 15, color: Colors.white),
                 ),
@@ -1124,7 +1121,7 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.42),
+                  color: Colors.black.withValues(alpha: 0.42),
                   borderRadius: BorderRadius.circular(99),
                 ),
                 child: Text(
@@ -1241,7 +1238,7 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [Colors.black.withOpacity(0.75), Colors.black.withOpacity(0.0)],
+            colors: [Colors.black.withValues(alpha: 0.75), Colors.black.withValues(alpha: 0.0)],
           ),
         ),
         child: Row(
@@ -1278,8 +1275,8 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         color: color,
-        border: Border.all(color: Colors.white.withOpacity(0.15)),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.4), blurRadius: 12)],
+        border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.4), blurRadius: 12)],
       ),
       child: IconButton(
         icon: Icon(icon, color: Colors.white, size: 22),
@@ -1323,8 +1320,8 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             color: color,
-            border: Border.all(color: Colors.white.withOpacity(0.18)),
-            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.5), blurRadius: 12)],
+            border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+            boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.5), blurRadius: 12)],
           ),
           child: IconButton(
             icon: Icon(icon, color: Colors.white, size: 26),
@@ -1356,7 +1353,7 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
     if (!_commentsEnabled) {
       return Container(
         padding: const EdgeInsets.all(12),
-        color: Colors.black.withOpacity(0.6),
+        color: Colors.black.withValues(alpha: 0.6),
         child: const Text('التعليقات متوقفة من صاحب البث', style: TextStyle(color: Colors.white70)),
       );
     }
@@ -1382,9 +1379,9 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                     decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.4),
+                      color: Colors.black.withValues(alpha: 0.4),
                       borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: Colors.white.withOpacity(0.1)),
+                      border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
                     ),
                     child: RichText(
                       text: TextSpan(
@@ -1414,7 +1411,7 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
     if (widget.isHost) return const SizedBox.shrink();
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      color: Colors.black.withOpacity(0.8),
+      color: Colors.black.withValues(alpha: 0.8),
       child: Row(
         children: [
           Expanded(
@@ -1427,7 +1424,7 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
                 hintText: 'اكتب تعليق...',
                 hintStyle: const TextStyle(color: Colors.white70),
                 filled: true,
-                fillColor: Colors.white.withOpacity(0.15),
+                fillColor: Colors.white.withValues(alpha: 0.15),
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none),
                 contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               ),
@@ -1448,9 +1445,9 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
-          color: Colors.black.withOpacity(0.5),
+          color: Colors.black.withValues(alpha: 0.5),
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: Colors.white.withOpacity(0.15)),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
         ),
         child: Row(
           children: [
@@ -1537,7 +1534,7 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
                   return ListTile(
                     leading: CircleAvatar(
                       radius: 18,
-                      backgroundColor: AppColors.purple.withOpacity(0.3),
+                      backgroundColor: AppColors.purple.withValues(alpha: 0.3),
                       backgroundImage: v.avatarPath.startsWith('http') ? NetworkImage(v.avatarPath) : null,
                       child: v.avatarPath.startsWith('http') ? null : const Icon(Icons.person, color: Colors.white),
                     ),
@@ -1576,9 +1573,9 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.07),
+        color: Colors.white.withValues(alpha: 0.07),
         borderRadius: BorderRadius.circular(99),
-        border: Border.all(color: Colors.white.withOpacity(0.10)),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -2132,7 +2129,7 @@ class _GuestTile extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.05),
+        color: Colors.white.withValues(alpha: 0.05),
         borderRadius: BorderRadius.circular(16),
       ),
       child: Row(

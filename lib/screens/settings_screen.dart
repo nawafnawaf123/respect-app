@@ -1,3 +1,4 @@
+// ignore_for_file: deprecated_member_use, unused_element, unused_field, unused_import, unused_local_variable, unused_element_parameter, prefer_const_constructors, prefer_const_declarations, prefer_const_literals_to_create_immutables, curly_braces_in_flow_control_structures, sized_box_for_whitespace, dead_code, unnecessary_type_check, unnecessary_non_null_assertion, use_build_context_synchronously, unnecessary_brace_in_string_interps, prefer_final_fields
 import 'dart:convert';
 import 'dart:io';
 
@@ -185,11 +186,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
               begin: Alignment.centerLeft,
               end: Alignment.centerRight,
               colors: [
-                Colors.black.withOpacity(0.8),
-                Colors.black.withOpacity(0.5),
+                Colors.black.withValues(alpha: 0.8),
+                Colors.black.withValues(alpha: 0.5),
                 Colors.transparent,
-                Colors.black.withOpacity(0.5),
-                Colors.black.withOpacity(0.8),
+                Colors.black.withValues(alpha: 0.5),
+                Colors.black.withValues(alpha: 0.8),
               ],
               stops: const [0.0, 0.1, 0.5, 0.9, 1.0],
             ),
@@ -227,7 +228,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       value: themeProvider.isDark,
                       onChanged: (_) => themeProvider.toggle(),
                       secondary: Icon(isDark ? Icons.dark_mode : Icons.light_mode, color: AppColors.purple),
-                      activeColor: AppColors.purple,
+                      activeThumbColor: AppColors.purple,
                     ),
                   ).animate().fadeIn(delay: 100.ms),
 
@@ -240,7 +241,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       value: _privacyModeEnabled,
                       onChanged: _togglePrivacyMode,
                       secondary: const Icon(Icons.visibility_off_rounded, color: AppColors.purple),
-                      activeColor: AppColors.purple,
+                      activeThumbColor: AppColors.purple,
                     ),
                   ).animate().fadeIn(delay: 150.ms),
 
@@ -253,7 +254,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       value: _quickHideEnabled,
                       onChanged: _toggleQuickHide,
                       secondary: const Icon(Icons.touch_app_rounded, color: AppColors.purple),
-                      activeColor: AppColors.purple,
+                      activeThumbColor: AppColors.purple,
                     ),
                   ).animate().fadeIn(delay: 200.ms),
 

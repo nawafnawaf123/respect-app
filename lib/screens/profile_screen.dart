@@ -1,3 +1,4 @@
+// ignore_for_file: deprecated_member_use, unused_element, unused_field, unused_import, unused_element_parameter, prefer_const_constructors, prefer_const_declarations, use_build_context_synchronously, unnecessary_this, unnecessary_brace_in_string_interps, curly_braces_in_flow_control_structures, prefer_final_fields, unnecessary_type_check, unnecessary_non_null_assertion
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -579,7 +580,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               child: Column(
                 children: [
                   const SizedBox(height: 10),
-                  Container(width: 46, height: 5, decoration: BoxDecoration(color: AppColors.purple.withOpacity(.6), borderRadius: BorderRadius.circular(99))),
+                  Container(width: 46, height: 5, decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: .6), borderRadius: BorderRadius.circular(99))),
                   const SizedBox(height: 14),
                   Text(title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
                   const SizedBox(height: 8),
@@ -664,13 +665,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Center(child: Container(width: 46, height: 5, decoration: BoxDecoration(color: AppColors.purple.withOpacity(.55), borderRadius: BorderRadius.circular(99)))),
+                      Center(child: Container(width: 46, height: 5, decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: .55), borderRadius: BorderRadius.circular(99)))),
                       const SizedBox(height: 16),
                       Row(
                         children: [
                           Container(
                             padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(color: AppColors.purple.withOpacity(.15), shape: BoxShape.circle),
+                            decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: .15), shape: BoxShape.circle),
                             child: const Icon(Icons.verified_rounded, color: AppColors.purple),
                           ),
                           const SizedBox(width: 10),
@@ -693,9 +694,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           margin: const EdgeInsets.only(bottom: 10),
                           padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
-                            color: isDark ? Colors.white.withOpacity(.04) : Colors.white.withOpacity(.78),
+                            color: isDark ? Colors.white.withValues(alpha: .04) : Colors.white.withValues(alpha: .78),
                             borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: AppColors.purple.withOpacity(.20)),
+                            border: Border.all(color: AppColors.purple.withValues(alpha: .20)),
                           ),
                           child: Row(
                             children: [
@@ -705,7 +706,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 decoration: BoxDecoration(
                                   shape: BoxShape.circle,
                                   gradient: const LinearGradient(colors: [Color(0xFF7C3AED), Color(0xFFC084FC)]),
-                                  boxShadow: [BoxShadow(color: AppColors.purple.withOpacity(.28), blurRadius: 14)],
+                                  boxShadow: [BoxShadow(color: AppColors.purple.withValues(alpha: .28), blurRadius: 14)],
                                 ),
                                 child: const Icon(Icons.workspace_premium_rounded, color: Colors.white),
                               ),
@@ -840,14 +841,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
             color: bg,
             borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
             border: Border.all(color: border),
-            boxShadow: [BoxShadow(color: AppColors.purple.withOpacity(.20), blurRadius: 30, offset: const Offset(0, -12))],
+            boxShadow: [BoxShadow(color: AppColors.purple.withValues(alpha: .20), blurRadius: 30, offset: const Offset(0, -12))],
           ),
           child: SafeArea(
             top: false,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Container(width: 48, height: 5, decoration: BoxDecoration(color: AppColors.purple.withOpacity(.75), borderRadius: BorderRadius.circular(99))),
+                Container(width: 48, height: 5, decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: .75), borderRadius: BorderRadius.circular(99))),
                 const SizedBox(height: 16),
                 const Row(
                   children: [
@@ -886,7 +887,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       onPressed: () => Navigator.pop(context, 'finish'),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: AppColors.purple,
-                        side: BorderSide(color: AppColors.purple.withOpacity(.45)),
+                        side: BorderSide(color: AppColors.purple.withValues(alpha: .45)),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
                         padding: const EdgeInsets.symmetric(vertical: 13),
                       ),
@@ -1111,7 +1112,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Center(child: Container(width: 46, height: 5, decoration: BoxDecoration(color: AppColors.purple.withOpacity(.55), borderRadius: BorderRadius.circular(99)))),
+                  Center(child: Container(width: 46, height: 5, decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: .55), borderRadius: BorderRadius.circular(99)))),
                   const SizedBox(height: 16),
                   const Text('تعديل التغريدة', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
                   const SizedBox(height: 12),
@@ -1208,7 +1209,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Container(width: 46, height: 5, decoration: BoxDecoration(color: AppColors.purple.withOpacity(.55), borderRadius: BorderRadius.circular(99))),
+                Container(width: 46, height: 5, decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: .55), borderRadius: BorderRadius.circular(99))),
                 const SizedBox(height: 12),
                 ListTile(
                   leading: const Icon(Icons.edit_rounded, color: AppColors.purple),
@@ -1407,8 +1408,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 10, vertical: 6),
                               decoration: BoxDecoration(
-                                  color: Colors.black.withOpacity(.50),
-                                  border: Border.all(color: Colors.white.withOpacity(.18)),
+                                  color: Colors.black.withValues(alpha: .50),
+                                  border: Border.all(color: Colors.white.withValues(alpha: .18)),
                                   borderRadius: BorderRadius.circular(999)),
                               child: const Row(
                                 mainAxisSize: MainAxisSize.min,
@@ -1430,7 +1431,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             gradient: LinearGradient(
                               begin: Alignment.topCenter,
                               end: Alignment.bottomCenter,
-                              colors: [Colors.transparent, Colors.black.withOpacity(.32)],
+                              colors: [Colors.transparent, Colors.black.withValues(alpha: .32)],
                             ),
                           ),
                         ),
@@ -1534,9 +1535,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         Container(
                           padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
-                            color: AppColors.danger.withOpacity(0.10),
+                            color: AppColors.danger.withValues(alpha: 0.10),
                             borderRadius: BorderRadius.circular(16),
-                            border: Border.all(color: AppColors.danger.withOpacity(0.35)),
+                            border: Border.all(color: AppColors.danger.withValues(alpha: 0.35)),
                           ),
                           child: Row(
                             children: [
@@ -1578,11 +1579,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           borderRadius: BorderRadius.circular(22),
                           gradient: LinearGradient(
                             colors: [
-                              AppColors.purple.withOpacity(isDark ? .18 : .10),
-                              Colors.white.withOpacity(isDark ? .04 : .55),
+                              AppColors.purple.withValues(alpha: isDark ? .18 : .10),
+                              Colors.white.withValues(alpha: isDark ? .04 : .55),
                             ],
                           ),
-                          border: Border.all(color: AppColors.purple.withOpacity(.12)),
+                          border: Border.all(color: AppColors.purple.withValues(alpha: .12)),
                         ),
                         child: Row(children: [
                           _StatBox(label: 'منشورات', value: '$_postsCount'),
@@ -1604,7 +1605,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         child: FilledButton.icon(
                           onPressed: _activatingVerification ? null : _openVerificationSheet,
                           style: FilledButton.styleFrom(
-                            backgroundColor: _profileVerified ? AppColors.purple.withOpacity(.14) : AppColors.purple,
+                            backgroundColor: _profileVerified ? AppColors.purple.withValues(alpha: .14) : AppColors.purple,
                             foregroundColor: _profileVerified ? AppColors.purple : Colors.white,
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
                           ),
@@ -1624,8 +1625,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           onPressed: _loadingStory ? null : (_profileVerified ? (_myStories.isEmpty ? _pickStory : _openMyStory) : _openVerificationSheet),
                           style: FilledButton.styleFrom(
                             backgroundColor: !_profileVerified
-                                ? Colors.grey.withOpacity(.16)
-                                : (_myStories.isEmpty ? AppColors.purple.withOpacity(.16) : AppColors.purple),
+                                ? Colors.grey.withValues(alpha: .16)
+                                : (_myStories.isEmpty ? AppColors.purple.withValues(alpha: .16) : AppColors.purple),
                             foregroundColor: !_profileVerified
                                 ? (isDark ? AppColors.darkMuted : AppColors.lightMuted)
                                 : (_myStories.isEmpty ? AppColors.purple : Colors.white),
@@ -1659,7 +1660,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   }
                 },
                 style: FilledButton.styleFrom(
-                  backgroundColor: _editing ? AppColors.purple : AppColors.purple.withOpacity(0.18),
+                  backgroundColor: _editing ? AppColors.purple : AppColors.purple.withValues(alpha: 0.18),
                   foregroundColor: _editing ? Colors.white : AppColors.purple,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
                 ),
@@ -1684,9 +1685,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: AppColors.purple.withOpacity(.10),
+                  color: AppColors.purple.withValues(alpha: .10),
                   borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: AppColors.purple.withOpacity(.20)),
+                  border: Border.all(color: AppColors.purple.withValues(alpha: .20)),
                 ),
                 child: const Row(
                   children: [
@@ -2102,9 +2103,9 @@ class _ProfileStoryViewerState extends State<_ProfileStoryViewer> {
                             borderRadius: BorderRadius.circular(28),
                             child: Container(
                               decoration: BoxDecoration(
-                                color: Colors.black.withOpacity(.38),
-                                border: Border.all(color: Colors.white.withOpacity(.12)),
-                                boxShadow: [BoxShadow(color: AppColors.purple.withOpacity(.25), blurRadius: 42)],
+                                color: Colors.black.withValues(alpha: .38),
+                                border: Border.all(color: Colors.white.withValues(alpha: .12)),
+                                boxShadow: [BoxShadow(color: AppColors.purple.withValues(alpha: .25), blurRadius: 42)],
                               ),
                               child: Center(child: _media(url)),
                             ),
@@ -2144,7 +2145,7 @@ class _ProfileStoryViewerState extends State<_ProfileStoryViewer> {
                                 decoration: BoxDecoration(
                                   shape: BoxShape.circle,
                                   gradient: const LinearGradient(colors: [AppColors.purpleLight, AppColors.purple, Color(0xFFFF4FD8)]),
-                                  boxShadow: [BoxShadow(color: AppColors.purple.withOpacity(.45), blurRadius: 18)],
+                                  boxShadow: [BoxShadow(color: AppColors.purple.withValues(alpha: .45), blurRadius: 18)],
                                 ),
                                 child: CircleAvatar(
                                   radius: 20,
@@ -2159,7 +2160,7 @@ class _ProfileStoryViewerState extends State<_ProfileStoryViewer> {
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 15)),
-                                    Text(username, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: Colors.white.withOpacity(.65), fontWeight: FontWeight.w700, fontSize: 12)),
+                                    Text(username, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: Colors.white.withValues(alpha: .65), fontWeight: FontWeight.w700, fontSize: 12)),
                                   ],
                                 ),
                               ),
@@ -2200,9 +2201,9 @@ class _ProfileStoryViewerState extends State<_ProfileStoryViewer> {
                                   margin: const EdgeInsets.only(bottom: 10),
                                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                                   decoration: BoxDecoration(
-                                    color: Colors.black.withOpacity(.32),
+                                    color: Colors.black.withValues(alpha: .32),
                                     borderRadius: BorderRadius.circular(999),
-                                    border: Border.all(color: Colors.white.withOpacity(.14)),
+                                    border: Border.all(color: Colors.white.withValues(alpha: .14)),
                                   ),
                                   child: Text('$_likes إعجاب · $_comments تعليق', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
                                 ),
@@ -2213,9 +2214,9 @@ class _ProfileStoryViewerState extends State<_ProfileStoryViewer> {
                               Expanded(
                                 child: Container(
                                   decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(.10),
+                                    color: Colors.white.withValues(alpha: .10),
                                     borderRadius: BorderRadius.circular(24),
-                                    border: Border.all(color: Colors.white.withOpacity(.16)),
+                                    border: Border.all(color: Colors.white.withValues(alpha: .16)),
                                   ),
                                   child: TextField(
                                     controller: _commentCtrl,
@@ -2224,7 +2225,7 @@ class _ProfileStoryViewerState extends State<_ProfileStoryViewer> {
                                     style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
                                     decoration: InputDecoration(
                                       hintText: 'اكتب تعليق على الستوري...',
-                                      hintStyle: TextStyle(color: Colors.white.withOpacity(.58)),
+                                      hintStyle: TextStyle(color: Colors.white.withValues(alpha: .58)),
                                       border: InputBorder.none,
                                       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                                     ),
@@ -2261,7 +2262,7 @@ class _StoryRoundButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: filled ? AppColors.purple : Colors.white.withOpacity(.12),
+      color: filled ? AppColors.purple : Colors.white.withValues(alpha: .12),
       shape: const CircleBorder(),
       child: InkWell(
         customBorder: const CircleBorder(),
@@ -2272,8 +2273,8 @@ class _StoryRoundButton extends StatelessWidget {
           alignment: Alignment.center,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            border: Border.all(color: Colors.white.withOpacity(.14)),
-            boxShadow: filled ? [BoxShadow(color: AppColors.purple.withOpacity(.38), blurRadius: 18)] : null,
+            border: Border.all(color: Colors.white.withValues(alpha: .14)),
+            boxShadow: filled ? [BoxShadow(color: AppColors.purple.withValues(alpha: .38), blurRadius: 18)] : null,
           ),
           child: Icon(icon, color: Colors.white, size: 22),
         ),
@@ -2295,14 +2296,14 @@ class _StoryPickerTile extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
-        color: AppColors.purple.withOpacity(isDark ? .12 : .08),
+        color: AppColors.purple.withValues(alpha: isDark ? .12 : .08),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppColors.purple.withOpacity(.16)),
+        border: Border.all(color: AppColors.purple.withValues(alpha: .16)),
       ),
       child: ListTile(
         onTap: onTap,
         leading: CircleAvatar(
-          backgroundColor: AppColors.purple.withOpacity(.18),
+          backgroundColor: AppColors.purple.withValues(alpha: .18),
           child: Icon(icon, color: AppColors.purple),
         ),
         title: Text(title, style: const TextStyle(fontWeight: FontWeight.w900)),
@@ -2336,14 +2337,14 @@ class _StoryActivitySheet extends StatelessWidget {
           decoration: BoxDecoration(
             color: isDark ? AppColors.darkBg : AppColors.lightBg,
             borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
-            border: Border.all(color: AppColors.purple.withOpacity(.18)),
-            boxShadow: [BoxShadow(color: AppColors.purple.withOpacity(.20), blurRadius: 36, offset: const Offset(0, -14))],
+            border: Border.all(color: AppColors.purple.withValues(alpha: .18)),
+            boxShadow: [BoxShadow(color: AppColors.purple.withValues(alpha: .20), blurRadius: 36, offset: const Offset(0, -14))],
           ),
           child: ListView(
             controller: controller,
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
             children: [
-              Center(child: Container(width: 50, height: 5, decoration: BoxDecoration(color: AppColors.purple.withOpacity(.65), borderRadius: BorderRadius.circular(99)))),
+              Center(child: Container(width: 50, height: 5, decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: .65), borderRadius: BorderRadius.circular(99)))),
               const SizedBox(height: 16),
               const Text('تفاعل الستوري', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
               const SizedBox(height: 12),
@@ -2398,9 +2399,9 @@ class _StoryActivitySection extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
       decoration: BoxDecoration(
-        color: AppColors.purple.withOpacity(.07),
+        color: AppColors.purple.withValues(alpha: .07),
         borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: AppColors.purple.withOpacity(.13)),
+        border: Border.all(color: AppColors.purple.withValues(alpha: .13)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2929,7 +2930,7 @@ class _AutoStreamPreview extends StatelessWidget {
               gradient: LinearGradient(
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
-                  colors: [Colors.black.withOpacity(0.08), Colors.black.withOpacity(0.72)]),
+                  colors: [Colors.black.withValues(alpha: 0.08), Colors.black.withValues(alpha: 0.72)]),
             ),
           ),
           PositionedDirectional(
@@ -3029,9 +3030,9 @@ class _InfoChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
       decoration: BoxDecoration(
-        color: AppColors.purple.withOpacity(0.12),
+        color: AppColors.purple.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: AppColors.purple.withOpacity(0.22)),
+        border: Border.all(color: AppColors.purple.withValues(alpha: 0.22)),
       ),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         Icon(icon, color: AppColors.purple, size: 16),
@@ -3100,7 +3101,7 @@ class _ProfileContentTabs extends StatelessWidget {
             children: [
               Container(
                 decoration: BoxDecoration(
-                  border: Border(bottom: BorderSide(color: AppColors.purple.withOpacity(.12))),
+                  border: Border(bottom: BorderSide(color: AppColors.purple.withValues(alpha: .12))),
                 ),
                 child: TabBar(
                   labelColor: AppColors.purple,
@@ -3232,7 +3233,7 @@ class _ProfilePostsList extends StatelessWidget {
       child: ListView.separated(
         padding: EdgeInsets.zero,
         itemCount: items.length,
-        separatorBuilder: (_, __) => Divider(height: 1, color: AppColors.purple.withOpacity(.10)),
+        separatorBuilder: (_, __) => Divider(height: 1, color: AppColors.purple.withValues(alpha: .10)),
         itemBuilder: (context, index) {
           final p = items[index];
           final id = (p['id'] ?? '').toString();
@@ -3372,8 +3373,8 @@ class _ProfileTweetCard extends StatelessWidget {
                       height: mediaOnly ? 230 : 190,
                       width: double.infinity,
                       decoration: BoxDecoration(
-                        color: AppColors.purple.withOpacity(.10),
-                        border: Border.all(color: AppColors.purple.withOpacity(.14)),
+                        color: AppColors.purple.withValues(alpha: .10),
+                        border: Border.all(color: AppColors.purple.withValues(alpha: .14)),
                         borderRadius: BorderRadius.circular(18),
                       ),
                       child: image.isNotEmpty && mediaProvider != null
@@ -3544,7 +3545,7 @@ class _ProfileRepliesList extends StatelessWidget {
     return ListView.separated(
       padding: EdgeInsets.zero,
       itemCount: items.length,
-      separatorBuilder: (_, __) => Divider(height: 1, color: AppColors.purple.withOpacity(.10)),
+      separatorBuilder: (_, __) => Divider(height: 1, color: AppColors.purple.withValues(alpha: .10)),
       itemBuilder: (context, index) {
         final r = items[index];
         final text = (r['text'] ?? '').toString();
@@ -3575,9 +3576,9 @@ class _ProfileRepliesList extends StatelessWidget {
                         width: double.infinity,
                         padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
-                          color: AppColors.purple.withOpacity(0.10),
+                          color: AppColors.purple.withValues(alpha: 0.10),
                           borderRadius: BorderRadius.circular(14),
-                          border: Border.all(color: AppColors.purple.withOpacity(0.16)),
+                          border: Border.all(color: AppColors.purple.withValues(alpha: 0.16)),
                         ),
                         child: _LinkifiedText('ردًا على ${postUser.isEmpty ? 'منشور' : postUser}: $postText', maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(color: muted, fontSize: 12, height: 1.35, fontWeight: FontWeight.w700)),
                       ),
@@ -3609,7 +3610,7 @@ class _RespectAiVerifiedBadge extends StatelessWidget {
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
-        boxShadow: [BoxShadow(color: AppColors.purple.withOpacity(0.35), blurRadius: 8)],
+        boxShadow: [BoxShadow(color: AppColors.purple.withValues(alpha: 0.35), blurRadius: 8)],
       ),
       child: const Icon(Icons.check_rounded, color: Colors.white, size: 12),
     );
@@ -3642,7 +3643,7 @@ class _StatBox extends StatelessWidget {
         border: Border.all(
           color: onTap == null
               ? Colors.transparent
-              : AppColors.purple.withOpacity(0.22),
+              : AppColors.purple.withValues(alpha: 0.22),
         ),
       ),
       child: Column(children: [

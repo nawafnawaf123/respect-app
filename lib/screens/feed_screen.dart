@@ -1,3 +1,4 @@
+// ignore_for_file: deprecated_member_use, unused_element, unused_field, unused_import, unused_element_parameter, prefer_const_constructors, prefer_const_declarations, use_build_context_synchronously, unnecessary_this, unnecessary_brace_in_string_interps, curly_braces_in_flow_control_structures, prefer_final_fields, unnecessary_type_check, unnecessary_non_null_assertion
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -1925,12 +1926,12 @@ class _FeedScreenState extends State<FeedScreen> {
             decoration: BoxDecoration(
               color: isDark ? AppColors.darkBg : AppColors.lightBg,
               borderRadius: BorderRadius.circular(28),
-              border: Border.all(color: AppColors.purple.withOpacity(0.25)),
+              border: Border.all(color: AppColors.purple.withValues(alpha: 0.25)),
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Container(width: 46, height: 5, decoration: BoxDecoration(color: AppColors.purple.withOpacity(0.35), borderRadius: BorderRadius.circular(99))),
+                Container(width: 46, height: 5, decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: 0.35), borderRadius: BorderRadius.circular(99))),
                 const SizedBox(height: 12),
                 ListTile(
                   leading: const Icon(Icons.flag_rounded, color: Colors.orange),
@@ -3354,7 +3355,7 @@ class _FeedScreenState extends State<FeedScreen> {
                   boxShadow: hovering
                       ? [
                     BoxShadow(
-                      color: AppColors.purple.withOpacity(0.42),
+                      color: AppColors.purple.withValues(alpha: 0.42),
                       blurRadius: 24,
                       spreadRadius: 4,
                     ),
@@ -3460,7 +3461,7 @@ class _PublishProgressBar extends StatelessWidget {
                 minHeight: 6,
                 value: progress <= 0 ? null : progress,
                 color: AppColors.purple,
-                backgroundColor: AppColors.purple.withOpacity(isDark ? 0.20 : 0.14),
+                backgroundColor: AppColors.purple.withValues(alpha: isDark ? 0.20 : 0.14),
               ),
             ),
           ],
@@ -3559,7 +3560,7 @@ class _PostsList extends StatelessWidget {
               padding: const EdgeInsets.all(24),
               children: [
                 const SizedBox(height: 120),
-                Icon(Icons.public_rounded, size: 76, color: AppColors.purple.withOpacity(0.9)),
+                Icon(Icons.public_rounded, size: 76, color: AppColors.purple.withValues(alpha: 0.9)),
                 const SizedBox(height: 14),
                 Center(child: Text(emptyText, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900))),
                 const SizedBox(height: 6),
@@ -3702,16 +3703,16 @@ class _RefreshAvatarsStrip extends StatelessWidget {
               ],
             ),
             borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: AppColors.purple.withOpacity(0.70), width: 1.2),
+            border: Border.all(color: AppColors.purple.withValues(alpha: 0.70), width: 1.2),
             boxShadow: [
               BoxShadow(
-                color: AppColors.purple.withOpacity(0.42),
+                color: AppColors.purple.withValues(alpha: 0.42),
                 blurRadius: 22,
                 spreadRadius: 1,
                 offset: const Offset(0, 8),
               ),
               BoxShadow(
-                color: Colors.black.withOpacity(0.35),
+                color: Colors.black.withValues(alpha: 0.35),
                 blurRadius: 18,
                 offset: const Offset(0, 10),
               ),
@@ -3749,11 +3750,11 @@ class _RefreshAvatarsStrip extends StatelessWidget {
                             height: 34,
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
-                              border: Border.all(color: AppColors.purple.withOpacity(0.95), width: 2),
+                              border: Border.all(color: AppColors.purple.withValues(alpha: 0.95), width: 2),
                             ),
                             child: CircleAvatar(
                               radius: 15,
-                              backgroundColor: AppColors.purple.withOpacity(0.55),
+                              backgroundColor: AppColors.purple.withValues(alpha: 0.55),
                               backgroundImage: avatarProviderForPath(shown[i]['avatar']),
                               child: avatarProviderForPath(shown[i]['avatar']) == null
                                   ? const Icon(Icons.person_rounded, size: 17, color: Colors.white)
@@ -3770,9 +3771,9 @@ class _RefreshAvatarsStrip extends StatelessWidget {
                 width: 30,
                 height: 30,
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.14),
+                  color: Colors.white.withValues(alpha: 0.14),
                   shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white.withOpacity(0.22)),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.22)),
                 ),
                 child: const Icon(Icons.keyboard_double_arrow_up_rounded, color: Colors.white, size: 21),
               ),
@@ -3811,7 +3812,7 @@ class _CommunityQuickTab extends StatelessWidget {
       children: [
         Container(
           padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
-          decoration: BoxDecoration(border: Border(bottom: BorderSide(color: AppColors.purple.withOpacity(0.20)))),
+          decoration: BoxDecoration(border: Border(bottom: BorderSide(color: AppColors.purple.withValues(alpha: 0.20)))),
           child: Row(
             children: [
               Expanded(child: InkWell(onTap: onOpenCommunity, child: Text('# ${community.name}', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)))),
@@ -3824,7 +3825,7 @@ class _CommunityQuickTab extends StatelessWidget {
                 ],
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  decoration: BoxDecoration(color: AppColors.purple.withOpacity(0.14), borderRadius: BorderRadius.circular(999)),
+                  decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: 0.14), borderRadius: BorderRadius.circular(999)),
                   child: Text(sortMode == 'likes' ? 'الأكثر إعجاباً' : 'الأحدث', style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w900)),
                 ),
               ),
@@ -3893,7 +3894,7 @@ class _CommunitiesTab extends StatelessWidget {
                   Container(
                     width: 48,
                     height: 48,
-                    decoration: BoxDecoration(color: AppColors.purple.withOpacity(0.16), shape: BoxShape.circle),
+                    decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: 0.16), shape: BoxShape.circle),
                     child: const Icon(Icons.add_rounded, color: AppColors.purple),
                   ),
                   const SizedBox(width: 12),
@@ -4061,7 +4062,7 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
               style: FilledButton.styleFrom(
                 backgroundColor: AppColors.purple,
                 foregroundColor: Colors.white,
-                disabledBackgroundColor: AppColors.purple.withOpacity(0.28),
+                disabledBackgroundColor: AppColors.purple.withValues(alpha: 0.28),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
               ),
               child: const Text('إنشاء', style: TextStyle(fontWeight: FontWeight.w900)),
@@ -4084,7 +4085,7 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
                         width: 52,
                         height: 52,
                         decoration: BoxDecoration(
-                          color: AppColors.purple.withOpacity(0.16),
+                          color: AppColors.purple.withValues(alpha: 0.16),
                           shape: BoxShape.circle,
                         ),
                         child: const Icon(Icons.groups_2_rounded, color: AppColors.purple, size: 30),
@@ -4249,7 +4250,7 @@ class _RespectAiVerifiedBadge extends StatelessWidget {
         ),
         boxShadow: [
           BoxShadow(
-            color: AppColors.purple.withOpacity(0.38),
+            color: AppColors.purple.withValues(alpha: 0.38),
             blurRadius: 8,
             spreadRadius: 0.5,
           ),
@@ -5200,9 +5201,9 @@ class _RepliesScreenState extends State<RepliesScreen> {
                         width: double.infinity,
                         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                         decoration: BoxDecoration(
-                          color: AppColors.purple.withOpacity(0.10),
+                          color: AppColors.purple.withValues(alpha: 0.10),
                           borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: AppColors.purple.withOpacity(0.22)),
+                          border: Border.all(color: AppColors.purple.withValues(alpha: 0.22)),
                         ),
                         child: Row(
                           children: [
@@ -5524,7 +5525,7 @@ class _LuxuryActionButtonState extends State<_LuxuryActionButton> with SingleTic
                           height: 34,
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
-                            border: Border.all(color: widget.activeColor.withOpacity(0.45), width: 1.4),
+                            border: Border.all(color: widget.activeColor.withValues(alpha: 0.45), width: 1.4),
                           ),
                         )
                             .animate(key: ValueKey('ring_${DateTime.now().microsecondsSinceEpoch}'))
@@ -5869,10 +5870,10 @@ class _MentionSuggestionsBox extends StatelessWidget {
     return Container(
       constraints: const BoxConstraints(maxHeight: 260),
       decoration: BoxDecoration(
-        color: isDark ? AppColors.darkCard.withOpacity(0.98) : AppColors.lightCard,
+        color: isDark ? AppColors.darkCard.withValues(alpha: 0.98) : AppColors.lightCard,
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: AppColors.purple.withOpacity(0.35)),
-        boxShadow: [BoxShadow(color: AppColors.purple.withOpacity(0.16), blurRadius: 22, offset: const Offset(0, 10))],
+        border: Border.all(color: AppColors.purple.withValues(alpha: 0.35)),
+        boxShadow: [BoxShadow(color: AppColors.purple.withValues(alpha: 0.16), blurRadius: 22, offset: const Offset(0, 10))],
       ),
       child: loading && users.isEmpty
           ? const Padding(
@@ -5897,7 +5898,7 @@ class _MentionSuggestionsBox extends StatelessWidget {
           return ListTile(
             dense: true,
             leading: CircleAvatar(
-              backgroundColor: AppColors.purple.withOpacity(0.25),
+              backgroundColor: AppColors.purple.withValues(alpha: 0.25),
               backgroundImage: avatarProvider(avatar),
               child: avatarProvider(avatar) == null ? const Icon(Icons.person_rounded, color: Colors.white) : null,
             ),
@@ -5947,9 +5948,9 @@ class _HashtagQuickChips extends StatelessWidget {
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
                   decoration: BoxDecoration(
-                    color: AppColors.purple.withOpacity(isDark ? 0.16 : 0.10),
+                    color: AppColors.purple.withValues(alpha: isDark ? 0.16 : 0.10),
                     borderRadius: BorderRadius.circular(999),
-                    border: Border.all(color: AppColors.purple.withOpacity(0.22)),
+                    border: Border.all(color: AppColors.purple.withValues(alpha: 0.22)),
                   ),
                   child: Text(
                     tag,
@@ -6000,7 +6001,7 @@ class _PostCharacterLimitCircle extends StatelessWidget {
                 value: progress,
                 strokeWidth: 4,
                 color: danger ? AppColors.danger : AppColors.purple,
-                backgroundColor: AppColors.purple.withOpacity(.16),
+                backgroundColor: AppColors.purple.withValues(alpha: .16),
               ),
               Icon(danger ? Icons.priority_high_rounded : Icons.edit_rounded, size: 15, color: danger ? AppColors.danger : AppColors.purple),
             ],
@@ -6487,8 +6488,8 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
     final hasContent = _ctrl.text.trim().isNotEmpty || _selectedMedia != null || _voicePath != null || _isRecording;
     final textColor = isDark ? Colors.white : const Color(0xFF171225);
     final muted = isDark ? AppColors.darkMuted : AppColors.lightMuted;
-    final cardColor = isDark ? Colors.white.withOpacity(0.075) : Colors.white.withOpacity(0.78);
-    final borderColor = isDark ? Colors.white.withOpacity(0.12) : AppColors.purple.withOpacity(0.14);
+    final cardColor = isDark ? Colors.white.withValues(alpha: 0.075) : Colors.white.withValues(alpha: 0.78);
+    final borderColor = isDark ? Colors.white.withValues(alpha: 0.12) : AppColors.purple.withValues(alpha: 0.14);
     final bgTop = isDark ? const Color(0xFF12091F) : const Color(0xFFF8F2FF);
     final bgBottom = isDark ? const Color(0xFF050308) : const Color(0xFFFFFFFF);
 
@@ -6524,8 +6525,8 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
                   shape: BoxShape.circle,
                   gradient: RadialGradient(
                     colors: [
-                      AppColors.purple.withOpacity(isDark ? 0.34 : 0.22),
-                      AppColors.purple.withOpacity(0.0),
+                      AppColors.purple.withValues(alpha: isDark ? 0.34 : 0.22),
+                      AppColors.purple.withValues(alpha: 0.0),
                     ],
                   ),
                 ),
@@ -6543,8 +6544,8 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
                   shape: BoxShape.circle,
                   gradient: RadialGradient(
                     colors: [
-                      const Color(0xFF8B5CF6).withOpacity(isDark ? 0.22 : 0.13),
-                      const Color(0xFF8B5CF6).withOpacity(0.0),
+                      const Color(0xFF8B5CF6).withValues(alpha: isDark ? 0.22 : 0.13),
+                      const Color(0xFF8B5CF6).withValues(alpha: 0.0),
                     ],
                   ),
                 ),
@@ -6612,7 +6613,7 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
                             boxShadow: hasContent
                                 ? [
                               BoxShadow(
-                                color: AppColors.purple.withOpacity(0.34),
+                                color: AppColors.purple.withValues(alpha: 0.34),
                                 blurRadius: 22,
                                 offset: const Offset(0, 10),
                               ),
@@ -6626,8 +6627,8 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
                             style: FilledButton.styleFrom(
                               backgroundColor: AppColors.purple,
                               foregroundColor: Colors.white,
-                              disabledBackgroundColor: AppColors.purple.withOpacity(0.22),
-                              disabledForegroundColor: Colors.white.withOpacity(0.55),
+                              disabledBackgroundColor: AppColors.purple.withValues(alpha: 0.22),
+                              disabledForegroundColor: Colors.white.withValues(alpha: 0.55),
                               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
                               textStyle: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13),
@@ -6651,7 +6652,7 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
                           border: Border.all(color: borderColor),
                           boxShadow: [
                             BoxShadow(
-                              color: Colors.black.withOpacity(isDark ? 0.22 : 0.07),
+                              color: Colors.black.withValues(alpha: isDark ? 0.22 : 0.07),
                               blurRadius: 28,
                               offset: const Offset(0, 18),
                             ),
@@ -6665,13 +6666,13 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
                                 shape: BoxShape.circle,
                                 gradient: LinearGradient(
                                   colors: [
-                                    AppColors.purple.withOpacity(0.95),
-                                    const Color(0xFFEC4899).withOpacity(0.78),
+                                    AppColors.purple.withValues(alpha: 0.95),
+                                    const Color(0xFFEC4899).withValues(alpha: 0.78),
                                   ],
                                 ),
                                 boxShadow: [
                                   BoxShadow(
-                                    color: AppColors.purple.withOpacity(0.26),
+                                    color: AppColors.purple.withValues(alpha: 0.26),
                                     blurRadius: 18,
                                     offset: const Offset(0, 8),
                                   ),
@@ -6715,7 +6716,7 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
                               ),
                             ),
                             Material(
-                              color: AppColors.purple.withOpacity(0.10),
+                              color: AppColors.purple.withValues(alpha: 0.10),
                               borderRadius: BorderRadius.circular(999),
                               child: InkWell(
                                 borderRadius: BorderRadius.circular(999),
@@ -6724,7 +6725,7 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
                                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
                                   decoration: BoxDecoration(
                                     borderRadius: BorderRadius.circular(999),
-                                    border: Border.all(color: AppColors.purple.withOpacity(0.26)),
+                                    border: Border.all(color: AppColors.purple.withValues(alpha: 0.26)),
                                   ),
                                   child: Row(
                                     mainAxisSize: MainAxisSize.min,
@@ -6765,13 +6766,13 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
                           borderRadius: BorderRadius.circular(34),
                           border: Border.all(
                             color: _textFocusNode.hasFocus
-                                ? AppColors.purple.withOpacity(0.42)
+                                ? AppColors.purple.withValues(alpha: 0.42)
                                 : borderColor,
                             width: _textFocusNode.hasFocus ? 1.4 : 1,
                           ),
                           boxShadow: [
                             BoxShadow(
-                              color: AppColors.purple.withOpacity(_textFocusNode.hasFocus ? 0.16 : 0.07),
+                              color: AppColors.purple.withValues(alpha: _textFocusNode.hasFocus ? 0.16 : 0.07),
                               blurRadius: _textFocusNode.hasFocus ? 32 : 20,
                               offset: const Offset(0, 14),
                             ),
@@ -6784,7 +6785,7 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
                                 Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                                   decoration: BoxDecoration(
-                                    color: AppColors.purple.withOpacity(0.10),
+                                    color: AppColors.purple.withValues(alpha: 0.10),
                                     borderRadius: BorderRadius.circular(999),
                                   ),
                                   child: const Row(
@@ -6825,7 +6826,7 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
                               decoration: InputDecoration(
                                 hintText: 'وش ودك تنشر اليوم؟',
                                 hintStyle: TextStyle(
-                                  color: muted.withOpacity(0.78),
+                                  color: muted.withValues(alpha: 0.78),
                                   fontSize: 22,
                                   fontWeight: FontWeight.w800,
                                   height: 1.25,
@@ -6854,7 +6855,7 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
                               child: LinearProgressIndicator(
                                 value: widget.maxChars == 0 ? 0 : (_ctrl.text.runes.length / widget.maxChars).clamp(0.0, 1.0),
                                 minHeight: 5,
-                                backgroundColor: AppColors.purple.withOpacity(0.10),
+                                backgroundColor: AppColors.purple.withValues(alpha: 0.10),
                                 valueColor: AlwaysStoppedAnimation<Color>(
                                   _ctrl.text.runes.length > widget.maxChars * 0.9
                                       ? AppColors.danger
@@ -6911,7 +6912,7 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
                   border: Border.all(color: borderColor),
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withOpacity(isDark ? 0.32 : 0.10),
+                      color: Colors.black.withValues(alpha: isDark ? 0.32 : 0.10),
                       blurRadius: 28,
                       offset: const Offset(0, 12),
                     ),
@@ -6932,7 +6933,7 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
                         boxShadow: _isRecording
                             ? [
                           BoxShadow(
-                            color: AppColors.danger.withOpacity(0.28),
+                            color: AppColors.danger.withValues(alpha: 0.28),
                             blurRadius: 18,
                             offset: const Offset(0, 7),
                           ),
@@ -6987,8 +6988,8 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
                       style: FilledButton.styleFrom(
                         backgroundColor: AppColors.purple,
                         foregroundColor: Colors.white,
-                        disabledBackgroundColor: AppColors.purple.withOpacity(0.20),
-                        disabledForegroundColor: Colors.white.withOpacity(0.55),
+                        disabledBackgroundColor: AppColors.purple.withValues(alpha: 0.20),
+                        disabledForegroundColor: Colors.white.withValues(alpha: 0.55),
                         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 13),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
                         textStyle: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13),
@@ -7250,7 +7251,7 @@ class _UserProfileViewScreenState extends State<UserProfileViewScreen> with Sing
         decoration: BoxDecoration(
           color: isDark ? AppColors.darkBg : AppColors.lightBg,
           borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-          border: Border.all(color: AppColors.purple.withOpacity(0.28)),
+          border: Border.all(color: AppColors.purple.withValues(alpha: 0.28)),
         ),
         child: SafeArea(
           top: false,
@@ -7258,7 +7259,7 @@ class _UserProfileViewScreenState extends State<UserProfileViewScreen> with Sing
             mainAxisSize: MainAxisSize.min,
             children: [
               const SizedBox(height: 10),
-              Container(width: 44, height: 5, decoration: BoxDecoration(color: AppColors.purple.withOpacity(0.45), borderRadius: BorderRadius.circular(99))),
+              Container(width: 44, height: 5, decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: 0.45), borderRadius: BorderRadius.circular(99))),
               Padding(
                 padding: const EdgeInsets.all(16),
                 child: Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
@@ -7269,7 +7270,7 @@ class _UserProfileViewScreenState extends State<UserProfileViewScreen> with Sing
                     : ListView.separated(
                   padding: const EdgeInsets.fromLTRB(14, 0, 14, 20),
                   itemCount: users.length,
-                  separatorBuilder: (_, __) => Divider(color: AppColors.purple.withOpacity(0.12)),
+                  separatorBuilder: (_, __) => Divider(color: AppColors.purple.withValues(alpha: 0.12)),
                   itemBuilder: (context, i) {
                     final u = users[i];
                     final username = SupabaseService.displayUsername((u['username'] ?? u['follower_username'] ?? u['target_username'] ?? '').toString());
@@ -7337,7 +7338,7 @@ class _UserProfileViewScreenState extends State<UserProfileViewScreen> with Sing
                         borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
                         gradient: const LinearGradient(colors: [Color(0xFF24103F), AppColors.purple, Color(0xFF7C3AED)]),
                         image: cover == null ? null : DecorationImage(image: cover, fit: BoxFit.cover),
-                        boxShadow: [BoxShadow(color: AppColors.purple.withOpacity(0.22), blurRadius: 28, offset: const Offset(0, 10))],
+                        boxShadow: [BoxShadow(color: AppColors.purple.withValues(alpha: 0.22), blurRadius: 28, offset: const Offset(0, 10))],
                       ),
                       child: cover == null ? null : Container(
                         decoration: BoxDecoration(
@@ -7345,7 +7346,7 @@ class _UserProfileViewScreenState extends State<UserProfileViewScreen> with Sing
                           gradient: LinearGradient(
                             begin: Alignment.topCenter,
                             end: Alignment.bottomCenter,
-                            colors: [Colors.black.withOpacity(0.06), Colors.black.withOpacity(0.42)],
+                            colors: [Colors.black.withValues(alpha: 0.06), Colors.black.withValues(alpha: 0.42)],
                           ),
                         ),
                       ),
@@ -7460,9 +7461,9 @@ class _MiniChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.14),
+        color: color.withValues(alpha: 0.14),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: color.withOpacity(0.35)),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
       ),
       child: Text(text, style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w900)),
     );
@@ -7519,7 +7520,7 @@ class _ProfilePostsList extends StatelessWidget {
     return ListView.separated(
       padding: const EdgeInsets.fromLTRB(0, 0, 0, 20),
       itemCount: posts.length,
-      separatorBuilder: (_, __) => Divider(height: 1, thickness: 0.7, color: AppColors.purple.withOpacity(0.32)),
+      separatorBuilder: (_, __) => Divider(height: 1, thickness: 0.7, color: AppColors.purple.withValues(alpha: 0.32)),
       itemBuilder: (context, i) {
         final post = posts[i];
         final avatar = FeedScreenStateHelper.profileImageProvider(post.avatarPath);
@@ -7535,7 +7536,7 @@ class _ProfilePostsList extends StatelessWidget {
                   onTap: () => onMentionTap?.call(post.username),
                   child: CircleAvatar(
                     radius: 23,
-                    backgroundColor: AppColors.purple.withOpacity(.35),
+                    backgroundColor: AppColors.purple.withValues(alpha: .35),
                     backgroundImage: avatar,
                     child: avatar == null ? const Icon(Icons.person_rounded, color: Colors.white) : null,
                   ),
@@ -7678,10 +7679,10 @@ class _RoundProfileButton extends StatelessWidget {
         height: 46,
         padding: const EdgeInsets.symmetric(horizontal: 16),
         decoration: BoxDecoration(
-          color: filled ? background : AppColors.purple.withOpacity(0.12),
+          color: filled ? background : AppColors.purple.withValues(alpha: 0.12),
           borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: filled ? (background ?? AppColors.purple) : AppColors.purple.withOpacity(0.65)),
-          boxShadow: filled ? [BoxShadow(color: AppColors.purple.withOpacity(0.20), blurRadius: 16)] : null,
+          border: Border.all(color: filled ? (background ?? AppColors.purple) : AppColors.purple.withValues(alpha: 0.65)),
+          boxShadow: filled ? [BoxShadow(color: AppColors.purple.withValues(alpha: 0.20), blurRadius: 16)] : null,
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -7715,9 +7716,9 @@ class _AnimatedBellButton extends StatelessWidget {
         height: 46,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: enabled ? Colors.amberAccent.withOpacity(0.17) : AppColors.purple.withOpacity(0.12),
-          border: Border.all(color: enabled ? Colors.amberAccent : AppColors.purple.withOpacity(0.65), width: enabled ? 1.5 : 1),
-          boxShadow: enabled ? [BoxShadow(color: Colors.amberAccent.withOpacity(0.22), blurRadius: 18)] : null,
+          color: enabled ? Colors.amberAccent.withValues(alpha: 0.17) : AppColors.purple.withValues(alpha: 0.12),
+          border: Border.all(color: enabled ? Colors.amberAccent : AppColors.purple.withValues(alpha: 0.65), width: enabled ? 1.5 : 1),
+          boxShadow: enabled ? [BoxShadow(color: Colors.amberAccent.withValues(alpha: 0.22), blurRadius: 18)] : null,
         ),
         child: Icon(enabled ? Icons.notifications_active_rounded : Icons.notifications_none_rounded, color: enabled ? Colors.amberAccent : AppColors.purple, size: 23),
       ),
@@ -7783,9 +7784,9 @@ class _QuotedPostPreview extends StatelessWidget {
         width: double.infinity,
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: AppColors.purple.withOpacity(0.06),
+          color: AppColors.purple.withValues(alpha: 0.06),
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: AppColors.purple.withOpacity(0.30)),
+          border: Border.all(color: AppColors.purple.withValues(alpha: 0.30)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -7794,7 +7795,7 @@ class _QuotedPostPreview extends StatelessWidget {
               children: [
                 CircleAvatar(
                   radius: 13,
-                  backgroundColor: AppColors.purple.withOpacity(0.25),
+                  backgroundColor: AppColors.purple.withValues(alpha: 0.25),
                   backgroundImage: FeedScreenStateHelper.profileImageProvider(post.avatarPath),
                   child: FeedScreenStateHelper.profileImageProvider(post.avatarPath) == null
                       ? const Icon(Icons.person_rounded, size: 14, color: Colors.white)
@@ -7893,11 +7894,11 @@ class _PostCard extends StatelessWidget {
     final isTimelineRepost = post.repostedByUsername != null;
     final dimmedOpacity = isTimelineRepost ? 0.68 : 1.0;
     final repostTint = isDark
-        ? Colors.white.withOpacity(0.018)
-        : Colors.black.withOpacity(0.018);
+        ? Colors.white.withValues(alpha: 0.018)
+        : Colors.black.withValues(alpha: 0.018);
     final repostBorderColor = isTimelineRepost
-        ? AppColors.purple.withOpacity(0.16)
-        : AppColors.purple.withOpacity(0.24);
+        ? AppColors.purple.withValues(alpha: 0.16)
+        : AppColors.purple.withValues(alpha: 0.24);
 
     Widget dimRepostContent(Widget child) {
       if (!isTimelineRepost) return child;
@@ -7905,7 +7906,7 @@ class _PostCard extends StatelessWidget {
         opacity: dimmedOpacity,
         child: ColorFiltered(
           colorFilter: ColorFilter.mode(
-            isDark ? Colors.black.withOpacity(0.10) : Colors.white.withOpacity(0.12),
+            isDark ? Colors.black.withValues(alpha: 0.10) : Colors.white.withValues(alpha: 0.12),
             BlendMode.srcATop,
           ),
           child: child,
@@ -7938,9 +7939,9 @@ class _PostCard extends StatelessWidget {
                   margin: const EdgeInsetsDirectional.only(start: 32, bottom: 8),
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                   decoration: BoxDecoration(
-                    color: AppColors.purple.withOpacity(isDark ? 0.18 : 0.12),
+                    color: AppColors.purple.withValues(alpha: isDark ? 0.18 : 0.12),
                     borderRadius: BorderRadius.circular(999),
-                    border: Border.all(color: AppColors.purple.withOpacity(0.25)),
+                    border: Border.all(color: AppColors.purple.withValues(alpha: 0.25)),
                   ),
                   child: const Row(
                     mainAxisSize: MainAxisSize.min,
@@ -8167,12 +8168,12 @@ class _PostTextDragFeedback extends StatelessWidget {
             constraints: const BoxConstraints(maxWidth: 250),
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
             decoration: BoxDecoration(
-              color: AppColors.purple.withOpacity(0.94),
+              color: AppColors.purple.withValues(alpha: 0.94),
               borderRadius: BorderRadius.circular(22),
-              border: Border.all(color: Colors.white.withOpacity(0.34)),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.34)),
               boxShadow: [
                 BoxShadow(
-                  color: AppColors.purple.withOpacity(0.45),
+                  color: AppColors.purple.withValues(alpha: 0.45),
                   blurRadius: 28,
                   spreadRadius: 2,
                   offset: const Offset(0, 10),
@@ -8186,7 +8187,7 @@ class _PostTextDragFeedback extends StatelessWidget {
                   width: 34,
                   height: 34,
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.18),
+                    color: Colors.white.withValues(alpha: 0.18),
                     shape: BoxShape.circle,
                   ),
                   child: const Icon(Icons.text_fields_rounded, color: Colors.white, size: 19),
@@ -8207,7 +8208,7 @@ class _PostTextDragFeedback extends StatelessWidget {
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         textDirection: TextDirection.rtl,
-                        style: TextStyle(color: Colors.white.withOpacity(0.92), fontSize: 12.5, height: 1.25),
+                        style: TextStyle(color: Colors.white.withValues(alpha: 0.92), fontSize: 12.5, height: 1.25),
                       ),
                     ],
                   ),
@@ -8253,7 +8254,7 @@ class _SheetOption extends StatelessWidget {
               width: 44,
               height: 44,
               decoration: BoxDecoration(
-                color: AppColors.purple.withOpacity(.18),
+                color: AppColors.purple.withValues(alpha: .18),
                 borderRadius: BorderRadius.circular(14),
               ),
               child: Icon(icon, color: AppColors.purple),
@@ -8306,9 +8307,9 @@ class _SmallPurpleAction extends StatelessWidget {
           width: 42,
           height: 42,
           decoration: BoxDecoration(
-            color: AppColors.purple.withOpacity(.18),
+            color: AppColors.purple.withValues(alpha: .18),
             shape: BoxShape.circle,
-            border: Border.all(color: AppColors.purple.withOpacity(.35)),
+            border: Border.all(color: AppColors.purple.withValues(alpha: .35)),
           ),
           child: Icon(icon, color: AppColors.purple, size: 21),
         ),
@@ -8659,7 +8660,7 @@ class _ProfileAvatar extends StatelessWidget {
           gradient: storySeen
               ? const LinearGradient(colors: [Color(0xFF777777), Color(0xFF4B5563)])
               : const LinearGradient(colors: [Color(0xFFFFD166), AppColors.purple, Color(0xFF06D6A0)]),
-          boxShadow: [BoxShadow(color: (storySeen ? Colors.grey : AppColors.purple).withOpacity(.28), blurRadius: 14, spreadRadius: 1)],
+          boxShadow: [BoxShadow(color: (storySeen ? Colors.grey : AppColors.purple).withValues(alpha: .28), blurRadius: 14, spreadRadius: 1)],
         ),
         child: Container(
           padding: const EdgeInsets.all(2),
@@ -8770,9 +8771,9 @@ class _VideoPlayerBox extends StatelessWidget {
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: [
-            Colors.black.withOpacity(.78),
-            AppColors.purple.withOpacity(.34),
-            Colors.black.withOpacity(.88),
+            Colors.black.withValues(alpha: .78),
+            AppColors.purple.withValues(alpha: .34),
+            Colors.black.withValues(alpha: .88),
           ],
         ),
       ),
@@ -8783,7 +8784,7 @@ class _VideoPlayerBox extends StatelessWidget {
               child: Icon(
                 Icons.movie_creation_rounded,
                 size: 118,
-                color: Colors.white.withOpacity(.08),
+                color: Colors.white.withValues(alpha: .08),
               ),
             ),
           ),
@@ -8793,11 +8794,11 @@ class _VideoPlayerBox extends StatelessWidget {
               height: 74,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: Colors.black.withOpacity(.45),
-                border: Border.all(color: Colors.white.withOpacity(.22)),
+                color: Colors.black.withValues(alpha: .45),
+                border: Border.all(color: Colors.white.withValues(alpha: .22)),
                 boxShadow: [
                   BoxShadow(
-                    color: AppColors.purple.withOpacity(.24),
+                    color: AppColors.purple.withValues(alpha: .24),
                     blurRadius: 24,
                     spreadRadius: 2,
                   ),
@@ -8815,9 +8816,9 @@ class _VideoPlayerBox extends StatelessWidget {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                   decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(.42),
+                    color: Colors.black.withValues(alpha: .42),
                     borderRadius: BorderRadius.circular(999),
-                    border: Border.all(color: Colors.white.withOpacity(.12)),
+                    border: Border.all(color: Colors.white.withValues(alpha: .12)),
                   ),
                   child: const Row(
                     mainAxisSize: MainAxisSize.min,
@@ -8838,7 +8839,7 @@ class _VideoPlayerBox extends StatelessWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      color: Colors.white.withOpacity(.78),
+                      color: Colors.white.withValues(alpha: .78),
                       fontWeight: FontWeight.w800,
                       fontSize: 12,
                     ),
@@ -9095,9 +9096,9 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
                       borderRadius: BorderRadius.circular(28),
                       child: Container(
                         decoration: BoxDecoration(
-                          color: Colors.black.withOpacity(.38),
-                          border: Border.all(color: Colors.white.withOpacity(.12)),
-                          boxShadow: [BoxShadow(color: AppColors.purple.withOpacity(.25), blurRadius: 42)],
+                          color: Colors.black.withValues(alpha: .38),
+                          border: Border.all(color: Colors.white.withValues(alpha: .12)),
+                          boxShadow: [BoxShadow(color: AppColors.purple.withValues(alpha: .25), blurRadius: 42)],
                         ),
                         child: Center(child: _media(url)),
                       ),
@@ -9133,7 +9134,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
                             gradient: const LinearGradient(colors: [AppColors.purpleLight, AppColors.purple, Color(0xFFFF4FD8)]),
-                            boxShadow: [BoxShadow(color: AppColors.purple.withOpacity(.45), blurRadius: 18)],
+                            boxShadow: [BoxShadow(color: AppColors.purple.withValues(alpha: .45), blurRadius: 18)],
                           ),
                           child: CircleAvatar(
                             radius: 20,
@@ -9148,7 +9149,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 15)),
-                              Text(username, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: Colors.white.withOpacity(.65), fontWeight: FontWeight.w700, fontSize: 12)),
+                              Text(username, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: Colors.white.withValues(alpha: .65), fontWeight: FontWeight.w700, fontSize: 12)),
                             ],
                           ),
                         ),
@@ -9168,9 +9169,9 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
                     Expanded(
                       child: Container(
                         decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(.10),
+                          color: Colors.white.withValues(alpha: .10),
                           borderRadius: BorderRadius.circular(24),
-                          border: Border.all(color: Colors.white.withOpacity(.16)),
+                          border: Border.all(color: Colors.white.withValues(alpha: .16)),
                         ),
                         child: TextField(
                           controller: _commentCtrl,
@@ -9179,7 +9180,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
                           style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
                           decoration: InputDecoration(
                             hintText: 'اكتب تعليق...',
-                            hintStyle: TextStyle(color: Colors.white.withOpacity(.58)),
+                            hintStyle: TextStyle(color: Colors.white.withValues(alpha: .58)),
                             border: InputBorder.none,
                             contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                           ),
@@ -9200,9 +9201,9 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
                   decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(.30),
+                    color: Colors.black.withValues(alpha: .30),
                     borderRadius: BorderRadius.circular(999),
-                    border: Border.all(color: Colors.white.withOpacity(.13)),
+                    border: Border.all(color: Colors.white.withValues(alpha: .13)),
                   ),
                   child: Text('$_likes إعجاب · $_comments تعليق', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 12)),
                 ),
@@ -9224,7 +9225,7 @@ class _FeedStoryRoundButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: filled ? AppColors.purple : Colors.white.withOpacity(.12),
+      color: filled ? AppColors.purple : Colors.white.withValues(alpha: .12),
       shape: const CircleBorder(),
       child: InkWell(
         customBorder: const CircleBorder(),
@@ -9235,8 +9236,8 @@ class _FeedStoryRoundButton extends StatelessWidget {
           alignment: Alignment.center,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            border: Border.all(color: Colors.white.withOpacity(.14)),
-            boxShadow: filled ? [BoxShadow(color: AppColors.purple.withOpacity(.38), blurRadius: 18)] : null,
+            border: Border.all(color: Colors.white.withValues(alpha: .14)),
+            boxShadow: filled ? [BoxShadow(color: AppColors.purple.withValues(alpha: .38), blurRadius: 18)] : null,
           ),
           child: Icon(icon, color: Colors.white, size: 22),
         ),
@@ -9321,7 +9322,7 @@ class _FullscreenMediaViewerState extends State<FullscreenMediaViewer> {
               top: 8,
               start: 8,
               child: CircleAvatar(
-                backgroundColor: Colors.black.withOpacity(0.45),
+                backgroundColor: Colors.black.withValues(alpha: 0.45),
                 child: IconButton(
                   icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
                   onPressed: () => Navigator.of(context).pop(),
@@ -9551,7 +9552,7 @@ class _FullscreenVideoPlayerState extends State<_FullscreenVideoPlayer> {
                       width: 74,
                       height: 74,
                       decoration: BoxDecoration(
-                        color: Colors.black.withOpacity(0.42),
+                        color: Colors.black.withValues(alpha: 0.42),
                         shape: BoxShape.circle,
                         border: Border.all(color: Colors.white24),
                       ),
@@ -9628,7 +9629,7 @@ class _FullscreenTweetInfo extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(18, 10, 18, 18),
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.92),
+        color: Colors.black.withValues(alpha: 0.92),
         border: const Border(top: BorderSide(color: Colors.white12)),
       ),
       child: Column(
@@ -9639,7 +9640,7 @@ class _FullscreenTweetInfo extends StatelessWidget {
             children: [
               CircleAvatar(
                 radius: 18,
-                backgroundColor: AppColors.purple.withOpacity(0.35),
+                backgroundColor: AppColors.purple.withValues(alpha: 0.35),
                 backgroundImage: _avatarProvider(post.avatarPath),
                 child: _avatarProvider(post.avatarPath) == null ? const Icon(Icons.person_rounded, color: Colors.white, size: 18) : null,
               ),
@@ -10141,9 +10142,9 @@ class _PostDetailsScreenState extends State<PostDetailsScreen> {
                 width: double.infinity,
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 decoration: BoxDecoration(
-                  color: AppColors.purple.withOpacity(0.10),
+                  color: AppColors.purple.withValues(alpha: 0.10),
                   borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: AppColors.purple.withOpacity(0.28)),
+                  border: Border.all(color: AppColors.purple.withValues(alpha: 0.28)),
                 ),
                 child: Row(
                   children: [
@@ -10275,7 +10276,7 @@ class _PostDetailsScreenState extends State<PostDetailsScreen> {
               ),
             ),
             _replyComposer(isDark),
-            Divider(color: AppColors.purple.withOpacity(0.28)),
+            Divider(color: AppColors.purple.withValues(alpha: 0.28)),
             Padding(
               padding: const EdgeInsets.all(16),
               child: Text('الردود', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18, color: isDark ? Colors.white : Colors.black87)),
@@ -10293,7 +10294,7 @@ class _PostDetailsScreenState extends State<PostDetailsScreen> {
                   children: [
                     if (index > 0) Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 18),
-                      child: Divider(color: AppColors.purple.withOpacity(0.45), thickness: 1),
+                      child: Divider(color: AppColors.purple.withValues(alpha: 0.45), thickness: 1),
                     ),
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
@@ -10304,7 +10305,7 @@ class _PostDetailsScreenState extends State<PostDetailsScreen> {
                             borderRadius: BorderRadius.circular(99),
                             onTap: () => widget.onOpenProfile?.call(r.username),
                             child: CircleAvatar(
-                              backgroundColor: AppColors.purple.withOpacity(0.25),
+                              backgroundColor: AppColors.purple.withValues(alpha: 0.25),
                               backgroundImage: widget.avatarProviderForPath(r.avatarPath),
                               child: widget.avatarProviderForPath(r.avatarPath) == null
                                   ? const Icon(Icons.person_rounded, color: Colors.white, size: 18)
@@ -10499,9 +10500,9 @@ class _InlineReplyVoicePreview extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: AppColors.purple.withOpacity(0.12),
+        color: AppColors.purple.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.purple.withOpacity(0.30)),
+        border: Border.all(color: AppColors.purple.withValues(alpha: 0.30)),
       ),
       child: Row(
         children: [
@@ -10536,7 +10537,7 @@ class _StatPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-    decoration: BoxDecoration(color: AppColors.purple.withOpacity(0.14), borderRadius: BorderRadius.circular(999)),
+    decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: 0.14), borderRadius: BorderRadius.circular(999)),
     child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(icon, color: AppColors.purple, size: 17), const SizedBox(width: 5), Text(text, style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w900, fontSize: 12))]),
   );
 }
@@ -11452,7 +11453,7 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
       ),
       floatingActionButton: FloatingActionButton.extended(
         heroTag: 'community_compose_${widget.community.id}',
-        backgroundColor: _isMember ? AppColors.purple : AppColors.purple.withOpacity(0.35),
+        backgroundColor: _isMember ? AppColors.purple : AppColors.purple.withValues(alpha: 0.35),
         foregroundColor: Colors.white,
         onPressed: _composeCommunityPost,
         icon: const Icon(Icons.edit_rounded),
@@ -11582,7 +11583,7 @@ class _CommunityHeroCard extends StatelessWidget {
                 PositionedDirectional(
                   end: -14,
                   top: -20,
-                  child: Icon(Icons.groups_3_rounded, size: 145, color: Colors.white.withOpacity(0.08)),
+                  child: Icon(Icons.groups_3_rounded, size: 145, color: Colors.white.withValues(alpha: 0.08)),
                 ),
                 const PositionedDirectional(
                   start: 18,
@@ -11706,10 +11707,10 @@ class _CommunityPostsTab extends StatelessWidget {
             decoration: BoxDecoration(
               color: isDark ? AppColors.darkBg : AppColors.lightBg,
               borderRadius: BorderRadius.circular(28),
-              border: Border.all(color: AppColors.purple.withOpacity(0.25)),
+              border: Border.all(color: AppColors.purple.withValues(alpha: 0.25)),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(isDark ? 0.28 : 0.12),
+                  color: Colors.black.withValues(alpha: isDark ? 0.28 : 0.12),
                   blurRadius: 24,
                   offset: const Offset(0, 10),
                 ),
@@ -11722,7 +11723,7 @@ class _CommunityPostsTab extends StatelessWidget {
                   width: 46,
                   height: 5,
                   decoration: BoxDecoration(
-                    color: AppColors.purple.withOpacity(0.35),
+                    color: AppColors.purple.withValues(alpha: 0.35),
                     borderRadius: BorderRadius.circular(99),
                   ),
                 ),
@@ -11767,7 +11768,7 @@ class _CommunityPostsTab extends StatelessWidget {
         padding: const EdgeInsets.all(24),
         children: [
           const SizedBox(height: 90),
-          Icon(Icons.mode_comment_rounded, size: 76, color: AppColors.purple.withOpacity(0.9)),
+          Icon(Icons.mode_comment_rounded, size: 76, color: AppColors.purple.withValues(alpha: 0.9)),
           const SizedBox(height: 14),
           Center(child: Text(emptyText, textAlign: TextAlign.center, style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w900))),
           const SizedBox(height: 6),
@@ -11819,10 +11820,10 @@ class _CommunityPostsTab extends StatelessWidget {
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
                       color: Theme.of(context).brightness == Brightness.dark
-                          ? AppColors.darkBg.withOpacity(0.68)
-                          : AppColors.lightBg.withOpacity(0.86),
+                          ? AppColors.darkBg.withValues(alpha: 0.68)
+                          : AppColors.lightBg.withValues(alpha: 0.86),
                       shape: BoxShape.circle,
-                      border: Border.all(color: AppColors.purple.withOpacity(0.10)),
+                      border: Border.all(color: AppColors.purple.withValues(alpha: 0.10)),
                     ),
                     child: Icon(
                       Icons.more_horiz_rounded,
@@ -11949,7 +11950,7 @@ class _CommunityMembersTab extends StatelessWidget {
                 Container(
                   width: 46,
                   height: 46,
-                  decoration: BoxDecoration(color: AppColors.purple.withOpacity(0.15), shape: BoxShape.circle),
+                  decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: 0.15), shape: BoxShape.circle),
                   child: const Icon(Icons.add_moderator_rounded, color: AppColors.purple),
                 ),
                 const SizedBox(width: 12),
@@ -12015,7 +12016,7 @@ class _CommunityMemberTile extends StatelessWidget {
         child: Row(
           children: [
             CircleAvatar(
-              backgroundColor: color.withOpacity(0.18),
+              backgroundColor: color.withValues(alpha: 0.18),
               child: Icon(icon, color: color),
             ),
             const SizedBox(width: 12),

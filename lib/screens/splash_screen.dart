@@ -165,16 +165,16 @@ class _SplashScreenState<T> extends State<SplashScreen<T>> with TickerProviderSt
             Positioned(
               top: -120,
               right: -90,
-              child: _GlowOrb(size: 280, color: AppColors.purple.withOpacity(0.44)),
+              child: _GlowOrb(size: 280, color: AppColors.purple.withValues(alpha: 0.44)),
             ),
             Positioned(
               bottom: -110,
               left: -90,
-              child: _GlowOrb(size: 260, color: AppColors.purple.withOpacity(0.28)),
+              child: _GlowOrb(size: 260, color: AppColors.purple.withValues(alpha: 0.28)),
             ),
             Positioned.fill(
               child: CustomPaint(
-                painter: _SplashGridPainter(color: Colors.white.withOpacity(isDark ? 0.045 : 0.035)),
+                painter: _SplashGridPainter(color: Colors.white.withValues(alpha: isDark ? 0.045 : 0.035)),
               ),
             ),
             SafeArea(
@@ -207,7 +207,7 @@ class _SplashScreenState<T> extends State<SplashScreen<T>> with TickerProviderSt
                         widget.subtitle,
                         textAlign: TextAlign.center,
                         style: TextStyle(
-                          color: Colors.white.withOpacity(0.68),
+                          color: Colors.white.withValues(alpha: 0.68),
                           fontSize: 15,
                           fontWeight: FontWeight.w700,
                           letterSpacing: 0.15,
@@ -226,7 +226,7 @@ class _SplashScreenState<T> extends State<SplashScreen<T>> with TickerProviderSt
                                   return LinearProgressIndicator(
                                     minHeight: 9,
                                     value: Curves.easeOutCubic.transform(_progressController.value),
-                                    backgroundColor: Colors.white.withOpacity(0.10),
+                                    backgroundColor: Colors.white.withValues(alpha: 0.10),
                                     valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF9B5CFF)),
                                   );
                                 },
@@ -240,7 +240,7 @@ class _SplashScreenState<T> extends State<SplashScreen<T>> with TickerProviderSt
                                 key: ValueKey(_status),
                                 textAlign: TextAlign.center,
                                 style: TextStyle(
-                                  color: Colors.white.withOpacity(0.74),
+                                  color: Colors.white.withValues(alpha: 0.74),
                                   fontSize: 13.5,
                                   fontWeight: FontWeight.w800,
                                 ),
@@ -297,12 +297,12 @@ class _AnimatedLogo extends StatelessWidget {
                     shape: BoxShape.circle,
                     boxShadow: [
                       BoxShadow(
-                        color: AppColors.purple.withOpacity(0.55),
+                        color: AppColors.purple.withValues(alpha: 0.55),
                         blurRadius: 86,
                         spreadRadius: 8,
                       ),
                       BoxShadow(
-                        color: Colors.white.withOpacity(0.08),
+                        color: Colors.white.withValues(alpha: 0.08),
                         blurRadius: 24,
                         spreadRadius: -2,
                       ),
@@ -319,13 +319,13 @@ class _AnimatedLogo extends StatelessWidget {
                       padding: const EdgeInsets.all(8),
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(44),
-                        border: Border.all(color: Colors.white.withOpacity(0.16)),
+                        border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
                         gradient: LinearGradient(
                           begin: Alignment.topLeft,
                           end: Alignment.bottomRight,
                           colors: [
-                            Colors.white.withOpacity(0.16),
-                            Colors.white.withOpacity(0.04),
+                            Colors.white.withValues(alpha: 0.16),
+                            Colors.white.withValues(alpha: 0.04),
                           ],
                         ),
                       ),
@@ -352,9 +352,9 @@ class _AnimatedLogo extends StatelessWidget {
                                     begin: Alignment.centerLeft,
                                     end: Alignment.centerRight,
                                     colors: [
-                                      const Color(0xFF7C3BFF).withOpacity(0.96),
-                                      const Color(0xFF41108E).withOpacity(0.94),
-                                      Colors.white.withOpacity(0.18),
+                                      const Color(0xFF7C3BFF).withValues(alpha: 0.96),
+                                      const Color(0xFF41108E).withValues(alpha: 0.94),
+                                      Colors.white.withValues(alpha: 0.18),
                                     ],
                                   ),
                                 ),

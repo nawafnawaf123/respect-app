@@ -1,3 +1,4 @@
+// ignore_for_file: unused_element, unused_local_variable, unnecessary_type_check, unnecessary_brace_in_string_interps, prefer_adjacent_string_concatenation
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';

@@ -5,7 +5,7 @@ import 'package:flutter/services.dart';
 import '../screens/call_screen.dart';
 import 'call_service.dart';
 import 'supabase_service.dart';
-import 'notification_service.dart';   // <-- import المفقود
+import 'notification_service.dart';
 
 class CallActionHandler {
   static const MethodChannel _channel = MethodChannel('incoming_call_channel');
@@ -87,14 +87,15 @@ class CallActionHandler {
     required bool video,
     required bool isCaller,
   }) async {
-    final navigatorKey = NotificationService.navigatorKey;
+    final navigator = NotificationService.navigatorKey.currentState;
+    if (navigator == null) return;
+
     final callService = CallService();
     final currentUser = await SupabaseService.currentUser();
     final calleeUsername = SupabaseService.displayUsername((currentUser?['username'] ?? '').toString());
-    final context = navigatorKey.currentContext;
-    if (context == null) return;
 
-    await Navigator.of(context).push(
+    if (!navigator.mounted) return;
+    await navigator.push(
       MaterialPageRoute(
         builder: (_) => CallScreen(
           callId: callId,

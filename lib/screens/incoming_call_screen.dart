@@ -1,6 +1,6 @@
+// ignore_for_file: deprecated_member_use, unused_element, unused_field, unused_import, unused_element_parameter, prefer_const_constructors, prefer_const_declarations, use_build_context_synchronously, unnecessary_this, unnecessary_brace_in_string_interps, curly_braces_in_flow_control_structures, prefer_final_fields, unnecessary_type_check, unnecessary_non_null_assertion
 import 'package:flutter/material.dart';
 
-import '../services/notification_service.dart';
 import '../theme/app_theme.dart';
 
 /// هذا الملف كان يسبب ظهور شاشة قبول/رفض القديمة داخل Flutter

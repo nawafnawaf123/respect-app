@@ -472,12 +472,12 @@ class _ExploreLoading extends StatelessWidget {
         width: 86,
         height: 86,
         decoration: BoxDecoration(
-          color: isDark ? Colors.white.withOpacity(.06) : Colors.white.withOpacity(.82),
+          color: isDark ? Colors.white.withValues(alpha: .06) : Colors.white.withValues(alpha: .82),
           borderRadius: BorderRadius.circular(30),
-          border: Border.all(color: AppColors.purple.withOpacity(.14)),
+          border: Border.all(color: AppColors.purple.withValues(alpha: .14)),
           boxShadow: [
             BoxShadow(
-              color: AppColors.purple.withOpacity(.10),
+              color: AppColors.purple.withValues(alpha: .10),
               blurRadius: 34,
               offset: const Offset(0, 14),
             ),
@@ -520,7 +520,7 @@ class _ExploreHeader extends StatelessWidget {
               ),
               boxShadow: [
                 BoxShadow(
-                  color: AppColors.purple.withOpacity(.28),
+                  color: AppColors.purple.withValues(alpha: .28),
                   blurRadius: 22,
                   offset: const Offset(0, 10),
                 ),
@@ -590,9 +590,9 @@ class _HeaderSoftBadge extends StatelessWidget {
       height: 38,
       padding: const EdgeInsets.symmetric(horizontal: 10),
       decoration: BoxDecoration(
-        color: isDark ? Colors.white.withOpacity(.055) : Colors.white.withOpacity(.70),
+        color: isDark ? Colors.white.withValues(alpha: .055) : Colors.white.withValues(alpha: .70),
         borderRadius: BorderRadius.circular(15),
-        border: Border.all(color: AppColors.purple.withOpacity(.13)),
+        border: Border.all(color: AppColors.purple.withValues(alpha: .13)),
       ),
       child: Row(
         children: [
@@ -629,7 +629,7 @@ class _ExploreSearchField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final fill = isDark ? const Color(0xFF181020).withOpacity(.86) : Colors.white.withOpacity(.92);
+    final fill = isDark ? const Color(0xFF181020).withValues(alpha: .86) : Colors.white.withValues(alpha: .92);
     final textColor = isDark ? Colors.white : const Color(0xFF15111A);
     final hintColor = isDark ? Colors.white54 : const Color(0xFF8B8196);
 
@@ -639,10 +639,10 @@ class _ExploreSearchField extends StatelessWidget {
       decoration: BoxDecoration(
         color: fill,
         borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: AppColors.purple.withOpacity(.16)),
+        border: Border.all(color: AppColors.purple.withValues(alpha: .16)),
         boxShadow: [
           BoxShadow(
-            color: AppColors.purple.withOpacity(isDark ? .10 : .09),
+            color: AppColors.purple.withValues(alpha: isDark ? .10 : .09),
             blurRadius: 26,
             offset: const Offset(0, 12),
           ),
@@ -663,7 +663,7 @@ class _ExploreSearchField extends StatelessWidget {
               width: 38,
               height: 38,
               decoration: BoxDecoration(
-                color: AppColors.purple.withOpacity(.11),
+                color: AppColors.purple.withValues(alpha: .11),
                 shape: BoxShape.circle,
               ),
               child: const Icon(Icons.search_rounded, color: AppColors.purple, size: 21),
@@ -708,7 +708,7 @@ class _TimeFilterStrip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final items = const <Map<String, dynamic>>[
+    const items = <Map<String, dynamic>>[
       {'key': 'today', 'label': 'اليوم', 'icon': Icons.today_rounded},
       {'key': 'week', 'label': 'الأسبوع', 'icon': Icons.date_range_rounded},
       {'key': 'month', 'label': 'الشهر', 'icon': Icons.calendar_month_rounded},
@@ -738,10 +738,10 @@ class _TimeFilterStrip extends StatelessWidget {
               decoration: BoxDecoration(
                 color: active
                     ? AppColors.purple
-                    : (isDark ? Colors.white.withOpacity(.055) : Colors.white.withOpacity(.72)),
+                    : (isDark ? Colors.white.withValues(alpha: .055) : Colors.white.withValues(alpha: .72)),
                 borderRadius: BorderRadius.circular(999),
                 border: Border.all(
-                  color: active ? AppColors.purple : AppColors.purple.withOpacity(.12),
+                  color: active ? AppColors.purple : AppColors.purple.withValues(alpha: .12),
                 ),
               ),
               child: Row(
@@ -782,9 +782,9 @@ class _ExploreTabBar extends StatelessWidget {
       height: 48,
       padding: const EdgeInsets.all(4),
       decoration: BoxDecoration(
-        color: isDark ? Colors.white.withOpacity(.055) : Colors.white.withOpacity(.78),
+        color: isDark ? Colors.white.withValues(alpha: .055) : Colors.white.withValues(alpha: .78),
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: AppColors.purple.withOpacity(.12)),
+        border: Border.all(color: AppColors.purple.withValues(alpha: .12)),
       ),
       child: TabBar(
         controller: controller,
@@ -795,7 +795,7 @@ class _ExploreTabBar extends StatelessWidget {
           borderRadius: BorderRadius.circular(15),
           boxShadow: [
             BoxShadow(
-              color: AppColors.purple.withOpacity(.22),
+              color: AppColors.purple.withValues(alpha: .22),
               blurRadius: 16,
               offset: const Offset(0, 7),
             ),
@@ -805,7 +805,7 @@ class _ExploreTabBar extends StatelessWidget {
         unselectedLabelColor: isDark ? Colors.white60 : const Color(0xFF6E6478),
         labelStyle: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12),
         unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12),
-        tabs: [
+        tabs: const [
           Tab(child: Text('التغريدات')),
           Tab(child: Text('الأشخاص')),
           Tab(child: Text('المجتمعات')),
@@ -901,9 +901,9 @@ class _SmartSearchNotice extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: AppColors.purple.withOpacity(.08),
+        color: AppColors.purple.withValues(alpha: .08),
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: AppColors.purple.withOpacity(.13)),
+        border: Border.all(color: AppColors.purple.withValues(alpha: .13)),
       ),
       child: Row(
         children: [
@@ -952,7 +952,7 @@ class _TrendingHashtagsSection extends StatelessWidget {
                 width: 34,
                 height: 34,
                 decoration: BoxDecoration(
-                  color: AppColors.purple.withOpacity(.12),
+                  color: AppColors.purple.withValues(alpha: .12),
                   borderRadius: BorderRadius.circular(13),
                 ),
                 child: const Icon(Icons.local_fire_department_rounded, color: AppColors.purple, size: 20),
@@ -997,9 +997,9 @@ class _TrendingHashtagsSection extends StatelessWidget {
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                       decoration: BoxDecoration(
-                        color: AppColors.purple.withOpacity(.10),
+                        color: AppColors.purple.withValues(alpha: .10),
                         borderRadius: BorderRadius.circular(999),
-                        border: Border.all(color: AppColors.purple.withOpacity(.17)),
+                        border: Border.all(color: AppColors.purple.withValues(alpha: .17)),
                       ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
@@ -1067,11 +1067,11 @@ class _ExplorePostCard extends StatelessWidget {
                 padding: const EdgeInsets.all(2),
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  border: Border.all(color: AppColors.purple.withOpacity(.18)),
+                  border: Border.all(color: AppColors.purple.withValues(alpha: .18)),
                 ),
                 child: CircleAvatar(
                   radius: 22,
-                  backgroundColor: AppColors.purple.withOpacity(.16),
+                  backgroundColor: AppColors.purple.withValues(alpha: .16),
                   backgroundImage: imageProviderValue,
                   child: imageProviderValue == null ? const Icon(Icons.person_rounded, color: AppColors.purple) : null,
                 ),
@@ -1112,7 +1112,7 @@ class _ExplorePostCard extends StatelessWidget {
                 width: 34,
                 height: 34,
                 decoration: BoxDecoration(
-                  color: AppColors.purple.withOpacity(.10),
+                  color: AppColors.purple.withValues(alpha: .10),
                   borderRadius: BorderRadius.circular(13),
                 ),
                 child: const Icon(Icons.chevron_left_rounded, color: AppColors.purple),
@@ -1133,8 +1133,8 @@ class _ExplorePostCard extends StatelessWidget {
               height: 142,
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(20),
-                color: AppColors.purple.withOpacity(.075),
-                border: Border.all(color: AppColors.purple.withOpacity(.14)),
+                color: AppColors.purple.withValues(alpha: .075),
+                border: Border.all(color: AppColors.purple.withValues(alpha: .14)),
               ),
               child: Center(
                 child: Icon(
@@ -1150,9 +1150,9 @@ class _ExplorePostCard extends StatelessWidget {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
               decoration: BoxDecoration(
-                color: AppColors.purple.withOpacity(.09),
+                color: AppColors.purple.withValues(alpha: .09),
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: AppColors.purple.withOpacity(.12)),
+                border: Border.all(color: AppColors.purple.withValues(alpha: .12)),
               ),
               child: const Row(
                 mainAxisSize: MainAxisSize.min,
@@ -1260,17 +1260,17 @@ class _PremiumPanel extends StatelessWidget {
     return Container(
       padding: padding,
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF181020).withOpacity(.76) : Colors.white.withOpacity(.88),
+        color: isDark ? const Color(0xFF181020).withValues(alpha: .76) : Colors.white.withValues(alpha: .88),
         borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: AppColors.purple.withOpacity(.12)),
+        border: Border.all(color: AppColors.purple.withValues(alpha: .12)),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(isDark ? .18 : .035),
+            color: Colors.black.withValues(alpha: isDark ? .18 : .035),
             blurRadius: 24,
             offset: const Offset(0, 12),
           ),
           BoxShadow(
-            color: AppColors.purple.withOpacity(.055),
+            color: AppColors.purple.withValues(alpha: .055),
             blurRadius: 22,
             offset: const Offset(0, 8),
           ),
@@ -1307,9 +1307,9 @@ class _EmptyExploreState extends StatelessWidget {
               width: 74,
               height: 74,
               decoration: BoxDecoration(
-                color: AppColors.purple.withOpacity(.10),
+                color: AppColors.purple.withValues(alpha: .10),
                 borderRadius: BorderRadius.circular(28),
-                border: Border.all(color: AppColors.purple.withOpacity(.14)),
+                border: Border.all(color: AppColors.purple.withValues(alpha: .14)),
               ),
               child: Icon(icon, color: AppColors.purple, size: 34),
             ),
@@ -1347,7 +1347,7 @@ class _RespectAiVerifiedBadge extends StatelessWidget {
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
-        boxShadow: [BoxShadow(color: AppColors.purple.withOpacity(0.30), blurRadius: 8)],
+        boxShadow: [BoxShadow(color: AppColors.purple.withValues(alpha: 0.30), blurRadius: 8)],
       ),
       child: const Icon(Icons.check_rounded, color: Colors.white, size: 12),
     );
@@ -1383,10 +1383,6 @@ class _UsersResultsList extends StatelessWidget {
     this.query = '',
   });
 
-  String _clean(String value) {
-    final v = value.trim().replaceAll(RegExp(r'\s+'), '_').replaceAll('@', '').toLowerCase();
-    return v.isEmpty ? '@user' : '@$v';
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -1491,11 +1487,11 @@ class _UserResultCard extends StatelessWidget {
                 padding: const EdgeInsets.all(2.2),
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  border: Border.all(color: AppColors.purple.withOpacity(.18)),
+                  border: Border.all(color: AppColors.purple.withValues(alpha: .18)),
                 ),
                 child: CircleAvatar(
                   radius: 26,
-                  backgroundColor: AppColors.purple.withOpacity(.15),
+                  backgroundColor: AppColors.purple.withValues(alpha: .15),
                   backgroundImage: image,
                   child: image == null ? const Icon(Icons.person_rounded, color: AppColors.purple) : null,
                 ),
@@ -1527,7 +1523,7 @@ class _UserResultCard extends StatelessWidget {
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
-                          color: isDark ? Colors.white.withOpacity(.82) : const Color(0xFF302A37),
+                          color: isDark ? Colors.white.withValues(alpha: .82) : const Color(0xFF302A37),
                           fontWeight: FontWeight.w600,
                           height: 1.35,
                           fontSize: 12.5,
@@ -1613,9 +1609,9 @@ class _CircleActionButton extends StatelessWidget {
           width: 34,
           height: 34,
           decoration: BoxDecoration(
-            color: active ? AppColors.purple.withOpacity(.16) : (isDark ? Colors.white.withOpacity(.06) : Colors.black.withOpacity(.035)),
+            color: active ? AppColors.purple.withValues(alpha: .16) : (isDark ? Colors.white.withValues(alpha: .06) : Colors.black.withValues(alpha: .035)),
             shape: BoxShape.circle,
-            border: Border.all(color: AppColors.purple.withOpacity(active ? .22 : .10)),
+            border: Border.all(color: AppColors.purple.withValues(alpha: active ? .22 : .10)),
           ),
           child: Icon(icon, color: active ? AppColors.purple : (isDark ? Colors.white70 : const Color(0xFF62586D)), size: 18),
         ),
@@ -1684,7 +1680,7 @@ class _CommunitiesResultsList extends StatelessWidget {
                         ),
                         boxShadow: [
                           BoxShadow(
-                            color: AppColors.purple.withOpacity(.20),
+                            color: AppColors.purple.withValues(alpha: .20),
                             blurRadius: 18,
                             offset: const Offset(0, 8),
                           ),
@@ -1763,7 +1759,7 @@ class _FollowButton extends StatelessWidget {
         onPressed: onTap,
         style: FilledButton.styleFrom(
           elevation: 0,
-          backgroundColor: isFollowing ? (isDark ? Colors.white.withOpacity(.075) : Colors.black.withOpacity(.045)) : AppColors.purple,
+          backgroundColor: isFollowing ? (isDark ? Colors.white.withValues(alpha: .075) : Colors.black.withValues(alpha: .045)) : AppColors.purple,
           foregroundColor: isFollowing ? (isDark ? Colors.white : const Color(0xFF302A37)) : Colors.white,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
           padding: const EdgeInsets.symmetric(horizontal: 13),
@@ -1793,9 +1789,9 @@ class _MiniStatChip extends StatelessWidget {
       margin: const EdgeInsetsDirectional.only(end: 7),
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
       decoration: BoxDecoration(
-        color: AppColors.purple.withOpacity(0.09),
+        color: AppColors.purple.withValues(alpha: 0.09),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: AppColors.purple.withOpacity(0.14)),
+        border: Border.all(color: AppColors.purple.withValues(alpha: 0.14)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,

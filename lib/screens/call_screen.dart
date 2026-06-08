@@ -1,3 +1,4 @@
+// ignore_for_file: deprecated_member_use, unused_element, unused_field, unused_import, unused_element_parameter, prefer_const_constructors, prefer_const_declarations, use_build_context_synchronously, unnecessary_this, unnecessary_brace_in_string_interps, curly_braces_in_flow_control_structures, prefer_final_fields, unnecessary_type_check, unnecessary_non_null_assertion
 import 'dart:async';
 import 'dart:io';
 
@@ -299,7 +300,7 @@ class _CallScreenState extends State<CallScreen> {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 9),
           decoration: BoxDecoration(
-            color: Colors.black.withOpacity(0.48),
+            color: Colors.black.withValues(alpha: 0.48),
             borderRadius: BorderRadius.circular(22),
             border: Border.all(color: Colors.white12),
           ),
@@ -399,9 +400,9 @@ class _CallScreenState extends State<CallScreen> {
                           begin: Alignment.topCenter,
                           end: Alignment.bottomCenter,
                           colors: [
-                            Colors.black.withOpacity(0.35),
+                            Colors.black.withValues(alpha: 0.35),
                             Colors.transparent,
-                            Colors.black.withOpacity(0.55),
+                            Colors.black.withValues(alpha: 0.55),
                           ],
                         ),
                       ),

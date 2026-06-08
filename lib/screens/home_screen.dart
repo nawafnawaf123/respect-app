@@ -1,3 +1,4 @@
+// ignore_for_file: deprecated_member_use, unused_element, unused_field, unused_import, unused_element_parameter, prefer_const_constructors, prefer_const_declarations, use_build_context_synchronously, unnecessary_this, unnecessary_brace_in_string_interps, curly_braces_in_flow_control_structures, prefer_final_fields, unnecessary_type_check, unnecessary_non_null_assertion
 import 'dart:convert';
 import 'dart:io';
 
@@ -127,10 +128,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         // مهم: لو فعلت is_admin من Supabase أثناء أن المستخدم مسجل دخول،
         // نحدّث الكاش المحلي فورًا حتى تظهر صفحة الإدارة بدون تسجيل خروج/دخول.
         try {
-          await SupabaseService.saveCurrentUser(account!);
-        } catch (_) {}
+          await SupabaseService.saveCurrentUser(account);
+        } catch (e) {
+          debugPrint('Respect ignored error: $e');
+        }
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Respect ignored error: $e');
+    }
 
     final accountsRaw = prefs.getString('respect_accounts_v1');
     if (account == null && accountsRaw != null && accountsRaw.trim().isNotEmpty) {
@@ -146,7 +151,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             }
           }
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('Respect ignored error: $e');
+      }
     }
 
     if (account == null) {
@@ -169,24 +176,39 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               }
             }
           }
-        } catch (_) {}
+        } catch (e) {
+          debugPrint('Respect ignored error: $e');
+        }
       }
     }
 
     if (!mounted) return;
-    if (account == null) {
+    final resolvedAccount = account;
+    if (resolvedAccount == null) {
       setState(() => _isAdmin = currentId.trim().toLowerCase().replaceAll('@', '') == 'nawafrp');
       return;
     }
 
-    final image = (account['avatar_url'] ?? account['profileImagePath'] ?? account['imagePath'])?.toString().trim();
+    final image = (resolvedAccount['avatar_url'] ??
+        resolvedAccount['profileImagePath'] ??
+        resolvedAccount['imagePath'])
+        ?.toString()
+        .trim();
+    final profileName = (resolvedAccount['profileName'] ??
+        resolvedAccount['name'] ??
+        'Respect App')
+        .toString();
+    final rawUsername = (resolvedAccount['username'] ??
+        resolvedAccount['id'] ??
+        'القائمة الرئيسية')
+        .toString();
+    final isAdmin = _accountIsAdmin(currentId, resolvedAccount);
 
     setState(() {
-      _profileName = (account!['profileName'] ?? account['name'] ?? 'Respect App').toString();
-      final username = (account['username'] ?? account['id'] ?? 'القائمة الرئيسية').toString();
-      _profileUsername = username.startsWith('@') ? username : '@$username';
+      _profileName = profileName;
+      _profileUsername = rawUsername.startsWith('@') ? rawUsername : '@$rawUsername';
       _profileImagePath = image != null && image.isNotEmpty ? image : null;
-      _isAdmin = _accountIsAdmin(currentId, account);
+      _isAdmin = isAdmin;
     });
   }
 
@@ -213,7 +235,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             }
           }
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('Respect ignored error: $e');
+      }
     }
 
     final lastReadRaw = prefs.getString('respect_dm_last_read_$currentUsername');
@@ -235,7 +259,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             }
           }
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('Respect ignored error: $e');
+      }
     }
 
     if (!mounted) return;
@@ -260,7 +286,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             }
           }
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('Respect ignored error: $e');
+      }
     }
 
     await prefs.setString('respect_dm_last_read_$currentUsername', DateTime.now().toIso8601String());
@@ -274,7 +302,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     try {
       final user = await SupabaseService.currentUser();
       if (user != null) return SupabaseService.displayUsername((user['username'] ?? currentId).toString());
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Respect ignored error: $e');
+    }
     return _cleanUsername(currentId);
   }
 
@@ -287,7 +317,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         final list = decoded[currentUsername] ?? decoded[_cleanUsername(currentUsername)];
         if (list is List) return list.map((e) => _cleanUsername(e.toString())).toSet();
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Respect ignored error: $e');
+    }
     return <String>{};
   }
 
@@ -304,7 +336,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         final createdAt = DateTime.tryParse((m['created_at'] ?? '').toString()) ?? DateTime.now();
         if (createdAt.isAfter(lastSeen)) count++;
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Respect ignored error: $e');
+    }
 
     try {
       final reposts = await SupabaseService.getRepostNotificationsForUser(currentUsername);
@@ -312,7 +346,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         final createdAt = DateTime.tryParse((r['created_at'] ?? '').toString()) ?? DateTime.now();
         if (createdAt.isAfter(lastSeen)) count++;
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Respect ignored error: $e');
+    }
 
     try {
       final events = await SupabaseService.getPostEventNotificationsForUser(currentUsername);
@@ -320,7 +356,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         final createdAt = DateTime.tryParse((e['created_at'] ?? '').toString()) ?? DateTime.now();
         if (createdAt.isAfter(lastSeen)) count++;
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Respect ignored error: $e');
+    }
 
     try {
       final posts = await SupabaseService.getPosts();
@@ -330,7 +368,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         final createdAt = DateTime.tryParse((p['created_at'] ?? '').toString()) ?? DateTime.now();
         if (createdAt.isAfter(lastSeen)) count++;
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Respect ignored error: $e');
+    }
 
     if (!mounted) return;
     setState(() => _unreadNotificationsCount = count);
@@ -434,7 +474,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               children: [
                 CircleAvatar(
                   radius: 18,
-                  backgroundColor: AppColors.purple.withOpacity(0.25),
+                  backgroundColor: AppColors.purple.withValues(alpha: 0.25),
                   backgroundImage: _profileImageProvider(),
                   child: _profileImageProvider() == null
                       ? const Icon(Icons.person_rounded, color: Colors.white, size: 20)
@@ -472,7 +512,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ),
         leadingWidth: 220,
         elevation: 0,
-        backgroundColor: isDark ? AppColors.darkBg.withOpacity(0.85) : AppColors.lightBg.withOpacity(0.9),
+        backgroundColor: isDark ? AppColors.darkBg.withValues(alpha: 0.85) : AppColors.lightBg.withValues(alpha: 0.9),
       ),
       body: IndexedStack(
         index: index,
@@ -629,8 +669,8 @@ class _BottomNavBarState extends State<_BottomNavBar> {
               begin: right ? Alignment.centerRight : Alignment.centerLeft,
               end: right ? Alignment.centerLeft : Alignment.centerRight,
               colors: [
-                isDark ? AppColors.darkCard.withOpacity(0.98) : AppColors.lightCard.withOpacity(0.98),
-                isDark ? AppColors.darkCard.withOpacity(0.0) : AppColors.lightCard.withOpacity(0.0),
+                isDark ? AppColors.darkCard.withValues(alpha: 0.98) : AppColors.lightCard.withValues(alpha: 0.98),
+                isDark ? AppColors.darkCard.withValues(alpha: 0.0) : AppColors.lightCard.withValues(alpha: 0.0),
               ],
             ),
             borderRadius: BorderRadius.horizontal(
@@ -642,14 +682,14 @@ class _BottomNavBarState extends State<_BottomNavBar> {
             width: 26,
             height: 26,
             decoration: BoxDecoration(
-              color: AppColors.purple.withOpacity(isDark ? 0.24 : 0.16),
+              color: AppColors.purple.withValues(alpha: isDark ? 0.24 : 0.16),
               shape: BoxShape.circle,
-              border: Border.all(color: AppColors.purple.withOpacity(0.35)),
+              border: Border.all(color: AppColors.purple.withValues(alpha: 0.35)),
             ),
             child: Icon(
               right ? Icons.keyboard_arrow_right_rounded : Icons.keyboard_arrow_left_rounded,
               size: 22,
-              color: AppColors.purple.withOpacity(0.98),
+              color: AppColors.purple.withValues(alpha: 0.98),
             ),
           ),
         ),
@@ -668,12 +708,12 @@ class _BottomNavBarState extends State<_BottomNavBar> {
         margin: const EdgeInsets.fromLTRB(12, 6, 12, 10),
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
         decoration: BoxDecoration(
-          color: isDark ? AppColors.darkCard.withOpacity(0.96) : AppColors.lightCard.withOpacity(0.98),
+          color: isDark ? AppColors.darkCard.withValues(alpha: 0.96) : AppColors.lightCard.withValues(alpha: 0.98),
           borderRadius: BorderRadius.circular(24),
           border: Border.all(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
           boxShadow: [
             BoxShadow(
-              color: AppColors.purple.withOpacity(isDark ? 0.18 : 0.1),
+              color: AppColors.purple.withValues(alpha: isDark ? 0.18 : 0.1),
               blurRadius: 28,
               offset: const Offset(0, 10),
             ),
@@ -705,9 +745,9 @@ class _BottomNavBarState extends State<_BottomNavBar> {
                         padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(18),
-                          color: selected ? AppColors.purple.withOpacity(0.18) : Colors.transparent,
+                          color: selected ? AppColors.purple.withValues(alpha: 0.18) : Colors.transparent,
                           border: selected
-                              ? Border.all(color: AppColors.purple.withOpacity(0.35))
+                              ? Border.all(color: AppColors.purple.withValues(alpha: 0.35))
                               : Border.all(color: Colors.transparent),
                         ),
                         child: Column(
@@ -881,7 +921,7 @@ class _AppSideBar extends StatelessWidget {
             ),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(isDark ? 0.45 : 0.12),
+                color: Colors.black.withValues(alpha: isDark ? 0.45 : 0.12),
                 blurRadius: 35,
                 offset: const Offset(8, 0),
               ),
@@ -1000,16 +1040,16 @@ class _SideBarTile extends StatelessWidget {
             colors: [AppColors.purple, Color(0xFF6D28D9)],
           )
               : null,
-          color: selected ? null : (isDark ? AppColors.darkCard.withOpacity(0.72) : AppColors.lightCard),
+          color: selected ? null : (isDark ? AppColors.darkCard.withValues(alpha: 0.72) : AppColors.lightCard),
           border: Border.all(
             color: selected
-                ? AppColors.purple.withOpacity(0.45)
+                ? AppColors.purple.withValues(alpha: 0.45)
                 : (isDark ? AppColors.darkBorder : AppColors.lightBorder),
           ),
           boxShadow: selected
               ? [
             BoxShadow(
-              color: AppColors.purple.withOpacity(0.28),
+              color: AppColors.purple.withValues(alpha: 0.28),
               blurRadius: 22,
               offset: const Offset(0, 8),
             ),

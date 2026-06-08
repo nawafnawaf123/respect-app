@@ -1,3 +1,4 @@
+// ignore_for_file: deprecated_member_use, unused_element, unused_field, unused_import, unused_element_parameter, prefer_const_constructors, prefer_const_declarations, use_build_context_synchronously, unnecessary_this, unnecessary_brace_in_string_interps, curly_braces_in_flow_control_structures, prefer_final_fields, unnecessary_type_check, unnecessary_non_null_assertion
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -259,7 +260,7 @@ class _LoginScreenState extends State<LoginScreen> {
             style: TextStyle(
               fontSize: 12.5,
               fontWeight: FontWeight.w900,
-              color: isDark ? Colors.white.withOpacity(0.86) : Colors.black.withOpacity(0.75),
+              color: isDark ? Colors.white.withValues(alpha: 0.86) : Colors.black.withValues(alpha: 0.75),
             ),
           ),
         ),
@@ -279,7 +280,7 @@ class _LoginScreenState extends State<LoginScreen> {
             helperMaxLines: 2,
             suffixIcon: suffixIcon,
             filled: true,
-            fillColor: isDark ? Colors.white.withOpacity(0.055) : Colors.white.withOpacity(0.78),
+            fillColor: isDark ? Colors.white.withValues(alpha: 0.055) : Colors.white.withValues(alpha: 0.78),
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(20),
               borderSide: BorderSide(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
@@ -322,7 +323,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 child: Column(
                   children: [
                     const SizedBox(height: 10),
-                    Container(width: 46, height: 5, decoration: BoxDecoration(color: AppColors.purple.withOpacity(0.55), borderRadius: BorderRadius.circular(99))),
+                    Container(width: 46, height: 5, decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: 0.55), borderRadius: BorderRadius.circular(99))),
                     const SizedBox(height: 14),
                     const Text('سياسات Respect App', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
                     const SizedBox(height: 12),
@@ -366,7 +367,7 @@ class _LoginScreenState extends State<LoginScreen> {
           style: TextStyle(
             height: 1.65,
             fontWeight: FontWeight.w700,
-            color: isDark ? Colors.white.withOpacity(0.88) : Colors.black.withOpacity(0.78),
+            color: isDark ? Colors.white.withValues(alpha: 0.88) : Colors.black.withValues(alpha: 0.78),
           ),
         ),
       ],
@@ -386,14 +387,14 @@ class _LoginScreenState extends State<LoginScreen> {
                 shape: BoxShape.circle,
                 gradient: SweepGradient(
                   colors: [
-                    AppColors.purple.withOpacity(0.15),
+                    AppColors.purple.withValues(alpha: 0.15),
                     AppColors.purpleLight,
                     AppColors.purple,
-                    AppColors.purple.withOpacity(0.15),
+                    AppColors.purple.withValues(alpha: 0.15),
                   ],
                 ),
                 boxShadow: [
-                  BoxShadow(color: AppColors.purple.withOpacity(0.35), blurRadius: 36, spreadRadius: 3),
+                  BoxShadow(color: AppColors.purple.withValues(alpha: 0.35), blurRadius: 36, spreadRadius: 3),
                 ],
               ),
             ),
@@ -403,8 +404,8 @@ class _LoginScreenState extends State<LoginScreen> {
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: isDark ? Colors.black.withOpacity(0.55) : Colors.white.withOpacity(0.9),
-                border: Border.all(color: Colors.white.withOpacity(0.15)),
+                color: isDark ? Colors.black.withValues(alpha: 0.55) : Colors.white.withValues(alpha: 0.9),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
               ),
               child: Image.asset(
                 'assets/logo.png',
@@ -445,7 +446,7 @@ class _LoginScreenState extends State<LoginScreen> {
       padding: const EdgeInsets.all(5),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(18),
-        color: isDark ? Colors.white.withOpacity(0.06) : Colors.black.withOpacity(0.045),
+        color: isDark ? Colors.white.withValues(alpha: 0.06) : Colors.black.withValues(alpha: 0.045),
         border: Border.all(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
       ),
       child: Row(
@@ -467,7 +468,7 @@ class _LoginScreenState extends State<LoginScreen> {
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(14),
           gradient: active ? const LinearGradient(colors: [AppColors.purple, AppColors.purpleLight]) : null,
-          boxShadow: active ? [BoxShadow(color: AppColors.purple.withOpacity(0.28), blurRadius: 18, offset: const Offset(0, 8))] : null,
+          boxShadow: active ? [BoxShadow(color: AppColors.purple.withValues(alpha: 0.28), blurRadius: 18, offset: const Offset(0, 8))] : null,
         ),
         alignment: Alignment.center,
         child: Text(
@@ -487,8 +488,8 @@ class _LoginScreenState extends State<LoginScreen> {
       padding: const EdgeInsets.all(13),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(18),
-        color: AppColors.purple.withOpacity(isDark ? 0.13 : 0.08),
-        border: Border.all(color: AppColors.purple.withOpacity(0.22)),
+        color: AppColors.purple.withValues(alpha: isDark ? 0.13 : 0.08),
+        border: Border.all(color: AppColors.purple.withValues(alpha: 0.22)),
       ),
       child: const Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -513,7 +514,7 @@ class _LoginScreenState extends State<LoginScreen> {
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(18),
         border: Border.all(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
-        color: isDark ? Colors.white.withOpacity(0.04) : Colors.white.withOpacity(0.55),
+        color: isDark ? Colors.white.withValues(alpha: 0.04) : Colors.white.withValues(alpha: 0.55),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
@@ -567,11 +568,11 @@ class _LoginScreenState extends State<LoginScreen> {
         width: double.infinity,
         padding: EdgeInsets.fromLTRB(16, _isCreateMode ? 16 : 20, 16, 18),
         decoration: BoxDecoration(
-          color: isDark ? Colors.white.withOpacity(0.065) : Colors.white.withOpacity(0.72),
+          color: isDark ? Colors.white.withValues(alpha: 0.065) : Colors.white.withValues(alpha: 0.72),
           borderRadius: BorderRadius.circular(30),
-          border: Border.all(color: isDark ? Colors.white.withOpacity(0.09) : Colors.white.withOpacity(0.75)),
+          border: Border.all(color: isDark ? Colors.white.withValues(alpha: 0.09) : Colors.white.withValues(alpha: 0.75)),
           boxShadow: [
-            BoxShadow(color: Colors.black.withOpacity(isDark ? 0.28 : 0.08), blurRadius: 28, offset: const Offset(0, 18)),
+            BoxShadow(color: Colors.black.withValues(alpha: isDark ? 0.28 : 0.08), blurRadius: 28, offset: const Offset(0, 18)),
           ],
         ),
         child: Column(
@@ -710,8 +711,8 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
             ),
           ),
-          Positioned(top: -90, right: -70, child: _glowCircle(220, AppColors.purple.withOpacity(isDark ? 0.32 : 0.18))),
-          Positioned(bottom: -110, left: -80, child: _glowCircle(250, AppColors.purpleLight.withOpacity(isDark ? 0.25 : 0.15))),
+          Positioned(top: -90, right: -70, child: _glowCircle(220, AppColors.purple.withValues(alpha: isDark ? 0.32 : 0.18))),
+          Positioned(bottom: -110, left: -80, child: _glowCircle(250, AppColors.purpleLight.withValues(alpha: isDark ? 0.25 : 0.15))),
           Positioned(top: 150, left: -40, child: Transform.rotate(angle: -math.pi / 8, child: _glassPill(isDark))),
           SafeArea(
             child: LayoutBuilder(
@@ -768,8 +769,8 @@ class _LoginScreenState extends State<LoginScreen> {
       height: 46,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(99),
-        color: isDark ? Colors.white.withOpacity(0.05) : Colors.white.withOpacity(0.42),
-        border: Border.all(color: Colors.white.withOpacity(0.16)),
+        color: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.white.withValues(alpha: 0.42),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
       ),
     );
   }

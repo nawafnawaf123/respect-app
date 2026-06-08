@@ -1,3 +1,4 @@
+// ignore_for_file: deprecated_member_use, unused_element, unused_field, unused_import, unused_element_parameter, prefer_const_constructors, prefer_const_declarations, use_build_context_synchronously, unnecessary_this, unnecessary_brace_in_string_interps, curly_braces_in_flow_control_structures, prefer_final_fields, unnecessary_type_check, unnecessary_non_null_assertion
 import 'dart:convert';
 import 'dart:io';
 
@@ -804,7 +805,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                       children: [
                         CircleAvatar(
                           radius: 26,
-                          backgroundColor: AppColors.purple.withOpacity(0.18),
+                          backgroundColor: AppColors.purple.withValues(alpha: 0.18),
                           child: Icon(notification.icon, color: AppColors.purple),
                         ),
                         const SizedBox(width: 12),
@@ -919,7 +920,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           padding: const EdgeInsets.all(24),
           children: [
             const SizedBox(height: 130),
-            Icon(Icons.notifications_none_rounded, size: 82, color: AppColors.purple.withOpacity(0.9)),
+            Icon(Icons.notifications_none_rounded, size: 82, color: AppColors.purple.withValues(alpha: 0.9)),
             const SizedBox(height: 14),
             const Center(child: Text('لا توجد إشعارات بعد', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900))),
             const SizedBox(height: 6),
@@ -945,7 +946,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                     clipBehavior: Clip.none,
                     children: [
                       CircleAvatar(
-                        backgroundColor: AppColors.purple.withOpacity(0.2),
+                        backgroundColor: AppColors.purple.withValues(alpha: 0.2),
                         child: Icon(n.icon, color: AppColors.purple),
                       ),
                       if (n.unread)

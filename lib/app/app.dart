@@ -1,3 +1,4 @@
+// ignore_for_file: deprecated_member_use, unused_element, unused_field, unused_import, unused_element_parameter, prefer_const_constructors, prefer_const_declarations, use_build_context_synchronously, unnecessary_this, unnecessary_brace_in_string_interps, curly_braces_in_flow_control_structures, prefer_final_fields, unnecessary_type_check, unnecessary_non_null_assertion
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
@@ -137,7 +138,8 @@ class _AuthGateState extends State<AuthGate> {
     bool validSession = false;
     try {
       validSession = await SupabaseService.hasSavedSession();
-    } catch (_) {
+    } catch (e, st) {
+      _respectSafeLog(e, st);
       validSession = false;
     }
 
@@ -164,34 +166,6 @@ class _AuthGateState extends State<AuthGate> {
     try {
       await task();
     } catch (e, st) { _respectSafeLog(e, st); }
-  }
-
-  Future<void> _warmUpFeedData() async {
-    try {
-      final rows = await SupabaseService.client
-          .from('posts')
-          .select('id,username,name,user,text,created_at,time,avatar_url,avatarPath,image_url,video_url,voice_url,voicePath,voice_seconds,voiceSeconds,likes,reposts,shares,views,replies')
-          .order('created_at', ascending: false)
-          .range(0, 11)
-          .timeout(const Duration(seconds: 8));
-
-      final ids = <String>[];
-      for (final item in rows) {
-        if (item is Map && (item['id'] ?? '').toString().isNotEmpty) {
-          ids.add((item['id'] ?? '').toString());
-        }
-      }
-
-      if (ids.isEmpty) return;
-
-      await Future.wait([
-        SupabaseService.client.from('post_likes').select('post_id').inFilter('post_id', ids).timeout(const Duration(seconds: 5)),
-        SupabaseService.client.from('post_reposts').select('post_id,username,created_at').inFilter('post_id', ids).timeout(const Duration(seconds: 5)),
-        SupabaseService.client.from('post_views').select('post_id').inFilter('post_id', ids).timeout(const Duration(seconds: 5)),
-      ], eagerError: false);
-    } catch (_) {
-      // تجاهل أي جدول ناقص أو اتصال بطيء حتى لا يتوقف السبلاش.
-    }
   }
 
   @override

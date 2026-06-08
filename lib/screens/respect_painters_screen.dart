@@ -1,3 +1,4 @@
+// ignore_for_file: deprecated_member_use, unused_element, unused_field, unused_import, unused_local_variable, unused_element_parameter, prefer_const_constructors, prefer_const_declarations, prefer_const_literals_to_create_immutables, curly_braces_in_flow_control_structures, sized_box_for_whitespace, dead_code, unnecessary_type_check, unnecessary_non_null_assertion, use_build_context_synchronously, unnecessary_brace_in_string_interps, prefer_final_fields
 import 'dart:async';
 import 'dart:io';
 
@@ -148,7 +149,7 @@ class _RespectPaintersScreenState extends State<RespectPaintersScreen> {
 
     showDialog(
       context: context,
-      barrierColor: Colors.black.withOpacity(0.92),
+      barrierColor: Colors.black.withValues(alpha: 0.92),
       builder: (context) {
         return Directionality(
           textDirection: TextDirection.rtl,
@@ -187,16 +188,16 @@ class _RespectPaintersScreenState extends State<RespectPaintersScreen> {
                         IconButton.filled(
                           onPressed: () => Navigator.of(context).pop(),
                           icon: const Icon(Icons.close_rounded),
-                          style: IconButton.styleFrom(backgroundColor: Colors.white.withOpacity(0.14), foregroundColor: Colors.white),
+                          style: IconButton.styleFrom(backgroundColor: Colors.white.withValues(alpha: 0.14), foregroundColor: Colors.white),
                         ),
                         const SizedBox(width: 10),
                         Expanded(
                           child: Container(
                             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                             decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(0.45),
+                              color: Colors.black.withValues(alpha: 0.45),
                               borderRadius: BorderRadius.circular(18),
-                              border: Border.all(color: Colors.white.withOpacity(0.12)),
+                              border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
                             ),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
@@ -484,9 +485,9 @@ class _RespectPaintersScreenState extends State<RespectPaintersScreen> {
               width: double.infinity,
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: AppColors.purple.withOpacity(0.12),
+                color: AppColors.purple.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: AppColors.purpleLight.withOpacity(0.35)),
+                border: Border.all(color: AppColors.purpleLight.withValues(alpha: 0.35)),
               ),
               child: Row(
                 children: [
@@ -518,14 +519,14 @@ class _RespectPaintersScreenState extends State<RespectPaintersScreen> {
               decoration: BoxDecoration(
                 color: isDark ? AppColors.darkCard2 : AppColors.lightCard2,
                 borderRadius: BorderRadius.circular(22),
-                border: Border.all(color: AppColors.purple.withOpacity(0.28)),
+                border: Border.all(color: AppColors.purple.withValues(alpha: 0.28)),
               ),
               clipBehavior: Clip.antiAlias,
               child: _selectedImage == null
                   ? Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.add_photo_alternate_rounded, size: 46, color: AppColors.purple.withOpacity(0.9)),
+                  Icon(Icons.add_photo_alternate_rounded, size: 46, color: AppColors.purple.withValues(alpha: 0.9)),
                   const SizedBox(height: 8),
                   Text('اختر صورة الرسمة', style: TextStyle(fontWeight: FontWeight.w800, color: isDark ? Colors.white : Colors.black87)),
                   const SizedBox(height: 4),
@@ -729,7 +730,7 @@ class _PodiumPlace extends StatelessWidget {
               height: podiumHeight,
               alignment: Alignment.center,
               decoration: BoxDecoration(
-                gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [color.withOpacity(0.95), color.withOpacity(0.45)]),
+                gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [color.withValues(alpha: 0.95), color.withValues(alpha: 0.45)]),
                 borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
               ),
               child: Text('$rank', style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w900, color: Colors.white)),
@@ -762,8 +763,8 @@ class _DrawingCard extends StatelessWidget {
         decoration: BoxDecoration(
           color: isDark ? AppColors.darkCard : AppColors.lightCard,
           borderRadius: BorderRadius.circular(22),
-          border: Border.all(color: rank > 0 ? AppColors.purpleLight.withOpacity(0.8) : (isDark ? AppColors.darkBorder : AppColors.lightBorder)),
-          boxShadow: [BoxShadow(color: AppColors.purple.withOpacity(isDark ? 0.14 : 0.08), blurRadius: 22, offset: const Offset(0, 8))],
+          border: Border.all(color: rank > 0 ? AppColors.purpleLight.withValues(alpha: 0.8) : (isDark ? AppColors.darkBorder : AppColors.lightBorder)),
+          boxShadow: [BoxShadow(color: AppColors.purple.withValues(alpha: isDark ? 0.14 : 0.08), blurRadius: 22, offset: const Offset(0, 8))],
         ),
         clipBehavior: Clip.antiAlias,
         child: Column(
@@ -781,7 +782,7 @@ class _DrawingCard extends StatelessWidget {
                     right: 8,
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                      decoration: BoxDecoration(color: Colors.black.withOpacity(0.48), borderRadius: BorderRadius.circular(20)),
+                      decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.48), borderRadius: BorderRadius.circular(20)),
                       child: Text(rank > 0 ? 'المركز $rank' : status, style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w900)),
                     ),
                   ),
@@ -850,7 +851,7 @@ class _MatchCard extends StatelessWidget {
             const SizedBox(height: 8),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              decoration: BoxDecoration(color: AppColors.success.withOpacity(0.14), borderRadius: BorderRadius.circular(14)),
+              decoration: BoxDecoration(color: AppColors.success.withValues(alpha: 0.14), borderRadius: BorderRadius.circular(14)),
               child: Row(
                 children: [
                   const Icon(Icons.emoji_events_rounded, color: AppColors.success, size: 18),

@@ -1,3 +1,4 @@
+// ignore_for_file: deprecated_member_use, unused_element, unused_field, unused_import, unused_element_parameter, prefer_const_constructors, prefer_const_declarations, use_build_context_synchronously, unnecessary_this, unnecessary_brace_in_string_interps, curly_braces_in_flow_control_structures, prefer_final_fields, unnecessary_type_check, unnecessary_non_null_assertion
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -12,7 +13,6 @@ import 'package:record/record.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 import 'package:http/http.dart' as http;
 import 'package:permission_handler/permission_handler.dart';
@@ -1896,7 +1896,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                   children: [
                     CircleAvatar(
                       radius: 44,
-                      backgroundColor: AppColors.purple.withOpacity(.22),
+                      backgroundColor: AppColors.purple.withValues(alpha: .22),
                       backgroundImage: groupAvatar,
                       child: groupAvatar == null ? const Icon(Icons.groups_rounded, color: Colors.white, size: 42) : null,
                     ),
@@ -2230,7 +2230,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                   child: Row(
                     children: [
                       CircleAvatar(
-                        backgroundColor: AppColors.purple.withOpacity(.18),
+                        backgroundColor: AppColors.purple.withValues(alpha: .18),
                         child: Icon(video ? Icons.videocam_rounded : Icons.call_rounded, color: AppColors.purple),
                       ),
                       const SizedBox(width: 12),
@@ -2273,7 +2273,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                   child: ListView.separated(
                     padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
                     itemCount: candidates.length,
-                    separatorBuilder: (_, __) => Divider(color: AppColors.purple.withOpacity(.10)),
+                    separatorBuilder: (_, __) => Divider(color: AppColors.purple.withValues(alpha: .10)),
                     itemBuilder: (ctx, i) {
                       final u = candidates[i];
                       final username = SupabaseService.displayUsername((u['username'] ?? '').toString());
@@ -2424,9 +2424,9 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                       child: Container(
                         padding: const EdgeInsets.all(8),
                         decoration: BoxDecoration(
-                          color: AppColors.purple.withOpacity(.14),
+                          color: AppColors.purple.withValues(alpha: .14),
                           borderRadius: BorderRadius.circular(14),
-                          border: Border.all(color: AppColors.purple.withOpacity(.28)),
+                          border: Border.all(color: AppColors.purple.withValues(alpha: .28)),
                         ),
                         child: const Icon(Icons.group_add_rounded, size: 22, color: AppColors.purple),
                       ),
@@ -2441,7 +2441,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                   ? ListView(
                 children: [
                   SizedBox(height: MediaQuery.of(context).size.height * 0.32),
-                  Icon(Icons.forum_rounded, size: 70, color: AppColors.purple.withOpacity(.55)),
+                  Icon(Icons.forum_rounded, size: 70, color: AppColors.purple.withValues(alpha: .55)),
                   const SizedBox(height: 12),
                   Center(
                     child: Text(
@@ -2524,7 +2524,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
           ),
         ),
         if (!_canSend)
-          Container(width: double.infinity, padding: const EdgeInsets.all(12), color: AppColors.danger.withOpacity(.10), child: const Text('الدردشة مقفلة، الإرسال متاح للمشرفين فقط', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w800))),
+          Container(width: double.infinity, padding: const EdgeInsets.all(12), color: AppColors.danger.withValues(alpha: .10), child: const Text('الدردشة مقفلة، الإرسال متاح للمشرفين فقط', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w800))),
         if (_editingMessage != null)
           _EditPreviewBar(
             text: _editingMessage?.text ?? '',
@@ -2586,7 +2586,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
           decoration: BoxDecoration(color: isDark ? AppColors.darkCard : AppColors.lightCard, border: Border(top: BorderSide(color: isDark ? AppColors.darkBorder : AppColors.lightBorder))),
           child: SafeArea(top: false, child: Row(children: [
             CircleAvatar(
-              backgroundColor: _canSend ? AppColors.purple.withOpacity(.16) : Colors.grey.withOpacity(.20),
+              backgroundColor: _canSend ? AppColors.purple.withValues(alpha: .16) : Colors.grey.withValues(alpha: .20),
               child: IconButton(
                 tooltip: 'إرسال صورة أو فيديو',
                 icon: _sendingMedia
@@ -2616,7 +2616,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
               onPanEnd: _handleVoicePressEnd,
               onPanCancel: _handleVoicePressCancel,
               child: CircleAvatar(
-                backgroundColor: _recordingVoice ? AppColors.danger : (_canSend ? AppColors.purple.withOpacity(.85) : Colors.grey),
+                backgroundColor: _recordingVoice ? AppColors.danger : (_canSend ? AppColors.purple.withValues(alpha: .85) : Colors.grey),
                 child: _sendingVoice
                     ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                     : Icon(_recordingVoice ? (_lockedVoiceRecording ? Icons.lock_rounded : Icons.mic_rounded) : Icons.mic_rounded, color: Colors.white),
@@ -2696,7 +2696,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
           border: Border(bottom: BorderSide(color: isDark ? AppColors.darkBorder : AppColors.lightBorder)),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(isDark ? .20 : .06),
+              color: Colors.black.withValues(alpha: isDark ? .20 : .06),
               blurRadius: 18,
               offset: const Offset(0, 8),
             ),
@@ -2829,17 +2829,17 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                   padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 9),
                   constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.76),
                   decoration: BoxDecoration(
-                    color: _selectedMessageIds.contains(msg.id) ? AppColors.purple.withOpacity(.34) : (isMe ? AppColors.purple.withOpacity(0.88) : (isDark ? AppColors.darkCard : AppColors.lightCard2)),
-                    border: Border.all(color: isHighlighted ? AppColors.purple.withOpacity(.95) : (_selectedMessageIds.contains(msg.id) ? Colors.white.withOpacity(.65) : Colors.transparent), width: isHighlighted ? 1.8 : 1.2),
+                    color: _selectedMessageIds.contains(msg.id) ? AppColors.purple.withValues(alpha: .34) : (isMe ? AppColors.purple.withValues(alpha: 0.88) : (isDark ? AppColors.darkCard : AppColors.lightCard2)),
+                    border: Border.all(color: isHighlighted ? AppColors.purple.withValues(alpha: .95) : (_selectedMessageIds.contains(msg.id) ? Colors.white.withValues(alpha: .65) : Colors.transparent), width: isHighlighted ? 1.8 : 1.2),
                     boxShadow: isHighlighted
                         ? [
                       BoxShadow(
-                        color: AppColors.purple.withOpacity(.72),
+                        color: AppColors.purple.withValues(alpha: .72),
                         blurRadius: 26,
                         spreadRadius: 3,
                       ),
                       BoxShadow(
-                        color: AppColors.purple.withOpacity(.35),
+                        color: AppColors.purple.withValues(alpha: .35),
                         blurRadius: 42,
                         spreadRadius: 9,
                       ),
@@ -3017,7 +3017,7 @@ class _PendingMediaPreviewBar extends StatelessWidget {
       decoration: BoxDecoration(
         color: isDark ? AppColors.darkCard : AppColors.lightCard,
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: AppColors.purple.withOpacity(.24)),
+        border: Border.all(color: AppColors.purple.withValues(alpha: .24)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -3070,7 +3070,7 @@ class _PendingMediaPreviewBar extends StatelessWidget {
                           ? Container(
                         width: 84,
                         height: 84,
-                        color: Colors.black.withOpacity(.22),
+                        color: Colors.black.withValues(alpha: .22),
                         child: const Icon(Icons.play_circle_fill_rounded, color: Colors.white, size: 34),
                       )
                           : Image.file(
@@ -3081,7 +3081,7 @@ class _PendingMediaPreviewBar extends StatelessWidget {
                         errorBuilder: (_, __, ___) => Container(
                           width: 84,
                           height: 84,
-                          color: Colors.black.withOpacity(.12),
+                          color: Colors.black.withValues(alpha: .12),
                           child: const Icon(Icons.broken_image_rounded),
                         ),
                       ),
@@ -3093,7 +3093,7 @@ class _PendingMediaPreviewBar extends StatelessWidget {
                         onTap: () => onRemove(i),
                         child: Container(
                           padding: const EdgeInsets.all(3),
-                          decoration: BoxDecoration(color: Colors.black.withOpacity(.62), shape: BoxShape.circle),
+                          decoration: BoxDecoration(color: Colors.black.withValues(alpha: .62), shape: BoxShape.circle),
                           child: const Icon(Icons.close_rounded, color: Colors.white, size: 15),
                         ),
                       ),
@@ -3125,9 +3125,9 @@ class _MediaViewLimitChip extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
-          color: selected ? AppColors.purple : Colors.white.withOpacity(.07),
+          color: selected ? AppColors.purple : Colors.white.withValues(alpha: .07),
           borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: selected ? AppColors.purple : Colors.white.withOpacity(.12)),
+          border: Border.all(color: selected ? AppColors.purple : Colors.white.withValues(alpha: .12)),
         ),
         child: Text(label, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 11)),
       ),
@@ -3192,13 +3192,13 @@ class _SwipeReplyMessageShellState extends State<_SwipeReplyMessageShell> {
                 height: 26,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: AppColors.purple.withOpacity(.22 + (progress * .26)),
-                  border: Border.all(color: AppColors.purple.withOpacity(.45 + (progress * .35))),
+                  color: AppColors.purple.withValues(alpha: .22 + (progress * .26)),
+                  border: Border.all(color: AppColors.purple.withValues(alpha: .45 + (progress * .35))),
                 ),
                 child: Icon(
                   Icons.reply_rounded,
                   size: 20,
-                  color: Colors.white.withOpacity(.72 + (progress * .28)),
+                  color: Colors.white.withValues(alpha: .72 + (progress * .28)),
                 ),
               ),
             ),
@@ -3262,7 +3262,7 @@ class _InlineReplyPreview extends StatelessWidget {
         width: 210,
         padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
         decoration: BoxDecoration(
-          color: isMe ? Colors.white.withOpacity(.14) : AppColors.purple.withOpacity(.10),
+          color: isMe ? Colors.white.withValues(alpha: .14) : AppColors.purple.withValues(alpha: .10),
           borderRadius: BorderRadius.circular(12),
           border: Border(right: BorderSide(color: isMe ? Colors.white70 : AppColors.purple, width: 3)),
         ),
@@ -3479,7 +3479,7 @@ class _MediaViewerPageState extends State<_MediaViewerPage> {
               bottom: items.length > 1 ? 104 : 34,
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(color: Colors.black.withOpacity(.55), borderRadius: BorderRadius.circular(16)),
+                decoration: BoxDecoration(color: Colors.black.withValues(alpha: .55), borderRadius: BorderRadius.circular(16)),
                 child: Row(children: [
                   IconButton(onPressed: _togglePlay, icon: Icon(_controller?.value.isPlaying == true ? Icons.pause_rounded : Icons.play_arrow_rounded, color: Colors.white)),
                   Text(_fmt(_position), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
@@ -3573,9 +3573,9 @@ class _HeaderActionButton extends StatelessWidget {
           width: 40,
           height: 40,
           decoration: BoxDecoration(
-            color: AppColors.purple.withOpacity(.14),
+            color: AppColors.purple.withValues(alpha: .14),
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: AppColors.purple.withOpacity(.28)),
+            border: Border.all(color: AppColors.purple.withValues(alpha: .28)),
           ),
           child: Icon(icon, color: AppColors.purple, size: 22),
         ),
@@ -3605,7 +3605,7 @@ class _TypingBubbleState extends State<_TypingBubble> with SingleTickerProviderS
         child: Container(
           margin: const EdgeInsets.only(left: 8, bottom: 8),
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(color: AppColors.purple.withOpacity(.12), borderRadius: BorderRadius.circular(18)),
+          decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: .12), borderRadius: BorderRadius.circular(18)),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -3637,7 +3637,7 @@ class _MessageStatusIcon extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(99),
-        boxShadow: [BoxShadow(color: const Color(0xFF4C1D95).withOpacity(.75), blurRadius: 9, spreadRadius: 1)],
+        boxShadow: [BoxShadow(color: const Color(0xFF4C1D95).withValues(alpha: .75), blurRadius: 9, spreadRadius: 1)],
       ),
       child: const Icon(Icons.done_all_rounded, size: 16, color: Color(0xFF4C1D95)),
     );
@@ -3686,9 +3686,9 @@ class _VoiceMessagePlayer extends StatelessWidget {
       width: 208,
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 6),
       decoration: BoxDecoration(
-        color: isMe ? Colors.white.withOpacity(.10) : AppColors.purple.withOpacity(.08),
+        color: isMe ? Colors.white.withValues(alpha: .10) : AppColors.purple.withValues(alpha: .08),
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: accent.withOpacity(.16)),
+        border: Border.all(color: accent.withValues(alpha: .16)),
       ),
       child: Row(children: [
         InkWell(
@@ -3698,7 +3698,7 @@ class _VoiceMessagePlayer extends StatelessWidget {
             width: 32,
             height: 32,
             decoration: BoxDecoration(
-              color: isMe ? Colors.white.withOpacity(.18) : AppColors.purple.withOpacity(.16),
+              color: isMe ? Colors.white.withValues(alpha: .18) : AppColors.purple.withValues(alpha: .16),
               shape: BoxShape.circle,
             ),
             child: Icon(isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded, color: accent, size: 22),
@@ -3717,9 +3717,9 @@ class _VoiceMessagePlayer extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Row(children: [
-              Text(_fmt(isPlaying ? position : Duration.zero), style: TextStyle(color: accent.withOpacity(.76), fontWeight: FontWeight.w800, fontSize: 10.5)),
+              Text(_fmt(isPlaying ? position : Duration.zero), style: TextStyle(color: accent.withValues(alpha: .76), fontWeight: FontWeight.w800, fontSize: 10.5)),
               const Spacer(),
-              Text(_fmt(total), style: TextStyle(color: accent.withOpacity(.76), fontWeight: FontWeight.w800, fontSize: 10.5)),
+              Text(_fmt(total), style: TextStyle(color: accent.withValues(alpha: .76), fontWeight: FontWeight.w800, fontSize: 10.5)),
             ]),
           ]),
         ),
@@ -3730,9 +3730,9 @@ class _VoiceMessagePlayer extends StatelessWidget {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 5),
             decoration: BoxDecoration(
-              color: accent.withOpacity(.12),
+              color: accent.withValues(alpha: .12),
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: accent.withOpacity(.15)),
+              border: Border.all(color: accent.withValues(alpha: .15)),
             ),
             child: Text('${speed.toStringAsFixed(speed == speed.roundToDouble() ? 0 : 2)}x', style: TextStyle(color: accent, fontWeight: FontWeight.w900, fontSize: 11)),
           ),
@@ -3858,7 +3858,7 @@ class _TrueWaveformPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     if (bars.isEmpty || size.width <= 0 || size.height <= 0) return;
     final played = Paint()..color = accent..style = PaintingStyle.fill;
-    final remain = Paint()..color = accent.withOpacity(.24)..style = PaintingStyle.fill;
+    final remain = Paint()..color = accent.withValues(alpha: .24)..style = PaintingStyle.fill;
     final count = bars.length;
     final gap = 2.0;
     final barWidth = math.max(2.0, (size.width - (gap * (count - 1))) / count);
@@ -4101,9 +4101,9 @@ class _AttachmentActionButton extends StatelessWidget {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final accent = color ?? AppColors.purple;
     final titleColor = isDark ? Colors.white : Colors.black87;
-    final subtitleColor = isDark ? Colors.white.withOpacity(0.62) : AppColors.lightMuted;
-    final tileColor = isDark ? Colors.white.withOpacity(0.07) : AppColors.lightCard2;
-    final borderColor = isDark ? Colors.white.withOpacity(0.08) : AppColors.lightBorder;
+    final subtitleColor = isDark ? Colors.white.withValues(alpha: 0.62) : AppColors.lightMuted;
+    final tileColor = isDark ? Colors.white.withValues(alpha: 0.07) : AppColors.lightCard2;
+    final borderColor = isDark ? Colors.white.withValues(alpha: 0.08) : AppColors.lightBorder;
 
     return InkWell(
       borderRadius: BorderRadius.circular(18),
@@ -4122,7 +4122,7 @@ class _AttachmentActionButton extends StatelessWidget {
               width: 44,
               height: 44,
               decoration: BoxDecoration(
-                color: accent.withOpacity(isDark ? 0.18 : 0.12),
+                color: accent.withValues(alpha: isDark ? 0.18 : 0.12),
                 shape: BoxShape.circle,
               ),
               child: Icon(icon, color: accent, size: 24),
@@ -4203,10 +4203,10 @@ class _LockedVoiceRecorderBar extends StatelessWidget {
       decoration: BoxDecoration(
         color: const Color(0xFF17121F),
         borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: Colors.white.withOpacity(0.08)),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.25),
+            color: Colors.black.withValues(alpha: 0.25),
             blurRadius: 18,
             offset: const Offset(0, 8),
           ),
@@ -4233,7 +4233,7 @@ class _LockedVoiceRecorderBar extends StatelessWidget {
                     height: h,
                     margin: const EdgeInsets.symmetric(horizontal: 1.5),
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(paused ? 0.35 : 0.8),
+                      color: Colors.white.withValues(alpha: paused ? 0.35 : 0.8),
                       borderRadius: BorderRadius.circular(99),
                     ),
                   );
@@ -4321,7 +4321,7 @@ class _PendingVoicePreviewBar extends StatelessWidget {
       decoration: BoxDecoration(
         color: const Color(0xFF17121F),
         borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: Colors.white.withOpacity(0.08)),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
       ),
       child: Row(
         children: [
@@ -4345,7 +4345,7 @@ class _PendingVoicePreviewBar extends StatelessWidget {
                         width: 3,
                         height: h,
                         decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.75),
+                          color: Colors.white.withValues(alpha: 0.75),
                           borderRadius: BorderRadius.circular(99),
                         ),
                       ),
@@ -4361,7 +4361,7 @@ class _PendingVoicePreviewBar extends StatelessWidget {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.08),
+                color: Colors.white.withValues(alpha: 0.08),
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Text(
@@ -4373,7 +4373,7 @@ class _PendingVoicePreviewBar extends StatelessWidget {
           const SizedBox(width: 6),
           Text(
             _fmt(shownSeconds),
-            style: TextStyle(color: Colors.white.withOpacity(0.75), fontWeight: FontWeight.w700),
+            style: TextStyle(color: Colors.white.withValues(alpha: 0.75), fontWeight: FontWeight.w700),
           ),
           IconButton(
             onPressed: onDelete ?? onCancel,
@@ -4399,9 +4399,9 @@ class _LimitedMediaBadge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(.58),
+        color: Colors.black.withValues(alpha: .58),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Colors.white.withOpacity(.18)),
+        border: Border.all(color: Colors.white.withValues(alpha: .18)),
       ),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         const Icon(Icons.visibility_rounded, color: Colors.white, size: 14),
@@ -4505,7 +4505,7 @@ class _ChatVideoMessage extends StatelessWidget {
             child: Stack(
               alignment: Alignment.center,
               children: [
-                Icon(Icons.videocam_rounded, color: Colors.white.withOpacity(0.28), size: 72),
+                Icon(Icons.videocam_rounded, color: Colors.white.withValues(alpha: 0.28), size: 72),
                 const Icon(Icons.play_circle_fill_rounded, color: Colors.white, size: 62),
                 if (limitedMaxViews > 0)
                   Positioned(
@@ -4579,7 +4579,7 @@ class _ChatMediaGalleryMessage extends StatelessWidget {
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    Icon(Icons.videocam_rounded, color: Colors.white.withOpacity(0.18), size: 54),
+                    Icon(Icons.videocam_rounded, color: Colors.white.withValues(alpha: 0.18), size: 54),
                     const Center(child: Icon(Icons.play_circle_fill_rounded, color: Colors.white, size: 44)),
                   ],
                 ),
@@ -4608,7 +4608,7 @@ class _ChatMediaGalleryMessage extends StatelessWidget {
               ),
             if (hidden > 0)
               Container(
-                color: Colors.black.withOpacity(0.60),
+                color: Colors.black.withValues(alpha: 0.60),
                 child: Center(
                   child: Text(
                     '+$hidden',
@@ -4715,7 +4715,7 @@ class _ChatMediaGalleryMessage extends StatelessWidget {
           Container(
             width: 218,
             height: 1,
-            color: Colors.white.withOpacity(isMe ? .22 : .10),
+            color: Colors.white.withValues(alpha: isMe ? .22 : .10),
           ),
           const SizedBox(height: 7),
           ConstrainedBox(
@@ -5393,7 +5393,7 @@ class _InAppChatCameraPageState extends State<_InAppChatCameraPage> with Widgets
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
                             border: Border.all(color: _cameraPurple, width: 2.4),
-                            boxShadow: [BoxShadow(color: _cameraPurple.withOpacity(.45), blurRadius: 12)],
+                            boxShadow: [BoxShadow(color: _cameraPurple.withValues(alpha: .45), blurRadius: 12)],
                           ),
                           child: Center(
                             child: Container(
@@ -5430,7 +5430,7 @@ class _InAppChatCameraPageState extends State<_InAppChatCameraPage> with Widgets
                     child: Center(
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-                        decoration: BoxDecoration(color: Colors.black.withOpacity(.48), borderRadius: BorderRadius.circular(99), border: Border.all(color: _cameraPurple.withOpacity(.35))),
+                        decoration: BoxDecoration(color: Colors.black.withValues(alpha: .48), borderRadius: BorderRadius.circular(99), border: Border.all(color: _cameraPurple.withValues(alpha: .35))),
                         child: Text('${_currentZoom.toStringAsFixed(1)}x', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
                       ),
                     ),
@@ -5474,7 +5474,7 @@ class _InAppChatCameraPageState extends State<_InAppChatCameraPage> with Widgets
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                       decoration: BoxDecoration(
-                        color: (_recordPaused ? _cameraPurpleDark : Colors.red).withOpacity(.88),
+                        color: (_recordPaused ? _cameraPurpleDark : Colors.red).withValues(alpha: .88),
                         borderRadius: BorderRadius.circular(99),
                       ),
                       child: Row(
@@ -5530,7 +5530,7 @@ class _InAppChatCameraPageState extends State<_InAppChatCameraPage> with Widgets
                 children: [
                   Container(
                     padding: const EdgeInsets.all(4),
-                    decoration: BoxDecoration(color: Colors.black.withOpacity(.48), borderRadius: BorderRadius.circular(99)),
+                    decoration: BoxDecoration(color: Colors.black.withValues(alpha: .48), borderRadius: BorderRadius.circular(99)),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -5558,7 +5558,7 @@ class _InAppChatCameraPageState extends State<_InAppChatCameraPage> with Widgets
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
                             border: Border.all(color: Colors.white, width: 4),
-                            color: Colors.white.withOpacity(_recording ? .2 : .05),
+                            color: Colors.white.withValues(alpha: _recording ? .2 : .05),
                           ),
                           child: AnimatedContainer(
                             duration: const Duration(milliseconds: 180),
@@ -5587,7 +5587,7 @@ class _InAppChatCameraPageState extends State<_InAppChatCameraPage> with Widgets
                         : 'اضغط لتصوير فيديو')
                         : 'اضغط لالتقاط صورة',
                     style: TextStyle(
-                      color: Colors.white.withOpacity(.9),
+                      color: Colors.white.withValues(alpha: .9),
                       fontWeight: FontWeight.w800,
                       shadows: const [Shadow(color: Colors.black, blurRadius: 8)],
                     ),
@@ -5622,9 +5622,9 @@ class _CameraExposureSlider extends StatelessWidget {
       height: 220,
       padding: const EdgeInsets.symmetric(vertical: 12),
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(.48),
+        color: Colors.black.withValues(alpha: .48),
         borderRadius: BorderRadius.circular(99),
-        border: Border.all(color: _InAppChatCameraPageState._cameraPurple.withOpacity(.55)),
+        border: Border.all(color: _InAppChatCameraPageState._cameraPurple.withValues(alpha: .55)),
       ),
       child: Column(
         children: [
@@ -5640,7 +5640,7 @@ class _CameraExposureSlider extends StatelessWidget {
                   activeTrackColor: _InAppChatCameraPageState._cameraPurple,
                   inactiveTrackColor: Colors.white30,
                   thumbColor: _InAppChatCameraPageState._cameraPurple,
-                  overlayColor: _InAppChatCameraPageState._cameraPurple.withOpacity(.24),
+                  overlayColor: _InAppChatCameraPageState._cameraPurple.withValues(alpha: .24),
                 ),
                 child: Slider(
                   value: value.clamp(min, max).toDouble(),
@@ -5679,10 +5679,10 @@ class _CameraResolutionChip extends StatelessWidget {
         duration: const Duration(milliseconds: 160),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
         decoration: BoxDecoration(
-          color: active ? _InAppChatCameraPageState._cameraPurple : Colors.black.withOpacity(.42),
+          color: active ? _InAppChatCameraPageState._cameraPurple : Colors.black.withValues(alpha: .42),
           borderRadius: BorderRadius.circular(99),
-          border: Border.all(color: active ? _InAppChatCameraPageState._cameraPurple : _InAppChatCameraPageState._cameraPurple.withOpacity(.55)),
-          boxShadow: active ? [BoxShadow(color: _InAppChatCameraPageState._cameraPurple.withOpacity(.35), blurRadius: 10)] : null,
+          border: Border.all(color: active ? _InAppChatCameraPageState._cameraPurple : _InAppChatCameraPageState._cameraPurple.withValues(alpha: .55)),
+          boxShadow: active ? [BoxShadow(color: _InAppChatCameraPageState._cameraPurple.withValues(alpha: .35), blurRadius: 10)] : null,
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -5739,7 +5739,7 @@ class _CameraTopButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: _InAppChatCameraPageState._cameraPurple.withOpacity(.82),
+      color: _InAppChatCameraPageState._cameraPurple.withValues(alpha: .82),
       shape: const CircleBorder(),
       child: InkWell(
         customBorder: const CircleBorder(),
@@ -5762,7 +5762,7 @@ class _CameraRoundButton extends StatelessWidget {
     return Opacity(
       opacity: enabled ? 1 : .38,
       child: Material(
-        color: enabled ? _InAppChatCameraPageState._cameraPurple.withOpacity(.82) : Colors.black.withOpacity(.45),
+        color: enabled ? _InAppChatCameraPageState._cameraPurple.withValues(alpha: .82) : Colors.black.withValues(alpha: .45),
         shape: const CircleBorder(),
         child: InkWell(
           customBorder: const CircleBorder(),

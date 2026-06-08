@@ -1,3 +1,4 @@
+// ignore_for_file: unused_field
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -1571,12 +1572,14 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen> with WidgetsBin
   Future<void> _loadRequest(String url) async {
     final clean = _cleanStreamUrl(url);
     if (clean.isEmpty) return;
-    if (mounted) setState(() {
-      _isLoading = true;
-      _hasError = false;
-      _errorMessage = '';
-      _progress = 0;
-    });
+    if (mounted) {
+      setState(() {
+        _isLoading = true;
+        _hasError = false;
+        _errorMessage = '';
+        _progress = 0;
+      });
+    }
     await _controller.setUserAgent(_webViewUserAgentForStream(clean));
     await _controller.loadRequest(Uri.parse(clean), headers: {
       HttpHeaders.userAgentHeader: _webViewUserAgentForStream(clean),
@@ -1587,12 +1590,14 @@ class _StreamPlayerScreenState extends State<StreamPlayerScreen> with WidgetsBin
   }
 
   Future<void> _loadHtml(String html) async {
-    if (mounted) setState(() {
-      _isLoading = true;
-      _hasError = false;
-      _errorMessage = '';
-      _progress = 0;
-    });
+    if (mounted) {
+      setState(() {
+        _isLoading = true;
+        _hasError = false;
+        _errorMessage = '';
+        _progress = 0;
+      });
+    }
     await _controller.setUserAgent(_webViewUserAgentForStream(_originalUrl));
     await _controller.loadHtmlString(html, baseUrl: 'https://localhost');
     _startAntiBlackTimer();
