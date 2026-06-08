@@ -1,5 +1,6 @@
 import base64
 import json
+import logging
 import os
 import re
 import tempfile
@@ -15,6 +16,18 @@ from google.oauth2 import service_account
 from google.auth.transport.requests import Request
 
 
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger("respect_backend")
+
+
+def _safe_response_text(value: str, limit: int = 500) -> str:
+    if not value:
+        return ""
+    value = re.sub(r'(?i)(api[_-]?key|token|authorization|private[_-]?key|access[_-]?token|refresh[_-]?token)\s*[=:]\s*[^\s,}]+', r'\1=<redacted>', value)
+    return value[:limit]
+
+
 def _env_name(*parts: str) -> str:
     return "".join(parts)
 
@@ -27,11 +40,11 @@ PROJECT_ID = _env_value("FIREBASE", "_PROJECT", "_ID", default="respect-app-dbc7
 SA_JSON = _env_value("FIREBASE", "_SERVICE", "_ACCOUNT", "_JSON")
 
 # Local Windows:
-SA_FILE = _env_value("FIREBASE", "_SERVICE", "_ACCOUNT", default=r"C:\keys\respect-app.json")
+SA_FILE = _env_value("FIREBASE", "_SERVICE", "_ACCOUNT", "_FILE")
 
 SB_URL = _env_value("SUPABASE", "_URL", default="https://oafbzceorbjykgoffuaa.supabase.co").rstrip("/")
-SB_ANON = _env_value("SUPABASE", "_" + "KE" + "Y")
-SB_SERVICE = _env_value("SUPABASE", "_SERVICE", "_ROLE", "_" + "KE" + "Y")
+SB_ANON = _env_value("SUPABASE", "_ANON", "_KEY")
+SB_SERVICE = _env_value("SUPABASE", "_SERVICE", "_ROLE", "_KEY")
 APP_SHARED_SECRET = os.getenv("APP_SHARED_SECRET", "")
 
 # ================= Respect AI / Qwen Model Studio =================
@@ -54,7 +67,7 @@ QWEN_BASE_URL = os.getenv("QWEN_BASE_URL", "https://dashscope-intl.aliyuncs.com/
 
 # ================= Link Safety / Google Safe Browsing =================
 # ضع المفتاح في Render كمتغير بيئة:
-GSB_TOKEN = _env_value("GOOGLE", "_SAFE", "_BROWSING", "_API", "_" + "KE" + "Y")
+GSB_TOKEN = _env_value("GOOGLE", "_SAFE", "_BROWSING", "_API", "_KEY")
 GOOGLE_SAFE_BROWSING_ENDPOINT = "https://safebrowsing.googleapis.com/v4/threatMatches:find"
 
 # ================= Link Safety / VirusTotal =================
@@ -109,14 +122,20 @@ def _load_service_account_info() -> Dict[str, Any]:
         except json.JSONDecodeError as e:
             raise HTTPException(status_code=500, detail=f"Invalid FIREBASE_SA_JSON: {e}")
 
+    if not SA_FILE:
+        raise HTTPException(
+            status_code=500,
+            detail="Missing Firebase service account. Set FIREBASE_SERVICE_ACCOUNT_JSON or FIREBASE_SERVICE_ACCOUNT_FILE.",
+        )
+
     if not os.path.exists(SA_FILE):
-        raise HTTPException(status_code=500, detail=f"Service account file not found: {SA_FILE}")
+        raise HTTPException(status_code=500, detail="Firebase service account file not found")
 
     try:
         with open(SA_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Cannot read service account file: {e}")
+        raise HTTPException(status_code=500, detail=f"Cannot read Firebase service account file: {e}")
 
 
 def get_access_token() -> str:
@@ -441,11 +460,8 @@ def send_fcm_v1(token: str, msg_type: str, title: str, body: str, data: Dict[str
         timeout=20,
     )
 
-    print("========== FCM RESPONSE ==========")
-    print("TYPE:", msg_type)
-    print("STATUS:", response.status_code)
-    print("BODY:", response.text)
-    print("==================================")
+    logger.info("FCM response type=%s status=%s", msg_type, response.status_code)
+    logger.debug("FCM response body=%s", _safe_response_text(response.text))
 
     if response.status_code >= 400:
         raise HTTPException(
@@ -465,9 +481,9 @@ def health():
     return {
         "ok": True,
         "project": PROJECT_ID,
-        "service_account_source": "env:FIREBASE_SA_JSON" if SA_JSON else SA_FILE,
+        "service_account_source": "env:FIREBASE_SERVICE_ACCOUNT_JSON" if SA_JSON else ("env:FIREBASE_SERVICE_ACCOUNT_FILE" if SA_FILE else "missing"),
         "using_service_account_json_env": bool(SA_JSON),
-        "service_account_file_exists": os.path.exists(SA_FILE),
+        "service_account_file_configured": bool(SA_FILE),
         "ai_provider": "qwen",
         "respect_ai_enabled": bool(QWEN_API_KEY),
         "server_delete_enabled": bool(SB_SERVICE),
@@ -739,10 +755,8 @@ def _chat_completion_request(
         timeout=timeout,
     )
 
-    print(f"========== RESPECT AI {log_label} RESPONSE ==========")
-    print("STATUS:", response.status_code)
-    print("BODY:", response.text[:1200])
-    print("=====================================================")
+    logger.info("Respect AI %s response status=%s", log_label, response.status_code)
+    logger.debug("Respect AI %s response body=%s", log_label, _safe_response_text(response.text, 800))
 
     if response.status_code >= 400:
         raise HTTPException(
@@ -1324,7 +1338,7 @@ def moderate_with_qwen(req: RespectAIModerationRequest) -> Dict[str, Any]:
         result["checks"] = 1
         return result
     except Exception as e:
-        print(f"Moderation pass failed: {e}")
+        logger.warning("Moderation pass failed: %s", e)
         fallback_block = _local_obvious_violation(text)
         if fallback_block is not None:
             fallback_block["errors"] = [str(e)[:300]]
@@ -1375,9 +1389,9 @@ def _delete_supabase_post(post_id: str) -> Dict[str, Any]:
         )
         deleted_replies = rr.status_code // 100 == 2
         if rr.status_code >= 400:
-            print("Supabase delete replies failed:", rr.status_code, rr.text[:500])
+            logger.warning("Supabase delete replies failed status=%s body=%s", rr.status_code, _safe_response_text(rr.text, 300))
     except Exception as e:
-        print("Supabase delete replies exception:", e)
+        logger.exception("Supabase delete replies exception: %s", e)
 
     r = requests.delete(
         f"{SB_URL}/rest/v1/posts",
@@ -1386,12 +1400,8 @@ def _delete_supabase_post(post_id: str) -> Dict[str, Any]:
         timeout=15,
     )
 
-    print("========== BACKEND DELETE POST ==========")
-    print("POST_ID:", pid)
-    print("STATUS:", r.status_code)
-    print("BODY:", r.text[:1000])
-    print("SERVER_DELETE_MODE:", bool(SB_SERVICE))
-    print("==========================================")
+    logger.info("Backend delete post post_id=%s status=%s server_delete_mode=%s", pid, r.status_code, bool(SB_SERVICE))
+    logger.debug("Backend delete post body=%s", _safe_response_text(r.text, 800))
 
     if r.status_code >= 400:
         raise HTTPException(
@@ -1434,12 +1444,8 @@ def _delete_supabase_story(story_id: str) -> Dict[str, Any]:
         timeout=15,
     )
 
-    print("========== BACKEND DELETE STORY ==========")
-    print("STORY_ID:", sid)
-    print("STATUS:", r.status_code)
-    print("BODY:", r.text[:1000])
-    print("SERVER_DELETE_MODE:", bool(SB_SERVICE))
-    print("===========================================")
+    logger.info("Backend delete story story_id=%s status=%s server_delete_mode=%s", sid, r.status_code, bool(SB_SERVICE))
+    logger.debug("Backend delete story body=%s", _safe_response_text(r.text, 800))
 
     if r.status_code >= 400:
         # fallback delete for old schema if moderation_status/deleted_at columns do not exist.
@@ -1481,7 +1487,7 @@ def _patch_supabase_post(post_id: str, payload: Dict[str, Any]) -> Dict[str, Any
         timeout=15,
     )
     if r.status_code >= 400:
-        print("Supabase patch post failed:", r.status_code, r.text[:500])
+        logger.warning("Supabase patch post failed status=%s body=%s", r.status_code, _safe_response_text(r.text, 300))
         return {"updated": False, "status": r.status_code, "body": r.text[:500]}
     return {"updated": True, "postId": pid}
 
@@ -1503,9 +1509,9 @@ def _insert_user_warning(username: str, reason: str, post_id: str = "", report_i
     try:
         r = requests.post(f"{SB_URL}/rest/v1/user_warnings", headers=headers, json=payload, timeout=12)
         if r.status_code >= 400:
-            print("insert warning failed:", r.status_code, r.text[:500])
+            logger.warning("Insert warning failed status=%s body=%s", r.status_code, _safe_response_text(r.text, 300))
     except Exception as e:
-        print("insert warning exception:", e)
+        logger.exception("Insert warning exception: %s", e)
 
     count = 0
     try:
@@ -1518,7 +1524,7 @@ def _insert_user_warning(username: str, reason: str, post_id: str = "", report_i
         if cr.status_code < 400:
             count = len(cr.json() if cr.text else [])
     except Exception as e:
-        print("count warnings exception:", e)
+        logger.exception("Count warnings exception: %s", e)
 
     blocked = False
     if count >= 3:
@@ -1551,11 +1557,11 @@ def _block_user_from_server(username: str, reason: str) -> bool:
             timeout=15,
         )
         if r.status_code >= 400:
-            print("block user failed:", r.status_code, r.text[:500])
+            logger.warning("Block user failed status=%s body=%s", r.status_code, _safe_response_text(r.text, 300))
             return False
         return True
     except Exception as e:
-        print("block user exception:", e)
+        logger.exception("Block user exception: %s", e)
         return False
 
 
@@ -2370,11 +2376,8 @@ def _virustotal_scan_url(url: str) -> Dict[str, Any]:
             timeout=15,
         )
 
-        print("========== VIRUSTOTAL SUBMIT ==========")
-        print("URL:", url[:300])
-        print("STATUS:", submit.status_code)
-        print("BODY:", submit.text[:800])
-        print("=======================================")
+        logger.info("VirusTotal submit status=%s", submit.status_code)
+        logger.debug("VirusTotal submit url=%s body=%s", url[:120], _safe_response_text(submit.text, 500))
 
         # 429 يعني الحد المجاني انتهى. لا نحذف المنشور بسبب عطل/حد خارجي فقط.
         if submit.status_code == 429:
@@ -2412,11 +2415,8 @@ def _virustotal_scan_url(url: str) -> Dict[str, Any]:
                 timeout=15,
             )
 
-            print("========== VIRUSTOTAL REPORT ==========")
-            print("ANALYSIS_ID:", analysis_id)
-            print("STATUS:", report.status_code)
-            print("BODY:", report.text[:800])
-            print("=======================================")
+            logger.info("VirusTotal report analysis_id=%s status=%s", analysis_id, report.status_code)
+            logger.debug("VirusTotal report body=%s", _safe_response_text(report.text, 500))
 
             if report.status_code == 429:
                 return {
@@ -2932,7 +2932,7 @@ def _supabase_rest_patch(table: str, eq_id: str, payload: Dict[str, Any]) -> Dic
         timeout=20,
     )
     if r.status_code >= 400:
-        print(f"Supabase patch {table} failed:", r.status_code, r.text[:800])
+        logger.warning("Supabase patch %s failed status=%s body=%s", table, r.status_code, _safe_response_text(r.text, 500))
         return {"updated": False, "status": r.status_code, "body": r.text[:800]}
     data = r.json()
     return dict(data[0]) if isinstance(data, list) and data else {"updated": True}
@@ -2947,7 +2947,7 @@ def _supabase_rest_delete_where(table: str, params: Dict[str, str]) -> Dict[str,
         timeout=20,
     )
     if r.status_code >= 400:
-        print(f"Supabase delete {table} failed:", r.status_code, r.text[:800])
+        logger.warning("Supabase delete %s failed status=%s body=%s", table, r.status_code, _safe_response_text(r.text, 500))
         return {"deleted": False, "status": r.status_code, "body": r.text[:800]}
     return {"deleted": True}
 
