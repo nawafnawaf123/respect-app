@@ -461,27 +461,29 @@ def send_fcm_v1(token: str, msg_type: str, title: str, body: str, data: Dict[str
 
     clean_data = _string_data(data, msg_type, title, body)
 
-    if msg_type == "call":
-        # مهم جدًا:
-        # المكالمات Data Only Push حتى تصل إلى IncomingCallFirebaseMessagingService
-        # ولا يعرضها Firebase كإشعار عادي فقط.
+    privacy_data_only = os.getenv("FCM_PRIVACY_DATA_ONLY", "true").strip().lower() in {"1", "true", "yes", "on"}
+
+    if msg_type == "call" or privacy_data_only:
+        # Privacy-first: Data Only Push. لا نضع أسماء أو نصوص داخل notification payload.
+        # التطبيق المحلي هو الذي يعرض إشعارًا عامًا عند الاستلام.
         payload = {
             "message": {
                 "token": token,
                 "data": clean_data,
                 "android": {
                     "priority": "HIGH",
-                    "ttl": "45s",
+                    "ttl": "45s" if msg_type == "call" else "3600s",
                 },
             }
         }
     else:
+        # احتياطي اختياري لو عطلت FCM_PRIVACY_DATA_ONLY، يبقى الإشعار عامًا بدون محتوى حساس.
         payload = {
             "message": {
                 "token": token,
                 "notification": {
-                    "title": title,
-                    "body": body,
+                    "title": "Respect",
+                    "body": "لديك إشعار جديد",
                 },
                 "data": clean_data,
                 "android": {
@@ -863,9 +865,9 @@ def send_user_push(req: UserPushRequest, x_app_secret: Optional[str] = Header(de
 @app.post("/send_message_push")
 def send_message_push(req: MessagePushRequest, x_app_secret: Optional[str] = Header(default=None)):
     _check_secret(x_app_secret)
-    title = req.senderName.strip() or display_username(req.senderUsername)
-    # لا نرسل نص الرسالة عبر FCM حتى لا يتسرب محتوى الرسائل في خدمات الإشعارات أو شاشة القفل.
-    body = "أرسل لك رسالة جديدة"
+    # لا نرسل اسم المرسل أو نص الرسالة عبر FCM.
+    title = "Respect"
+    body = "لديك رسالة جديدة"
 
     token = get_user_fcm_token(req.receiverUsername)
     if not token:
@@ -879,10 +881,11 @@ def send_message_push(req: MessagePushRequest, x_app_secret: Optional[str] = Hea
         {
             "messageId": req.messageId,
             "senderUsername": display_username(req.senderUsername),
-            "senderName": req.senderName,
-            "text": "رسالة جديدة",
+            "senderName": "",
+            "text": "",
             "peerUsername": display_username(req.senderUsername),
-            "peerName": title,
+            "peerName": "",
+            "privacy": "metadata_only",
         },
     )
 
@@ -890,8 +893,8 @@ def send_message_push(req: MessagePushRequest, x_app_secret: Optional[str] = Hea
 @app.post("/send_call_push")
 def send_call_push(req: CallPushRequest, x_app_secret: Optional[str] = Header(default=None)):
     _check_secret(x_app_secret)
-    title = "مكالمة فيديو واردة" if req.video else "مكالمة صوتية واردة"
-    body = req.callerName.strip() or display_username(req.callerUsername)
+    title = "Respect"
+    body = "مكالمة واردة"
 
     token = get_user_fcm_token(req.receiverUsername)
     if not token:
@@ -907,10 +910,11 @@ def send_call_push(req: CallPushRequest, x_app_secret: Optional[str] = Header(de
             "call_id": req.callId,
             "callerUsername": display_username(req.callerUsername),
             "caller_username": display_username(req.callerUsername),
-            "callerName": req.callerName,
-            "caller_name": req.callerName,
-            "callerAvatarPath": req.callerAvatar,
-            "caller_avatar": req.callerAvatar,
+            "callerName": "",
+            "caller_name": "",
+            "callerAvatarPath": "",
+            "caller_avatar": "",
+            "privacy": "metadata_only",
             "video": str(req.video).lower(),
             "call_type": "video" if req.video else "audio",
         },
