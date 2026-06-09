@@ -130,37 +130,88 @@ def _check_secret(x_app_secret: Optional[str]) -> None:
         raise HTTPException(status_code=401, detail="Invalid X-App-Secret")
 
 
-def _load_service_account_info() -> Dict[str, Any]:
-    if SA_JSON:
-        try:
-            return json.loads(SA_JSON)
-        except json.JSONDecodeError as e:
-            raise HTTPException(status_code=500, detail=f"Invalid FIREBASE_SA_JSON: {e}")
+def _first_env_value(*names: str) -> str:
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    return ""
 
-    if not SA_FILE:
+
+def _load_service_account_info() -> Dict[str, Any]:
+    """
+    يدعم أكثر من طريقة لوضع Firebase Service Account في Render:
+    1) FIREBASE_SERVICE_ACCOUNT_JSON: JSON كامل.
+    2) FIREBASE_SERVICE_ACCOUNT_BASE64: نفس JSON لكن Base64.
+    3) FIREBASE_SERVICE_ACCOUNT_FILE: مسار ملف محلي.
+    """
+    raw_json = _first_env_value(
+        "FIREBASE_SERVICE_ACCOUNT_JSON",
+        "FIREBASE_SA_JSON",
+        "GOOGLE_SERVICE_ACCOUNT_JSON",
+        "GOOGLE_APPLICATION_CREDENTIALS_JSON",
+    ) or SA_JSON
+
+    raw_b64 = _first_env_value(
+        "FIREBASE_SERVICE_ACCOUNT_BASE64",
+        "FIREBASE_SA_BASE64",
+        "GOOGLE_SERVICE_ACCOUNT_BASE64",
+    )
+
+    if raw_b64:
+        try:
+            raw_json = base64.b64decode(raw_b64).decode("utf-8")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Invalid FIREBASE_SERVICE_ACCOUNT_BASE64: {e}")
+
+    if raw_json:
+        try:
+            raw_json = raw_json.strip()
+            # بعض لوحات الاستضافة تحفظ JSON كسطر واحد مع \n داخل private_key.
+            info = json.loads(raw_json)
+            if isinstance(info, dict) and isinstance(info.get("private_key"), str):
+                info["private_key"] = info["private_key"].replace("\\n", "\n")
+            if not isinstance(info, dict):
+                raise ValueError("service account JSON is not an object")
+            missing = [k for k in ["project_id", "client_email", "private_key"] if not str(info.get(k, "")).strip()]
+            if missing:
+                raise ValueError(f"missing keys: {', '.join(missing)}")
+            return info
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Invalid FIREBASE_SERVICE_ACCOUNT_JSON: {e}")
+
+    file_path = _first_env_value("FIREBASE_SERVICE_ACCOUNT_FILE", "GOOGLE_APPLICATION_CREDENTIALS") or SA_FILE
+    if not file_path:
         raise HTTPException(
             status_code=500,
-            detail="Missing Firebase service account. Set FIREBASE_SERVICE_ACCOUNT_JSON or FIREBASE_SERVICE_ACCOUNT_FILE.",
+            detail="Missing Firebase service account. Set FIREBASE_SERVICE_ACCOUNT_JSON or FIREBASE_SERVICE_ACCOUNT_BASE64 in Render.",
         )
 
-    if not os.path.exists(SA_FILE):
+    if not os.path.exists(file_path):
         raise HTTPException(status_code=500, detail="Firebase service account file not found")
 
     try:
-        with open(SA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+        with open(file_path, "r", encoding="utf-8") as f:
+            info = json.load(f)
+        if isinstance(info, dict) and isinstance(info.get("private_key"), str):
+            info["private_key"] = info["private_key"].replace("\\n", "\n")
+        return info
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Cannot read Firebase service account file: {e}")
 
 
 def get_access_token() -> str:
     try:
-        creds = service_account.Credentials.from_service_account_info(
-            _load_service_account_info(),
-            scopes=SCOPES,
-        )
+        info = _load_service_account_info()
+        creds = service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
         creds.refresh(Request())
+        if not creds.token:
+            raise RuntimeError("empty firebase access token")
         return creds.token
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to create Firebase credential: {e}")
 
@@ -294,28 +345,40 @@ def display_username(value: str) -> str:
 def get_user_fcm_token(receiver_username: str) -> Optional[str]:
     clean = normalize_username(receiver_username)
     display = display_username(clean)
+    if not clean:
+        return None
+
+    if not SB_URL or not (SB_SERVICE or SB_ANON):
+        raise HTTPException(status_code=500, detail="Supabase env missing: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY/SUPABASE_ANON_KEY")
 
     url = f"{SB_URL}/rest/v1/users"
-    headers = {
-        "apikey": SB_ANON,
-        "Authorization": f"Bearer {SB_ANON}",
-    }
+    # السيرفر يستخدم service role إن وجد حتى لا تمنع RLS قراءة fcm_token.
+    headers = _supabase_headers(use_service_role=True)
     params = {
         "select": "username,fcm_token",
         "or": f"(username.eq.{clean},username.eq.{display})",
         "limit": "1",
     }
 
-    response = requests.get(url, headers=headers, params=params, timeout=15)
-    if response.status_code >= 400:
-        raise HTTPException(status_code=500, detail=f"Supabase error: {response.text}")
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=15)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Supabase token lookup failed: {e}")
 
-    rows = response.json()
-    if not rows:
+    if response.status_code >= 400:
+        raise HTTPException(status_code=500, detail=f"Supabase token lookup error {response.status_code}: {_safe_response_text(response.text, 800)}")
+
+    try:
+        rows = response.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Invalid Supabase token lookup JSON: {e}")
+
+    if not isinstance(rows, list) or not rows:
         return None
 
     token = rows[0].get("fcm_token")
-    return str(token).strip() if token else None
+    token = str(token or "").strip()
+    return token or None
 
 
 class AuthOtpSendRequest(BaseModel):
@@ -519,7 +582,22 @@ def send_fcm_v1(token: str, msg_type: str, title: str, body: str, data: Dict[str
             },
         )
 
-    return {"ok": True, "firebase": response.json(), "sent_as": "data_only_call" if msg_type == "call" else "notification_message"}
+    try:
+        firebase_body = response.json()
+    except Exception:
+        firebase_body = {"raw": response.text}
+
+    return {
+        "ok": True,
+        "firebase": firebase_body,
+        "sent_as": "data_only" if (msg_type == "call" or privacy_data_only) else "notification",
+        "type": msg_type,
+    }
+
+
+@app.head("/")
+def health_head():
+    return {}
 
 
 @app.get("/")
@@ -541,6 +619,23 @@ def health():
         "qwen_base_url": QWEN_BASE_URL,
         "moderation_endpoint": "/respect-ai/moderate",
         "story_moderation_endpoint": "/respect-ai/moderate-story",
+    }
+
+
+@app.get("/push_debug")
+def push_debug(x_app_secret: Optional[str] = Header(default=None)):
+    _check_secret(x_app_secret)
+    return {
+        "ok": True,
+        "project": PROJECT_ID,
+        "has_supabase_url": bool(SB_URL),
+        "has_supabase_anon": bool(SB_ANON),
+        "has_supabase_service_role": bool(SB_SERVICE),
+        "has_app_shared_secret": bool(APP_SHARED_SECRET),
+        "fcm_privacy_data_only": os.getenv("FCM_PRIVACY_DATA_ONLY", "true"),
+        "firebase_json_env": bool(_first_env_value("FIREBASE_SERVICE_ACCOUNT_JSON", "FIREBASE_SA_JSON", "GOOGLE_SERVICE_ACCOUNT_JSON", "GOOGLE_APPLICATION_CREDENTIALS_JSON") or SA_JSON),
+        "firebase_base64_env": bool(_first_env_value("FIREBASE_SERVICE_ACCOUNT_BASE64", "FIREBASE_SA_BASE64", "GOOGLE_SERVICE_ACCOUNT_BASE64")),
+        "firebase_file_env": bool(_first_env_value("FIREBASE_SERVICE_ACCOUNT_FILE", "GOOGLE_APPLICATION_CREDENTIALS") or SA_FILE),
     }
 
 
