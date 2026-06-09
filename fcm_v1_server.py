@@ -53,6 +53,15 @@ SB_ANON = _env_value("SUPABASE", "_ANON", "_KEY")
 SB_SERVICE = _env_value("SUPABASE", "_SERVICE", "_ROLE", "_KEY")
 APP_SHARED_SECRET = os.getenv("APP_SHARED_SECRET", "")
 
+# ================= Metered TURN Server =================
+# ضع المفتاح في Render كمتغير بيئة ولا تضعه داخل تطبيق Flutter.
+# مثال:
+# METERED_DOMAIN=respect.metered.live
+# METERED_API_KEY=your_metered_api_key
+METERED_DOMAIN = os.getenv("METERED_DOMAIN", "respect.metered.live").strip().replace("https://", "").replace("http://", "").strip("/")
+METERED_API_KEY = os.getenv("METERED_API_KEY", "").strip()
+METERED_TIMEOUT_SECONDS = int(os.getenv("METERED_TIMEOUT_SECONDS", "10"))
+
 # ================= Auth OTP Email =================
 SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
@@ -619,6 +628,8 @@ def health():
         "qwen_base_url": QWEN_BASE_URL,
         "moderation_endpoint": "/respect-ai/moderate",
         "story_moderation_endpoint": "/respect-ai/moderate-story",
+        "turn_enabled": bool(METERED_API_KEY),
+        "turn_domain": METERED_DOMAIN,
     }
 
 
@@ -636,7 +647,82 @@ def push_debug(x_app_secret: Optional[str] = Header(default=None)):
         "firebase_json_env": bool(_first_env_value("FIREBASE_SERVICE_ACCOUNT_JSON", "FIREBASE_SA_JSON", "GOOGLE_SERVICE_ACCOUNT_JSON", "GOOGLE_APPLICATION_CREDENTIALS_JSON") or SA_JSON),
         "firebase_base64_env": bool(_first_env_value("FIREBASE_SERVICE_ACCOUNT_BASE64", "FIREBASE_SA_BASE64", "GOOGLE_SERVICE_ACCOUNT_BASE64")),
         "firebase_file_env": bool(_first_env_value("FIREBASE_SERVICE_ACCOUNT_FILE", "GOOGLE_APPLICATION_CREDENTIALS") or SA_FILE),
+        "turn_enabled": bool(METERED_API_KEY),
+        "turn_domain": METERED_DOMAIN,
     }
+
+
+@app.get("/turn/credentials")
+def turn_credentials(x_app_secret: Optional[str] = Header(default=None)):
+    """
+    يرجّع iceServers من Metered للتطبيق بدون كشف API Key داخل APK.
+    Flutter يستدعي هذا endpoint قبل إنشاء RTCPeerConnection.
+    """
+    _check_secret(x_app_secret)
+
+    if not METERED_API_KEY:
+        # Fallback آمن: STUN فقط حتى لا تتعطل المكالمات بالكامل.
+        return [
+            {"urls": "stun:stun.cloudflare.com:3478"},
+            {"urls": "stun:stun.l.google.com:19302"},
+            {"urls": "stun:stun1.l.google.com:19302"},
+            {"urls": "stun:stun2.l.google.com:19302"},
+            {"urls": "stun:stun3.l.google.com:19302"},
+        ]
+
+    try:
+        response = requests.get(
+            f"https://{METERED_DOMAIN}/api/v1/turn/credentials",
+            params={"apiKey": METERED_API_KEY},
+            timeout=METERED_TIMEOUT_SECONDS,
+        )
+    except Exception as e:
+        logger.warning("Metered TURN fetch failed: %s", e)
+        return [
+            {"urls": "stun:stun.cloudflare.com:3478"},
+            {"urls": "stun:stun.l.google.com:19302"},
+        ]
+
+    if response.status_code >= 400:
+        logger.warning(
+            "Metered TURN error status=%s body=%s",
+            response.status_code,
+            _safe_response_text(response.text, 800),
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=f"Metered TURN error {response.status_code}: {_safe_response_text(response.text, 800)}",
+        )
+
+    try:
+        data = response.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Invalid Metered TURN response: {e}")
+
+    if not isinstance(data, list):
+        raise HTTPException(status_code=500, detail="Metered TURN response is not a list")
+
+    cleaned = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        urls = item.get("urls")
+        if not urls:
+            continue
+        cleaned_item = {"urls": urls}
+        if item.get("username"):
+            cleaned_item["username"] = str(item.get("username"))
+        if item.get("credential"):
+            cleaned_item["credential"] = str(item.get("credential"))
+        cleaned.append(cleaned_item)
+
+    if not cleaned:
+        return [
+            {"urls": "stun:stun.cloudflare.com:3478"},
+            {"urls": "stun:stun.l.google.com:19302"},
+        ]
+
+    return cleaned
 
 
 def _otp_secret() -> bytes:
