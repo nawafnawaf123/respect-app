@@ -53,6 +53,52 @@ SB_ANON = _env_value("SUPABASE", "_ANON", "_KEY")
 SB_SERVICE = _env_value("SUPABASE", "_SERVICE", "_ROLE", "_KEY")
 APP_SHARED_SECRET = os.getenv("APP_SHARED_SECRET", "")
 
+# ================= Paddle Billing / Verification Subscription =================
+# ضع هذه القيم في Render كمتغيرات بيئة:
+# PADDLE_ENVIRONMENT=sandbox  أو production
+# PADDLE_API_KEY=your_secret_api_key   (لا تضعه داخل Flutter)
+# PADDLE_WEBHOOK_SECRET=your_notification_secret_key
+# PADDLE_CHECKOUT_URL=https://your-approved-checkout-page.com  (اختياري؛ لو فارغ يستخدم Default payment link في Paddle)
+PADDLE_ENVIRONMENT = os.getenv("PADDLE_ENVIRONMENT", "sandbox").strip().lower()
+PADDLE_API_KEY = os.getenv("PADDLE_API_KEY", "").strip()
+PADDLE_WEBHOOK_SECRET = os.getenv("PADDLE_WEBHOOK_SECRET", "").strip()
+PADDLE_CHECKOUT_URL = os.getenv("PADDLE_CHECKOUT_URL", "").strip()
+PADDLE_SUCCESS_URL = os.getenv("PADDLE_SUCCESS_URL", "").strip()
+PADDLE_CANCEL_URL = os.getenv("PADDLE_CANCEL_URL", "").strip()
+
+PADDLE_API_BASE = (
+    "https://sandbox-api.paddle.com"
+    if PADDLE_ENVIRONMENT in {"sandbox", "test", "testing"}
+    else "https://api.paddle.com"
+)
+
+PADDLE_VERIFICATION_PRICES: Dict[str, Dict[str, Any]] = {
+    "monthly": {
+        "price_id": os.getenv("PADDLE_PRICE_MONTHLY", "pri_01kts7c3ff0pax8rh9pw0ekyds").strip(),
+        "months": 1,
+        "price_usd": 2.0,
+        "title": "توثيق شهر",
+    },
+    "quarterly": {
+        "price_id": os.getenv("PADDLE_PRICE_QUARTERLY", "pri_01kts7eyc987m59vb9z1hhssxg").strip(),
+        "months": 3,
+        "price_usd": 5.0,
+        "title": "توثيق 3 أشهر",
+    },
+    "yearly": {
+        "price_id": os.getenv("PADDLE_PRICE_YEARLY", "pri_01kts7hvvacsrs3z79jjbtzmrf").strip(),
+        "months": 12,
+        "price_usd": 18.0,
+        "title": "توثيق سنة",
+    },
+}
+PADDLE_PRICE_TO_PLAN: Dict[str, str] = {
+    str(info.get("price_id", "")): plan_id
+    for plan_id, info in PADDLE_VERIFICATION_PRICES.items()
+    if str(info.get("price_id", "")).strip()
+}
+
+
 # ================= Metered TURN Server =================
 # ضع المفتاح في Render كمتغير بيئة ولا تضعه داخل تطبيق Flutter.
 # مثال:
@@ -452,6 +498,15 @@ class CallPushRequest(BaseModel):
     video: bool = False
 
 
+class PaddleVerificationCheckoutRequest(BaseModel):
+    username: str
+    planId: str
+    email: str = ""
+    deviceId: str = ""
+    successUrl: str = ""
+    cancelUrl: str = ""
+
+
 class RespectAIRequest(BaseModel):
     text: str = Field(default="", min_length=1)
     username: str = ""
@@ -630,6 +685,10 @@ def health():
         "story_moderation_endpoint": "/respect-ai/moderate-story",
         "turn_enabled": bool(METERED_API_KEY),
         "turn_domain": METERED_DOMAIN,
+        "paddle_enabled": bool(PADDLE_API_KEY),
+        "paddle_environment": PADDLE_ENVIRONMENT,
+        "paddle_webhook_secret_configured": bool(PADDLE_WEBHOOK_SECRET),
+        "paddle_checkout_endpoint": "/paddle/create-verification-checkout",
     }
 
 
@@ -834,6 +893,337 @@ def _mark_otp_attempt(row_id: str, attempts: int, consumed: bool = False) -> Non
         )
     except Exception:
         pass
+
+
+
+def _paddle_headers() -> Dict[str, str]:
+    if not PADDLE_API_KEY:
+        raise HTTPException(status_code=500, detail="PADDLE_API_KEY غير موجود في Render")
+    return {
+        "Authorization": f"Bearer {PADDLE_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+
+def _verification_plan(plan_id: str) -> Dict[str, Any]:
+    key = (plan_id or "").strip().lower()
+    plan = PADDLE_VERIFICATION_PRICES.get(key)
+    if not plan:
+        raise HTTPException(status_code=400, detail="خطة التوثيق غير صحيحة")
+    if not str(plan.get("price_id", "")).startswith("pri_"):
+        raise HTTPException(status_code=500, detail=f"Price ID غير مضبوط لخطة {key}")
+    return {"id": key, **plan}
+
+
+def _extract_plan_from_paddle_event(data: Dict[str, Any]) -> str:
+    custom = data.get("custom_data")
+    if isinstance(custom, dict):
+        plan_id = str(custom.get("plan_id") or custom.get("planId") or "").strip().lower()
+        if plan_id in PADDLE_VERIFICATION_PRICES:
+            return plan_id
+
+    # fallback من items/line_items
+    possible_items = []
+    if isinstance(data.get("items"), list):
+        possible_items.extend(data.get("items") or [])
+    details = data.get("details")
+    if isinstance(details, dict) and isinstance(details.get("line_items"), list):
+        possible_items.extend(details.get("line_items") or [])
+
+    for item in possible_items:
+        if not isinstance(item, dict):
+            continue
+        price_id = ""
+        if isinstance(item.get("price"), dict):
+            price_id = str(item["price"].get("id") or "").strip()
+        if not price_id:
+            price_id = str(item.get("price_id") or item.get("priceId") or "").strip()
+        if price_id in PADDLE_PRICE_TO_PLAN:
+            return PADDLE_PRICE_TO_PLAN[price_id]
+
+    return ""
+
+
+def _activate_verification_plan_backend(
+    *,
+    username: str,
+    plan_id: str,
+    paddle_transaction_id: str = "",
+    paddle_subscription_id: str = "",
+    paddle_customer_id: str = "",
+    event_id: str = "",
+) -> Dict[str, Any]:
+    if not SB_SERVICE:
+        raise HTTPException(status_code=500, detail="SUPABASE_SERVICE_ROLE_KEY غير موجود في Render")
+
+    user = _display_username(username)
+    clean = normalize_username(user)
+    if clean in {"", "user"}:
+        raise HTTPException(status_code=400, detail="username غير صحيح")
+
+    plan = _verification_plan(plan_id)
+    months = int(plan.get("months") or 1)
+    price_usd = float(plan.get("price_usd") or 0)
+    now = datetime.now(timezone.utc)
+
+    current = _fetch_user_for_limits(user)
+    old_until_raw = str(
+        current.get("verified_until")
+        or current.get("verification_expires_at")
+        or current.get("subscription_expires_at")
+        or ""
+    ).strip()
+
+    starts_from = now
+    if old_until_raw:
+        try:
+            old_until = datetime.fromisoformat(old_until_raw.replace("Z", "+00:00"))
+            if old_until.tzinfo is None:
+                old_until = old_until.replace(tzinfo=timezone.utc)
+            old_until = old_until.astimezone(timezone.utc)
+            if old_until > now:
+                starts_from = old_until
+        except Exception:
+            starts_from = now
+
+    expires = starts_from + timedelta(days=30 * months)
+
+    payload = {
+        "is_verified": True,
+        "verified": True,
+        "respect_verified": True,
+        "verification_status": "active",
+        "subscription_tier": "verified",
+        "verification_plan": plan["id"],
+        "verified_until": expires.isoformat(),
+        "verification_expires_at": expires.isoformat(),
+        "subscription_expires_at": expires.isoformat(),
+        "verification_updated_at": now.isoformat(),
+    }
+
+    # حدث المستخدم بصيغتي username لأن بعض الجداول عندك فيها @ وبعضها بدون.
+    update_res = requests.patch(
+        f"{SB_URL}/rest/v1/users",
+        headers={**_supabase_headers(use_service_role=True), "Prefer": "return=representation"},
+        params={"or": f"(username.eq.{user},username.eq.{clean})"},
+        json=payload,
+        timeout=20,
+    )
+    if update_res.status_code >= 400:
+        raise HTTPException(status_code=500, detail=f"Supabase user update error: {_safe_response_text(update_res.text, 800)}")
+
+    # حدّث علامة التوثيق على المنشورات والردود قدر الإمكان.
+    for table in ("posts", "post_replies"):
+        try:
+            requests.patch(
+                f"{SB_URL}/rest/v1/{table}",
+                headers={**_supabase_headers(use_service_role=True), "Prefer": "return=minimal"},
+                params={"or": f"(username.eq.{user},username.eq.{clean},author_username.eq.{user},author_username.eq.{clean})"},
+                json={"author_verified": True},
+                timeout=10,
+            )
+        except Exception:
+            pass
+
+    sub_payload = {
+        "username": user,
+        "plan_id": plan["id"],
+        "plan_title": str(plan.get("title") or plan["id"]),
+        "months": months,
+        "price_usd": price_usd,
+        "status": "active",
+        "started_at": now.isoformat(),
+        "expires_at": expires.isoformat(),
+        "created_at": now.isoformat(),
+        "paddle_transaction_id": paddle_transaction_id,
+        "paddle_subscription_id": paddle_subscription_id,
+        "paddle_customer_id": paddle_customer_id,
+        "paddle_event_id": event_id,
+        "provider": "paddle",
+    }
+    try:
+        requests.post(
+            f"{SB_URL}/rest/v1/verification_subscriptions",
+            headers={**_supabase_headers(use_service_role=True), "Prefer": "return=minimal"},
+            json=sub_payload,
+            timeout=12,
+        )
+    except Exception as e:
+        logger.warning("verification_subscriptions insert ignored: %s", e)
+
+    return {
+        "ok": True,
+        "username": user,
+        "planId": plan["id"],
+        "verifiedUntil": expires.isoformat(),
+        "paddleTransactionId": paddle_transaction_id,
+        "paddleSubscriptionId": paddle_subscription_id,
+    }
+
+
+def _paddle_verify_signature(raw_body: bytes, signature_header: str) -> bool:
+    if not PADDLE_WEBHOOK_SECRET:
+        # في التطوير فقط: لا نكسر المحاكاة لو لم تضبط السر، لكن لا تستخدم هذا في الإنتاج.
+        logger.warning("PADDLE_WEBHOOK_SECRET missing; webhook signature verification skipped")
+        return True
+
+    parts: Dict[str, str] = {}
+    for chunk in (signature_header or "").split(";"):
+        if "=" in chunk:
+            k, v = chunk.split("=", 1)
+            parts[k.strip()] = v.strip()
+
+    ts = parts.get("ts")
+    received = parts.get("h1")
+    if not ts or not received:
+        return False
+
+    signed_payload = f"{ts}:{raw_body.decode('utf-8')}".encode("utf-8")
+    expected = hmac.new(PADDLE_WEBHOOK_SECRET.encode("utf-8"), signed_payload, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, received)
+
+
+@app.post("/paddle/create-verification-checkout")
+def paddle_create_verification_checkout(req: PaddleVerificationCheckoutRequest, x_app_secret: Optional[str] = Header(default=None)):
+    _check_secret(x_app_secret)
+
+    username = _display_username(req.username)
+    clean = normalize_username(username)
+    if clean in {"", "user"}:
+        raise HTTPException(status_code=400, detail="username غير صحيح")
+
+    plan = _verification_plan(req.planId)
+    custom_data = {
+        "app": "respect",
+        "product_type": "verification_subscription",
+        "username": username,
+        "plan_id": plan["id"],
+        "months": int(plan.get("months") or 1),
+        "source": "flutter_app",
+        "device_id": (req.deviceId or "").strip(),
+    }
+
+    checkout_settings: Dict[str, Any] = {}
+    checkout_url = (req.successUrl or PADDLE_CHECKOUT_URL or "").strip()
+    if checkout_url:
+        checkout_settings["url"] = checkout_url
+
+    payload: Dict[str, Any] = {
+        "collection_mode": "automatic",
+        "items": [{"price_id": plan["price_id"], "quantity": 1}],
+        "custom_data": custom_data,
+    }
+    if checkout_settings:
+        payload["checkout"] = checkout_settings
+
+    # لو عندك صفحة return/cancel خاصة لاحقًا، نمررها داخل custom_data أيضًا حتى تظهر في الويب هوك.
+    if req.cancelUrl or PADDLE_CANCEL_URL:
+        custom_data["cancel_url"] = (req.cancelUrl or PADDLE_CANCEL_URL).strip()
+    if req.email.strip():
+        # لا ننشئ customer_id هنا حتى لا نحتاج API إضافي؛ Paddle Checkout سيطلب الإيميل ويكمل الدفع.
+        custom_data["email_hint"] = req.email.strip().lower()
+
+    response = requests.post(
+        f"{PADDLE_API_BASE}/transactions",
+        headers=_paddle_headers(),
+        params={"include": "customer"},
+        json=payload,
+        timeout=30,
+    )
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "paddle_status": response.status_code,
+                "paddle_body": _safe_response_text(response.text, 1200),
+                "hint": "تأكد أن PADDLE_API_KEY من نفس وضع Sandbox وأن Price ID صحيح وأن Default payment link مضبوط.",
+            },
+        )
+
+    data = response.json().get("data", {})
+    checkout = data.get("checkout") if isinstance(data, dict) else {}
+    checkout_url = str((checkout or {}).get("url") or "").strip()
+    transaction_id = str(data.get("id") or "").strip()
+
+    if not checkout_url:
+        raise HTTPException(status_code=500, detail="Paddle لم يرجع checkout.url. تأكد من Default payment link في Checkout settings.")
+
+    return {
+        "ok": True,
+        "checkoutUrl": checkout_url,
+        "url": checkout_url,
+        "transactionId": transaction_id,
+        "planId": plan["id"],
+        "priceId": plan["price_id"],
+        "environment": PADDLE_ENVIRONMENT,
+    }
+
+
+@app.post("/paddle/webhook")
+async def paddle_webhook(request: FastAPIRequest, paddle_signature: Optional[str] = Header(default=None)):
+    raw = await request.body()
+    if not _paddle_verify_signature(raw, paddle_signature or ""):
+        raise HTTPException(status_code=401, detail="Invalid Paddle signature")
+
+    try:
+        event = json.loads(raw.decode("utf-8"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    event_type = str(event.get("event_type") or event.get("eventType") or "").strip()
+    event_id = str(event.get("event_id") or event.get("id") or "").strip()
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+
+    # خزّن الحدث كـ best-effort حتى تقدر تراجعه لاحقًا إذا أنشأت الجدول.
+    try:
+        requests.post(
+            f"{SB_URL}/rest/v1/paddle_events",
+            headers={**_supabase_headers(use_service_role=True), "Prefer": "return=minimal"},
+            json={
+                "event_id": event_id,
+                "event_type": event_type,
+                "payload": event,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+            timeout=8,
+        )
+    except Exception:
+        pass
+
+    paid_events = {
+        "transaction.paid",
+        "transaction.completed",
+        "subscription.created",
+        "subscription.updated",
+    }
+    if event_type not in paid_events:
+        return {"ok": True, "ignored": True, "eventType": event_type}
+
+    custom = data.get("custom_data")
+    if not isinstance(custom, dict):
+        custom = {}
+
+    username = str(custom.get("username") or custom.get("user") or "").strip()
+    plan_id = _extract_plan_from_paddle_event(data)
+
+    if not username or not plan_id:
+        logger.warning("Paddle webhook missing username/plan event=%s data=%s", event_type, _safe_response_text(json.dumps(data), 800))
+        return {"ok": True, "ignored": True, "reason": "missing_username_or_plan", "eventType": event_type}
+
+    status = str(data.get("status") or "").lower().strip()
+    if event_type.startswith("transaction.") and status and status not in {"paid", "completed", "ready"}:
+        return {"ok": True, "ignored": True, "reason": f"transaction_status_{status}", "eventType": event_type}
+
+    result = _activate_verification_plan_backend(
+        username=username,
+        plan_id=plan_id,
+        paddle_transaction_id=str(data.get("id") or ""),
+        paddle_subscription_id=str(data.get("subscription_id") or data.get("subscriptionId") or ""),
+        paddle_customer_id=str(data.get("customer_id") or data.get("customerId") or ""),
+        event_id=event_id,
+    )
+    return {"ok": True, "activated": True, "eventType": event_type, **result}
 
 
 
