@@ -17,6 +17,7 @@ from typing import Any, Dict, Optional
 import requests
 from fastapi import FastAPI, Header, HTTPException, Request as FastAPIRequest
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from google.oauth2 import service_account
 from google.auth.transport.requests import Request
@@ -62,6 +63,7 @@ APP_SHARED_SECRET = os.getenv("APP_SHARED_SECRET", "")
 PADDLE_ENVIRONMENT = os.getenv("PADDLE_ENVIRONMENT", "sandbox").strip().lower()
 PADDLE_API_KEY = os.getenv("PADDLE_API_KEY", "").strip()
 PADDLE_WEBHOOK_SECRET = os.getenv("PADDLE_WEBHOOK_SECRET", "").strip()
+PADDLE_CLIENT_SIDE_TOKEN = os.getenv("PADDLE_CLIENT_SIDE_TOKEN", "").strip()
 PADDLE_CHECKOUT_URL = os.getenv("PADDLE_CHECKOUT_URL", "").strip()
 PADDLE_SUCCESS_URL = os.getenv("PADDLE_SUCCESS_URL", "").strip()
 PADDLE_CANCEL_URL = os.getenv("PADDLE_CANCEL_URL", "").strip()
@@ -688,8 +690,191 @@ def health():
         "paddle_enabled": bool(PADDLE_API_KEY),
         "paddle_environment": PADDLE_ENVIRONMENT,
         "paddle_webhook_secret_configured": bool(PADDLE_WEBHOOK_SECRET),
+        "paddle_client_side_token_configured": bool(PADDLE_CLIENT_SIDE_TOKEN),
+        "paddle_checkout_page": "/paddle/checkout",
         "paddle_checkout_endpoint": "/paddle/create-verification-checkout",
     }
+
+
+
+@app.get("/paddle/checkout", response_class=HTMLResponse)
+def paddle_checkout_page():
+    """
+    صفحة Checkout بسيطة لفتح Paddle Checkout من transaction id.
+    اجعل Default payment link في Paddle يشير إلى:
+    https://respect-app-9fzq.onrender.com/paddle/checkout
+
+    وأضف في Render:
+    PADDLE_CLIENT_SIDE_TOKEN=test_xxxxx
+    """
+    client_token = PADDLE_CLIENT_SIDE_TOKEN
+    environment = PADDLE_ENVIRONMENT if PADDLE_ENVIRONMENT else "sandbox"
+
+    return f"""
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Respect Verification Payment</title>
+  <style>
+    :root {{
+      color-scheme: dark;
+    }}
+    * {{
+      box-sizing: border-box;
+    }}
+    body {{
+      margin: 0;
+      font-family: Arial, Tahoma, sans-serif;
+      background:
+        radial-gradient(circle at top, rgba(124,58,237,.30), transparent 38%),
+        linear-gradient(135deg, #07030f, #12091f 55%, #090514);
+      color: white;
+      display: flex;
+      min-height: 100vh;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 24px;
+    }}
+    .card {{
+      width: min(560px, 100%);
+      background: rgba(255,255,255,.08);
+      border: 1px solid rgba(255,255,255,.14);
+      border-radius: 28px;
+      padding: 30px 24px;
+      box-shadow: 0 24px 80px rgba(0,0,0,.42);
+      backdrop-filter: blur(18px);
+    }}
+    .logo {{
+      width: 64px;
+      height: 64px;
+      margin: 0 auto 14px;
+      border-radius: 22px;
+      background: linear-gradient(135deg, #7c3aed, #c084fc);
+      display: grid;
+      place-items: center;
+      font-size: 30px;
+      font-weight: 900;
+      box-shadow: 0 18px 45px rgba(124,58,237,.35);
+    }}
+    h1 {{
+      margin: 0;
+      font-size: 25px;
+    }}
+    p {{
+      color: rgba(255,255,255,.76);
+      line-height: 1.75;
+      margin: 10px 0;
+    }}
+    .loader {{
+      width: 46px;
+      height: 46px;
+      border: 4px solid rgba(255,255,255,.18);
+      border-top-color: #c084fc;
+      border-radius: 50%;
+      margin: 20px auto 12px;
+      animation: spin 1s linear infinite;
+    }}
+    @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+    .err {{
+      color: #ffb4b4;
+      margin-top: 14px;
+      line-height: 1.7;
+      word-break: break-word;
+      font-weight: 700;
+    }}
+    .hint {{
+      margin-top: 14px;
+      font-size: 13px;
+      color: rgba(255,255,255,.55);
+    }}
+    button {{
+      margin-top: 16px;
+      background: #7c3aed;
+      color: white;
+      border: 0;
+      border-radius: 999px;
+      padding: 12px 18px;
+      font-weight: 800;
+      cursor: pointer;
+      display: none;
+    }}
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="logo">✓</div>
+    <h1>Respect Verification</h1>
+    <div class="loader"></div>
+    <p id="status">جاري فتح صفحة الدفع الآمنة...</p>
+    <div id="error" class="err"></div>
+    <button id="retry">إعادة المحاولة</button>
+    <div class="hint">لا تغلق الصفحة حتى يفتح نموذج الدفع.</div>
+  </main>
+
+  <script src="https://cdn.paddle.com/paddle/v2/paddle.js"></script>
+  <script>
+    const clientToken = "{client_token}";
+    const env = "{environment}";
+    const params = new URLSearchParams(window.location.search);
+
+    const transactionId =
+      params.get("_ptxn") ||
+      params.get("transaction_id") ||
+      params.get("transactionId") ||
+      params.get("txn") ||
+      params.get("transaction");
+
+    const errorBox = document.getElementById("error");
+    const statusBox = document.getElementById("status");
+    const retryBtn = document.getElementById("retry");
+
+    function showError(msg) {{
+      statusBox.textContent = "تعذر فتح الدفع";
+      errorBox.textContent = msg;
+      retryBtn.style.display = "inline-block";
+    }}
+
+    function openCheckout() {{
+      errorBox.textContent = "";
+      retryBtn.style.display = "none";
+      statusBox.textContent = "جاري فتح صفحة الدفع الآمنة...";
+
+      if (!clientToken) {{
+        showError("PADDLE_CLIENT_SIDE_TOKEN غير موجود في Render.");
+        return;
+      }}
+      if (!transactionId) {{
+        showError("لم يتم العثور على transaction id في الرابط. ارجع للتطبيق واضغط خطة التوثيق من جديد.");
+        return;
+      }}
+
+      try {{
+        if (env === "sandbox" || env === "test" || env === "testing") {{
+          Paddle.Environment.set("sandbox");
+        }}
+        Paddle.Initialize({{ token: clientToken }});
+        Paddle.Checkout.open({{
+          transactionId: transactionId,
+          settings: {{
+            displayMode: "overlay",
+            theme: "dark",
+            locale: "ar"
+          }}
+        }});
+      }} catch (e) {{
+        showError("تعذر فتح الدفع: " + (e && e.message ? e.message : e));
+      }}
+    }}
+
+    retryBtn.addEventListener("click", openCheckout);
+    openCheckout();
+  </script>
+</body>
+</html>
+"""
 
 
 @app.get("/push_debug")
