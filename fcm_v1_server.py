@@ -1462,8 +1462,9 @@ def auth_create_password_user(req: AuthPasswordCreateRequest, x_app_secret: Opti
     body_text = _safe_response_text(r.text, 800)
     body_lower = body_text.lower()
 
-    # لو كان المستخدم موجودًا في Auth من محاولة قديمة، لا نرسل إيميل جديد ولا نكسر إنشاء الحساب.
-    # بعدها Flutter سيحاول signInWithPassword بنفس كلمة المرور.
+    # لو كان المستخدم موجودًا في Auth من محاولة قديمة/Google:
+    # نحدث كلمة المرور بدل ما نرجع ok فقط، لأن Flutter بعد إنشاء الحساب
+    # يعمل signInWithPassword بنفس كلمة المرور الجديدة.
     if r.status_code in (400, 409, 422) and (
         "already" in body_lower
         or "registered" in body_lower
@@ -1471,7 +1472,64 @@ def auth_create_password_user(req: AuthPasswordCreateRequest, x_app_secret: Opti
         or "duplicate" in body_lower
         or "user_already_exists" in body_lower
     ):
-        return {"ok": True, "created": False, "alreadyExists": True}
+        try:
+            find = requests.get(
+                f"{SB_URL}/auth/v1/admin/users",
+                headers=headers,
+                params={"page": 1, "per_page": 1000},
+                timeout=20,
+            )
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"تعذر البحث عن مستخدم Auth: {e}")
+
+        if find.status_code >= 400:
+            raise HTTPException(
+                status_code=400,
+                detail=f"تعذر البحث عن مستخدم Auth: {find.status_code} {_safe_response_text(find.text, 800)}",
+            )
+
+        try:
+            found_body = find.json()
+        except Exception:
+            found_body = {}
+
+        users = found_body.get("users", []) if isinstance(found_body, dict) else []
+        existing = None
+        for u in users:
+            if not isinstance(u, dict):
+                continue
+            if str(u.get("email", "")).strip().lower() == email:
+                existing = u
+                break
+
+        if existing is None:
+            raise HTTPException(status_code=400, detail="الحساب موجود في Auth لكن لم يتم العثور عليه لتحديث كلمة المرور")
+
+        user_id = str(existing.get("id") or "").strip()
+        if not user_id:
+            raise HTTPException(status_code=400, detail="تعذر قراءة user id من Auth")
+
+        patch = requests.put(
+            f"{SB_URL}/auth/v1/admin/users/{user_id}",
+            headers=headers,
+            json={
+                "password": password,
+                "email_confirm": True,
+                "user_metadata": {
+                    "username": username,
+                    "name": name,
+                },
+            },
+            timeout=20,
+        )
+
+        if patch.status_code >= 400:
+            raise HTTPException(
+                status_code=400,
+                detail=f"تعذر تحديث كلمة مرور Auth: {patch.status_code} {_safe_response_text(patch.text, 800)}",
+            )
+
+        return {"ok": True, "created": False, "updatedPassword": True, "alreadyExists": True}
 
     raise HTTPException(
         status_code=400,
