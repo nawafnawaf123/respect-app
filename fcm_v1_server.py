@@ -176,6 +176,28 @@ PADDLE_PRICE_TO_PLAN: Dict[str, str] = {
     if str(info.get("price_id", "")).strip()
 }
 
+def _subscription_priority_for_tier(tier: str) -> int:
+    tier = (tier or "").strip().lower()
+    if tier == "premium":
+        return 900
+    if tier == "gold":
+        return 520
+    if tier == "silver":
+        return 220
+    return 0
+
+
+def _subscription_label_for_tier(tier: str) -> str:
+    tier = (tier or "").strip().lower()
+    if tier == "premium":
+        return "أولوية مميزة"
+    if tier == "gold":
+        return "أولوية ذهبية"
+    if tier == "silver":
+        return "أولوية فضية"
+    return ""
+
+
 
 # ================= Metered TURN Server =================
 # ضع المفتاح في Render كمتغير بيئة ولا تضعه داخل تطبيق Flutter.
@@ -1279,16 +1301,32 @@ def _activate_verification_plan_backend(
     if update_res.status_code >= 400:
         raise HTTPException(status_code=500, detail=f"Supabase user update error: {_safe_response_text(update_res.text, 800)}")
 
-    # حدّث علامة التوثيق على المنشورات والردود قدر الإمكان.
+    # حدّث علامة التوثيق وأولوية الظهور على المنشورات والردود قدر الإمكان.
+    author_priority_payload = {
+        "author_verified": True,
+        "author_subscription_tier": tier,
+        "author_subscription_priority": _subscription_priority_for_tier(tier),
+        "author_subscription_boost_until": expires.isoformat(),
+        "author_subscription_label": _subscription_label_for_tier(tier),
+    }
     for table in ("posts", "post_replies"):
         try:
-            requests.patch(
+            patch_res = requests.patch(
                 f"{SB_URL}/rest/v1/{table}",
                 headers={**_supabase_headers(use_service_role=True), "Prefer": "return=minimal"},
                 params={"or": f"(username.eq.{user},username.eq.{clean},author_username.eq.{user},author_username.eq.{clean})"},
-                json={"author_verified": True},
+                json=author_priority_payload,
                 timeout=10,
             )
+            if patch_res.status_code >= 400:
+                # توافق مع قواعد البيانات القديمة قبل إضافة أعمدة الاشتراك.
+                requests.patch(
+                    f"{SB_URL}/rest/v1/{table}",
+                    headers={**_supabase_headers(use_service_role=True), "Prefer": "return=minimal"},
+                    params={"or": f"(username.eq.{user},username.eq.{clean},author_username.eq.{user},author_username.eq.{clean})"},
+                    json={"author_verified": True},
+                    timeout=10,
+                )
         except Exception:
             pass
 
