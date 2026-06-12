@@ -75,25 +75,101 @@ PADDLE_API_BASE = (
 )
 
 PADDLE_VERIFICATION_PRICES: Dict[str, Dict[str, Any]] = {
-    "monthly": {
-        "price_id": os.getenv("PADDLE_PRICE_MONTHLY", "pri_01kts7c3ff0pax8rh9pw0ekyds").strip(),
+    # Silver
+    "silver_monthly": {
+        "price_id": os.getenv("PADDLE_PRICE_SILVER_MONTHLY", "pri_REPLACE_SILVER_MONTHLY").strip(),
+        "tier": "silver",
+        "duration": "monthly",
         "months": 1,
         "price_usd": 2.0,
-        "title": "توثيق شهر",
+        "title": "الباقة الفضية - شهر",
+        "features": ["silver_badge", "stories", "1200_chars", "25_ai_daily"],
     },
-    "quarterly": {
-        "price_id": os.getenv("PADDLE_PRICE_QUARTERLY", "pri_01kts7eyc987m59vb9z1hhssxg").strip(),
+    "silver_quarterly": {
+        "price_id": os.getenv("PADDLE_PRICE_SILVER_QUARTERLY", "pri_REPLACE_SILVER_QUARTERLY").strip(),
+        "tier": "silver",
+        "duration": "quarterly",
         "months": 3,
         "price_usd": 5.0,
-        "title": "توثيق 3 أشهر",
+        "title": "الباقة الفضية - 3 أشهر",
+        "features": ["silver_badge", "stories", "1200_chars", "25_ai_daily"],
     },
-    "yearly": {
-        "price_id": os.getenv("PADDLE_PRICE_YEARLY", "pri_01kts7hvvacsrs3z79jjbtzmrf").strip(),
+    "silver_yearly": {
+        "price_id": os.getenv("PADDLE_PRICE_SILVER_YEARLY", "pri_REPLACE_SILVER_YEARLY").strip(),
+        "tier": "silver",
+        "duration": "yearly",
         "months": 12,
         "price_usd": 18.0,
-        "title": "توثيق سنة",
+        "title": "الباقة الفضية - سنة",
+        "features": ["silver_badge", "stories", "1200_chars", "25_ai_daily"],
+    },
+
+    # Gold
+    "gold_monthly": {
+        "price_id": os.getenv("PADDLE_PRICE_GOLD_MONTHLY", "pri_REPLACE_GOLD_MONTHLY").strip(),
+        "tier": "gold",
+        "duration": "monthly",
+        "months": 1,
+        "price_usd": 4.0,
+        "title": "الباقة الذهبية - شهر",
+        "features": ["gold_badge", "stories", "2000_chars", "50_ai_daily", "priority_visibility"],
+    },
+    "gold_quarterly": {
+        "price_id": os.getenv("PADDLE_PRICE_GOLD_QUARTERLY", "pri_REPLACE_GOLD_QUARTERLY").strip(),
+        "tier": "gold",
+        "duration": "quarterly",
+        "months": 3,
+        "price_usd": 10.0,
+        "title": "الباقة الذهبية - 3 أشهر",
+        "features": ["gold_badge", "stories", "2000_chars", "50_ai_daily", "priority_visibility"],
+    },
+    "gold_yearly": {
+        "price_id": os.getenv("PADDLE_PRICE_GOLD_YEARLY", "pri_REPLACE_GOLD_YEARLY").strip(),
+        "tier": "gold",
+        "duration": "yearly",
+        "months": 12,
+        "price_usd": 35.0,
+        "title": "الباقة الذهبية - سنة",
+        "features": ["gold_badge", "stories", "2000_chars", "50_ai_daily", "priority_visibility"],
+    },
+
+    # Premium - ربطناها افتراضيًا بالـ Price IDs القديمة حتى لا يتعطل الموجود عندك.
+    "premium_monthly": {
+        "price_id": os.getenv("PADDLE_PRICE_PREMIUM_MONTHLY", os.getenv("PADDLE_PRICE_MONTHLY", "pri_01kts7c3ff0pax8rh9pw0ekyds")).strip(),
+        "tier": "premium",
+        "duration": "monthly",
+        "months": 1,
+        "price_usd": 7.0,
+        "title": "الباقة المميزة - شهر",
+        "features": ["premium_badge", "stories", "3500_chars", "120_ai_daily", "highest_visibility"],
+    },
+    "premium_quarterly": {
+        "price_id": os.getenv("PADDLE_PRICE_PREMIUM_QUARTERLY", os.getenv("PADDLE_PRICE_QUARTERLY", "pri_01kts7eyc987m59vb9z1hhssxg")).strip(),
+        "tier": "premium",
+        "duration": "quarterly",
+        "months": 3,
+        "price_usd": 18.0,
+        "title": "الباقة المميزة - 3 أشهر",
+        "features": ["premium_badge", "stories", "3500_chars", "120_ai_daily", "highest_visibility"],
+    },
+    "premium_yearly": {
+        "price_id": os.getenv("PADDLE_PRICE_PREMIUM_YEARLY", os.getenv("PADDLE_PRICE_YEARLY", "pri_01kts7hvvacsrs3z79jjbtzmrf")).strip(),
+        "tier": "premium",
+        "duration": "yearly",
+        "months": 12,
+        "price_usd": 60.0,
+        "title": "الباقة المميزة - سنة",
+        "features": ["premium_badge", "stories", "3500_chars", "120_ai_daily", "highest_visibility"],
     },
 }
+
+# توافق مع أسماء الخطط القديمة: monthly/quarterly/yearly تعتبر Premium.
+PADDLE_LEGACY_PLAN_ALIASES = {
+    "monthly": "premium_monthly",
+    "quarterly": "premium_quarterly",
+    "yearly": "premium_yearly",
+}
+
 PADDLE_PRICE_TO_PLAN: Dict[str, str] = {
     str(info.get("price_id", "")): plan_id
     for plan_id, info in PADDLE_VERIFICATION_PRICES.items()
@@ -1092,11 +1168,13 @@ def _paddle_headers() -> Dict[str, str]:
 
 def _verification_plan(plan_id: str) -> Dict[str, Any]:
     key = (plan_id or "").strip().lower()
+    key = PADDLE_LEGACY_PLAN_ALIASES.get(key, key)
     plan = PADDLE_VERIFICATION_PRICES.get(key)
     if not plan:
-        raise HTTPException(status_code=400, detail="خطة التوثيق غير صحيحة")
-    if not str(plan.get("price_id", "")).startswith("pri_"):
-        raise HTTPException(status_code=500, detail=f"Price ID غير مضبوط لخطة {key}")
+        raise HTTPException(status_code=400, detail="خطة الاشتراك غير صحيحة")
+    price_id = str(plan.get("price_id", "")).strip()
+    if not price_id.startswith("pri_") or "REPLACE" in price_id:
+        raise HTTPException(status_code=500, detail=f"Price ID غير مضبوط لخطة {key}. أضف متغير Paddle Price ID في Render.")
     return {"id": key, **plan}
 
 
@@ -1104,6 +1182,7 @@ def _extract_plan_from_paddle_event(data: Dict[str, Any]) -> str:
     custom = data.get("custom_data")
     if isinstance(custom, dict):
         plan_id = str(custom.get("plan_id") or custom.get("planId") or "").strip().lower()
+        plan_id = PADDLE_LEGACY_PLAN_ALIASES.get(plan_id, plan_id)
         if plan_id in PADDLE_VERIFICATION_PRICES:
             return plan_id
 
@@ -1149,6 +1228,9 @@ def _activate_verification_plan_backend(
     plan = _verification_plan(plan_id)
     months = int(plan.get("months") or 1)
     price_usd = float(plan.get("price_usd") or 0)
+    tier = str(plan.get("tier") or "premium").strip().lower()
+    duration = str(plan.get("duration") or "").strip().lower()
+    features = plan.get("features") if isinstance(plan.get("features"), list) else []
     now = datetime.now(timezone.utc)
 
     current = _fetch_user_for_limits(user)
@@ -1178,7 +1260,7 @@ def _activate_verification_plan_backend(
         "verified": True,
         "respect_verified": True,
         "verification_status": "active",
-        "subscription_tier": "verified",
+        "subscription_tier": tier,
         "verification_plan": plan["id"],
         "verified_until": expires.isoformat(),
         "verification_expires_at": expires.isoformat(),
@@ -1214,6 +1296,9 @@ def _activate_verification_plan_backend(
         "username": user,
         "plan_id": plan["id"],
         "plan_title": str(plan.get("title") or plan["id"]),
+        "tier": tier,
+        "duration": duration,
+        "features": features,
         "months": months,
         "price_usd": price_usd,
         "status": "active",
@@ -1240,6 +1325,9 @@ def _activate_verification_plan_backend(
         "ok": True,
         "username": user,
         "planId": plan["id"],
+        "tier": tier,
+        "duration": duration,
+        "features": features,
         "verifiedUntil": expires.isoformat(),
         "paddleTransactionId": paddle_transaction_id,
         "paddleSubscriptionId": paddle_subscription_id,
@@ -1280,9 +1368,12 @@ def paddle_create_verification_checkout(req: PaddleVerificationCheckoutRequest, 
     plan = _verification_plan(req.planId)
     custom_data = {
         "app": "respect",
-        "product_type": "verification_subscription",
+        "product_type": "respect_subscription",
         "username": username,
         "plan_id": plan["id"],
+        "tier": str(plan.get("tier") or "premium"),
+        "duration": str(plan.get("duration") or ""),
+        "features": plan.get("features") if isinstance(plan.get("features"), list) else [],
         "months": int(plan.get("months") or 1),
         "source": "flutter_app",
         "device_id": (req.deviceId or "").strip(),
@@ -1340,6 +1431,8 @@ def paddle_create_verification_checkout(req: PaddleVerificationCheckoutRequest, 
         "url": checkout_url,
         "transactionId": transaction_id,
         "planId": plan["id"],
+        "tier": str(plan.get("tier") or "premium"),
+        "duration": str(plan.get("duration") or ""),
         "priceId": plan["price_id"],
         "environment": PADDLE_ENVIRONMENT,
     }
