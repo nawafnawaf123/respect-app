@@ -77,7 +77,7 @@ PADDLE_API_BASE = (
 PADDLE_VERIFICATION_PRICES: Dict[str, Dict[str, Any]] = {
     # Silver
     "silver_monthly": {
-        "price_id": os.getenv("PADDLE_PRICE_SILVER_MONTHLY", "pri_REPLACE_SILVER_MONTHLY").strip(),
+        "price_id": os.getenv("PADDLE_PRICE_SILVER_MONTHLY", "pri_01kv0gcgyhq6tekz7dks3k38tn").strip(),
         "tier": "silver",
         "duration": "monthly",
         "months": 1,
@@ -86,7 +86,7 @@ PADDLE_VERIFICATION_PRICES: Dict[str, Dict[str, Any]] = {
         "features": ["silver_badge", "stories", "1200_chars", "25_ai_daily"],
     },
     "silver_quarterly": {
-        "price_id": os.getenv("PADDLE_PRICE_SILVER_QUARTERLY", "pri_REPLACE_SILVER_QUARTERLY").strip(),
+        "price_id": os.getenv("PADDLE_PRICE_SILVER_QUARTERLY", "pri_01kv0gfb942d1jwzm7dqpjs6gx").strip(),
         "tier": "silver",
         "duration": "quarterly",
         "months": 3,
@@ -95,7 +95,7 @@ PADDLE_VERIFICATION_PRICES: Dict[str, Dict[str, Any]] = {
         "features": ["silver_badge", "stories", "1200_chars", "25_ai_daily"],
     },
     "silver_yearly": {
-        "price_id": os.getenv("PADDLE_PRICE_SILVER_YEARLY", "pri_REPLACE_SILVER_YEARLY").strip(),
+        "price_id": os.getenv("PADDLE_PRICE_SILVER_YEARLY", "pri_01kv0ggvve19kjx7xeyt3qxmz1").strip(),
         "tier": "silver",
         "duration": "yearly",
         "months": 12,
@@ -106,7 +106,7 @@ PADDLE_VERIFICATION_PRICES: Dict[str, Dict[str, Any]] = {
 
     # Gold
     "gold_monthly": {
-        "price_id": os.getenv("PADDLE_PRICE_GOLD_MONTHLY", "pri_REPLACE_GOLD_MONTHLY").strip(),
+        "price_id": os.getenv("PADDLE_PRICE_GOLD_MONTHLY", "pri_01kv0gm6cc3jrtehwk004b7y3m").strip(),
         "tier": "gold",
         "duration": "monthly",
         "months": 1,
@@ -115,7 +115,7 @@ PADDLE_VERIFICATION_PRICES: Dict[str, Dict[str, Any]] = {
         "features": ["gold_badge", "stories", "2000_chars", "50_ai_daily", "priority_visibility"],
     },
     "gold_quarterly": {
-        "price_id": os.getenv("PADDLE_PRICE_GOLD_QUARTERLY", "pri_REPLACE_GOLD_QUARTERLY").strip(),
+        "price_id": os.getenv("PADDLE_PRICE_GOLD_QUARTERLY", "pri_01kv0gnjb9vw13zy3f1fmz18me").strip(),
         "tier": "gold",
         "duration": "quarterly",
         "months": 3,
@@ -124,7 +124,7 @@ PADDLE_VERIFICATION_PRICES: Dict[str, Dict[str, Any]] = {
         "features": ["gold_badge", "stories", "2000_chars", "50_ai_daily", "priority_visibility"],
     },
     "gold_yearly": {
-        "price_id": os.getenv("PADDLE_PRICE_GOLD_YEARLY", "pri_REPLACE_GOLD_YEARLY").strip(),
+        "price_id": os.getenv("PADDLE_PRICE_GOLD_YEARLY", "pri_01kv0gpthm1pdq6k1tbsype8fd").strip(),
         "tier": "gold",
         "duration": "yearly",
         "months": 12,
@@ -133,9 +133,9 @@ PADDLE_VERIFICATION_PRICES: Dict[str, Dict[str, Any]] = {
         "features": ["gold_badge", "stories", "2000_chars", "50_ai_daily", "priority_visibility"],
     },
 
-    # Premium - ربطناها افتراضيًا بالـ Price IDs القديمة حتى لا يتعطل الموجود عندك.
+    # Premium - Price IDs الجديدة من Paddle.
     "premium_monthly": {
-        "price_id": os.getenv("PADDLE_PRICE_PREMIUM_MONTHLY", os.getenv("PADDLE_PRICE_MONTHLY", "pri_01kts7c3ff0pax8rh9pw0ekyds")).strip(),
+        "price_id": os.getenv("PADDLE_PRICE_PREMIUM_MONTHLY", os.getenv("PADDLE_PRICE_MONTHLY", "pri_01kv0gsgt68d16rj466bj70q9g")).strip(),
         "tier": "premium",
         "duration": "monthly",
         "months": 1,
@@ -144,7 +144,7 @@ PADDLE_VERIFICATION_PRICES: Dict[str, Dict[str, Any]] = {
         "features": ["premium_badge", "stories", "3500_chars", "120_ai_daily", "highest_visibility"],
     },
     "premium_quarterly": {
-        "price_id": os.getenv("PADDLE_PRICE_PREMIUM_QUARTERLY", os.getenv("PADDLE_PRICE_QUARTERLY", "pri_01kts7eyc987m59vb9z1hhssxg")).strip(),
+        "price_id": os.getenv("PADDLE_PRICE_PREMIUM_QUARTERLY", os.getenv("PADDLE_PRICE_QUARTERLY", "pri_01kv0gtkvfm6g0w2pqz70gxveh")).strip(),
         "tier": "premium",
         "duration": "quarterly",
         "months": 3,
@@ -153,7 +153,7 @@ PADDLE_VERIFICATION_PRICES: Dict[str, Dict[str, Any]] = {
         "features": ["premium_badge", "stories", "3500_chars", "120_ai_daily", "highest_visibility"],
     },
     "premium_yearly": {
-        "price_id": os.getenv("PADDLE_PRICE_PREMIUM_YEARLY", os.getenv("PADDLE_PRICE_YEARLY", "pri_01kts7hvvacsrs3z79jjbtzmrf")).strip(),
+        "price_id": os.getenv("PADDLE_PRICE_PREMIUM_YEARLY", os.getenv("PADDLE_PRICE_YEARLY", "pri_01kv0gvvjcwqf95drws2etvphd")).strip(),
         "tier": "premium",
         "duration": "yearly",
         "months": 12,
