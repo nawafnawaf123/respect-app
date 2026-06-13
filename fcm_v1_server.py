@@ -536,6 +536,71 @@ def get_user_fcm_token(receiver_username: str) -> Optional[str]:
     return token or None
 
 
+
+def get_all_user_fcm_tokens() -> list[Dict[str, str]]:
+    if not SB_URL or not (SB_SERVICE or SB_ANON):
+        raise HTTPException(status_code=500, detail="Supabase env missing: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY/SUPABASE_ANON_KEY")
+
+    users: list[Dict[str, str]] = []
+    offset = 0
+    page_size = 1000
+    headers = _supabase_headers(use_service_role=True)
+    while True:
+        response = requests.get(
+            f"{SB_URL}/rest/v1/users",
+            headers=headers,
+            params={
+                "select": "username,fcm_token",
+                "fcm_token": "not.is.null",
+                "limit": str(page_size),
+                "offset": str(offset),
+            },
+            timeout=20,
+        )
+        if response.status_code >= 400:
+            raise HTTPException(status_code=500, detail=f"Supabase users lookup error {response.status_code}: {_safe_response_text(response.text, 800)}")
+        rows = response.json()
+        if not isinstance(rows, list) or not rows:
+            break
+        for row in rows:
+            token = str((row or {}).get("fcm_token") or "").strip()
+            username = display_username(str((row or {}).get("username") or ""))
+            if token:
+                users.append({"username": username, "token": token})
+        if len(rows) < page_size:
+            break
+        offset += page_size
+    # إزالة تكرار التوكن حتى لا يصل الإشعار مرتين لنفس الجهاز.
+    deduped: Dict[str, Dict[str, str]] = {}
+    for item in users:
+        deduped[item["token"]] = item
+    return list(deduped.values())
+
+
+def create_general_notification_row(title: str, body: str, sender_username: str, sender_name: str) -> str:
+    notification_id = f"general_{int(time.time() * 1000000)}_{secrets.token_hex(4)}"
+    try:
+        payload = {
+            "id": notification_id,
+            "title": title,
+            "body": body,
+            "sender_username": display_username(sender_username),
+            "sender_name": sender_name or "Respect Admin",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        response = requests.post(
+            f"{SB_URL}/rest/v1/respect_general_notifications",
+            headers={**_supabase_headers(use_service_role=True), "Prefer": "return=minimal"},
+            json=payload,
+            timeout=12,
+        )
+        if response.status_code >= 400:
+            logger.warning("general notification row insert failed status=%s body=%s", response.status_code, _safe_response_text(response.text))
+    except Exception as exc:
+        logger.warning("general notification row insert failed: %s", exc)
+    return notification_id
+
+
 class AuthOtpSendRequest(BaseModel):
     email: str
     purpose: str = Field(default="login")  # login / signup
@@ -578,6 +643,14 @@ class UserPushRequest(BaseModel):
     type: str = Field(default="message")
     title: str
     body: str
+    data: Dict[str, Any] = Field(default_factory=dict)
+
+
+class GeneralPushRequest(BaseModel):
+    title: str
+    body: str
+    senderUsername: str = "@admin"
+    senderName: str = "Respect Admin"
     data: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -1805,6 +1878,55 @@ def send_user_push(req: UserPushRequest, x_app_secret: Optional[str] = Header(de
     if not token:
         raise HTTPException(status_code=400, detail="receiver_has_no_fcm_token")
     return send_fcm_v1(token, req.type, req.title, req.body, req.data)
+
+
+@app.post("/send_general_push")
+def send_general_push(req: GeneralPushRequest, x_app_secret: Optional[str] = Header(default=None)):
+    _check_secret(x_app_secret)
+    title = (req.title or "").strip()[:80] or "Respect"
+    body = (req.body or "").strip()[:900]
+    if not body:
+        raise HTTPException(status_code=400, detail="body_required")
+
+    notification_id = create_general_notification_row(title, body, req.senderUsername, req.senderName)
+    tokens = get_all_user_fcm_tokens()
+    sent = 0
+    failed = 0
+    errors = []
+    created_at = datetime.now(timezone.utc).isoformat()
+
+    for item in tokens:
+        data = {
+            **(req.data or {}),
+            "type": "general_notification",
+            "id": notification_id,
+            "notificationId": notification_id,
+            "title": title,
+            "body": body,
+            "created_at": created_at,
+            "senderUsername": display_username(req.senderUsername),
+            "senderName": req.senderName or "Respect Admin",
+        }
+        try:
+            send_fcm_v1(item["token"], "general_notification", title, body, data)
+            sent += 1
+        except HTTPException as exc:
+            failed += 1
+            if len(errors) < 5:
+                errors.append({"username": item.get("username", ""), "error": exc.detail})
+        except Exception as exc:
+            failed += 1
+            if len(errors) < 5:
+                errors.append({"username": item.get("username", ""), "error": str(exc)})
+
+    return {
+        "ok": True,
+        "id": notification_id,
+        "total": len(tokens),
+        "sent": sent,
+        "failed": failed,
+        "errors": errors,
+    }
 
 
 @app.post("/send_message_push")
