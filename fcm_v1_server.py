@@ -2385,10 +2385,234 @@ def _simple_safe_moderation(text: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+
+# ================= Respect AI Learned Abuse Dictionary =================
+# إذا تم قبول بلاغ وحُذفت التغريدة، نحفظ العبارة المخالفة في Supabase.
+# بعدها moderate-post يفحص هذا القاموس قبل Qwen ويحذف فورًا حتى مع الفواصل/المسافات/التمويه.
+LEARNED_TERMS_TABLE = os.getenv("RESPECT_AI_LEARNED_TERMS_TABLE", "respect_ai_learned_terms").strip() or "respect_ai_learned_terms"
+_LEARNED_TERMS_CACHE: Dict[str, Any] = {"ts": 0.0, "items": []}
+_LEARNED_TERMS_TTL_SECONDS = int(os.getenv("RESPECT_AI_LEARNED_TERMS_CACHE_TTL", "60") or "60")
+
+
+def _learned_normalized(value: str) -> Dict[str, str]:
+    n = _normalize_obfuscated_text_for_moderation(value or "")
+    return {"raw": str(value or "").strip(), "spaced": n.get("spaced_collapsed") or n.get("spaced") or "", "compact": n.get("compact") or ""}
+
+
+def _learned_hash(normalized_compact: str) -> str:
+    return hashlib.sha256((normalized_compact or "").encode("utf-8")).hexdigest()
+
+
+def _safe_term_phrase(value: str, max_len: int = 90) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip())[:max_len]
+
+
+def _is_learnable_term(term: str) -> bool:
+    clean = _safe_term_phrase(term)
+    if not clean:
+        return False
+    n = _learned_normalized(clean)
+    compact, spaced = n["compact"], n["spaced"]
+    if len(compact) < 2 or len(compact) > 70:
+        return False
+    if len(spaced.split()) > 8:
+        return False
+    boring = {"هذا", "هذه", "الى", "على", "في", "من", "عن", "مع", "ليش", "ليه", "ياعيال", "التغريده", "المنشور", "بلاغ", "محتوى", "مسيء", "مخالف", "spam", "report", "post"}
+    return compact not in boring and spaced not in boring
+
+
+def _extract_learned_terms_fallback(post_text: str) -> list[str]:
+    n = _learned_normalized(post_text)
+    tokens = [t for t in n["spaced"].split() if len(t) >= 2]
+    candidates: list[str] = []
+    for size in (1, 2, 3):
+        for i in range(0, max(0, len(tokens) - size + 1)):
+            phrase = " ".join(tokens[i:i + size])
+            if _is_learnable_term(phrase):
+                candidates.append(phrase)
+    seen, out = set(), []
+    for c in candidates:
+        h = _learned_hash(_learned_normalized(c)["compact"])
+        if h in seen:
+            continue
+        seen.add(h)
+        out.append(c)
+        if len(out) >= 8:
+            break
+    return out
+
+
+def _extract_learned_terms_with_ai(post_text: str, report_reason: str, report_details: str, ai_reason: str) -> list[str]:
+    text = (post_text or "").strip()
+    if not text:
+        return []
+    if QWEN_API_KEY:
+        prompt = f"""
+استخرج فقط الكلمات أو العبارات المسيئة التي تسببت بحذف المنشور داخل تطبيق Respect App.
+- لا ترجع كامل المنشور إلا إذا كله سب مباشر.
+- رجّع المسبة/الإهانة/التهديد أو العبارة المخالفة فقط.
+- تجاهل الكلمات العادية والسياق الآمن.
+- إذا لا توجد عبارة واضحة، رجع قائمة فارغة.
+أعد JSON فقط: {{"terms": ["عبارة 1", "عبارة 2"]}}
+
+نص المنشور:
+{text[:1500]}
+
+سبب البلاغ:
+{(report_reason or '')[:500]}
+
+تفاصيل البلاغ:
+{(report_details or '')[:800]}
+
+سبب قرار Respect AI:
+{(ai_reason or '')[:800]}
+""".strip()
+        try:
+            content = _chat_completion_request(
+                model=QWEN_TEXT_MODEL,
+                api_key=QWEN_API_KEY,
+                base_url=QWEN_BASE_URL,
+                messages=[{"role": "system", "content": "أنت مستخرج قاموس إساءات. أعد JSON صحيح فقط."}, {"role": "user", "content": prompt}],
+                temperature=0.02,
+                max_tokens=300,
+                timeout=35,
+                log_label="LEARN_TERMS",
+            )
+            parsed = _safe_json_from_ai(str(content))
+            if isinstance(parsed, dict) and isinstance(parsed.get("terms"), list):
+                terms = [_safe_term_phrase(str(x)) for x in parsed.get("terms") or []]
+                terms = [t for t in terms if _is_learnable_term(t)]
+                if terms:
+                    return terms
+        except Exception as e:
+            logger.warning("Learned terms extraction failed: %s", e)
+    return _extract_learned_terms_fallback(text)
+
+
+def _insert_learned_abuse_term(*, term: str, category: str, reason: str, source_post_id: str, source_report_id: str, reporter_username: str, reported_username: str) -> Dict[str, Any]:
+    phrase = _safe_term_phrase(term)
+    if not _is_learnable_term(phrase):
+        return {"inserted": False, "reason": "not_learnable", "term": phrase}
+    n = _learned_normalized(phrase)
+    now = datetime.now(timezone.utc).isoformat()
+    payload = {
+        "term": phrase,
+        "normalized_spaced": n["spaced"],
+        "normalized_compact": n["compact"],
+        "term_hash": _learned_hash(n["compact"]),
+        "category": (category or "learned_abuse")[:80],
+        "reason": (reason or "تم تعلمها من بلاغ صحيح")[:500],
+        "source_post_id": (source_post_id or "")[:120],
+        "source_report_id": (source_report_id or "")[:120],
+        "reporter_username": _display_username(reporter_username or ""),
+        "reported_username": _display_username(reported_username or ""),
+        "active": True,
+        "match_count": 0,
+        "created_at": now,
+        "updated_at": now,
+    }
+    headers = {**_supabase_headers(use_service_role=True), "Prefer": "return=representation", "Prefer": "resolution=merge-duplicates,return=representation"}
+    try:
+        r = requests.post(f"{SB_URL}/rest/v1/{LEARNED_TERMS_TABLE}", headers=headers, params={"on_conflict": "term_hash"}, json=payload, timeout=12)
+        if r.status_code in (200, 201):
+            _LEARNED_TERMS_CACHE["ts"] = 0.0
+            return {"inserted": True, "term": phrase, "hash": payload["term_hash"]}
+        logger.warning("Insert learned term failed status=%s body=%s", r.status_code, _safe_response_text(r.text, 300))
+        return {"inserted": False, "status": r.status_code, "body": r.text[:300], "term": phrase}
+    except Exception as e:
+        logger.warning("Insert learned term exception: %s", e)
+        return {"inserted": False, "error": str(e), "term": phrase}
+
+
+def _learn_abuse_terms_from_valid_report(req: RespectAIModerationRequest, result: Dict[str, Any]) -> Dict[str, Any]:
+    post_text = (req.postText or req.text or "").strip()
+    if not post_text:
+        return {"learned": False, "terms": [], "reason": "empty_post_text"}
+    terms = _extract_learned_terms_with_ai(post_text, req.reason or "", req.details or "", str(result.get("reason") or ""))
+    inserted = [_insert_learned_abuse_term(
+        term=term,
+        category=str(result.get("category") or "learned_abuse"),
+        reason=str(result.get("reason") or req.reason or "بلاغ صحيح"),
+        source_post_id=req.postId or "",
+        source_report_id=req.reportId or "",
+        reporter_username=req.reporterUsername or "",
+        reported_username=req.reportedUsername or req.username or "",
+    ) for term in terms]
+    ok_count = sum(1 for x in inserted if x.get("inserted") is True)
+    return {"learned": ok_count > 0, "terms": terms, "inserted": inserted, "count": ok_count}
+
+
+def _load_active_learned_terms(force: bool = False) -> list[Dict[str, Any]]:
+    now = time.time()
+    if not force and (now - float(_LEARNED_TERMS_CACHE.get("ts") or 0)) < _LEARNED_TERMS_TTL_SECONDS:
+        return list(_LEARNED_TERMS_CACHE.get("items") or [])
+    try:
+        r = requests.get(
+            f"{SB_URL}/rest/v1/{LEARNED_TERMS_TABLE}",
+            headers=_supabase_headers(use_service_role=True),
+            params={"select": "id,term,normalized_spaced,normalized_compact,category,reason,active", "active": "eq.true", "order": "created_at.desc", "limit": "700"},
+            timeout=10,
+        )
+        if r.status_code >= 400:
+            logger.warning("Load learned terms failed status=%s body=%s", r.status_code, _safe_response_text(r.text, 250))
+            _LEARNED_TERMS_CACHE.update({"ts": now, "items": []})
+            return []
+        data = r.json() if r.text else []
+        items = [dict(x) for x in data if isinstance(x, dict)] if isinstance(data, list) else []
+        _LEARNED_TERMS_CACHE.update({"ts": now, "items": items})
+        return items
+    except Exception as e:
+        logger.warning("Load learned terms exception: %s", e)
+        return list(_LEARNED_TERMS_CACHE.get("items") or [])
+
+
+def _learned_phrase_matches_text(term_compact: str, term_spaced: str, text_compact: str, text_spaced: str) -> bool:
+    term_compact, term_spaced = (term_compact or "").strip(), (term_spaced or "").strip()
+    if len(term_compact) < 2:
+        return False
+    text_tokens = set((text_spaced or "").split())
+    if len(term_compact) <= 2:
+        if term_spaced in text_tokens:
+            return True
+        if len(term_compact) == 2 and re.search(rf"(^|\s){re.escape(term_compact[0])}\s+{re.escape(term_compact[1])}(\s|$)", text_spaced):
+            return True
+        return False
+    if " " in term_spaced:
+        return re.search(rf"(^|\s){re.escape(term_spaced)}(\s|$)", text_spaced) is not None
+    return term_compact in text_compact
+
+
+def _learned_abuse_violation_guard(text: str) -> Optional[Dict[str, Any]]:
+    if not (text or "").strip():
+        return None
+    n = _learned_normalized(text)
+    if not n["compact"]:
+        return None
+    for item in _load_active_learned_terms():
+        term_compact = str(item.get("normalized_compact") or "").strip()
+        term_spaced = str(item.get("normalized_spaced") or "").strip()
+        if term_compact and _learned_phrase_matches_text(term_compact, term_spaced, n["compact"], n["spaced"]):
+            return {
+                "shouldDelete": True,
+                "deleteParentReply": False,
+                "category": str(item.get("category") or "learned_abuse"),
+                "reason": f"تم حذف المحتوى لأنه يطابق عبارة مخالفة تعلمها Respect AI من بلاغ صحيح سابق: {str(item.get('term') or '')[:60]}",
+                "confidence": 0.99,
+                "checks": 1,
+                "learned_guard": True,
+                "matchedTerm": str(item.get("term") or ""),
+            }
+    return None
+
 def _local_obvious_violation(text: str) -> Optional[Dict[str, Any]]:
     """
     فلتر احتياطي عند تعطل Qwen. لا يحذف إلا المخالف الواضح جدًا.
     """
+    learned_violation = _learned_abuse_violation_guard(text)
+    if learned_violation is not None:
+        learned_violation["local_fallback"] = True
+        return learned_violation
+
     hard_violation = _local_hard_violation_guard(text)
     if hard_violation is not None:
         hard_violation["local_fallback"] = True
@@ -4025,7 +4249,11 @@ def respect_ai_review_report(req: RespectAIModerationRequest, x_app_secret: Opti
 
     update_result: Dict[str, Any] = {"updated": False}
     warning_result: Dict[str, Any] = {"warningCount": 0, "blocked": False}
+    learn_result: Dict[str, Any] = {"learned": False, "terms": []}
     if should_hide:
+        # أهم تعديل: أي بلاغ صحيح تسبب بحذف التغريدة يعلّم Respect AI العبارة المخالفة.
+        learn_result = _learn_abuse_terms_from_valid_report(req, result)
+
         # داخل المجتمع نخفي، وخارج المجتمع نحذف إذا action=delete.
         if req.communityId:
             update_result = _patch_supabase_post(req.postId, {"community_hidden": True, "hidden_reason": str(result.get("reason") or "")})
@@ -4047,6 +4275,8 @@ def respect_ai_review_report(req: RespectAIModerationRequest, x_app_secret: Opti
         "confidence": confidence,
         "reason": str(result.get("reason") or ""),
         "postUpdate": update_result,
+        "learnResult": learn_result,
+        "learnedTerms": learn_result.get("terms", []),
         "warning": warning_result,
     }
 
@@ -4116,6 +4346,34 @@ def respect_ai_moderate_story(req: RespectAIModerationRequest, request: FastAPIR
 def respect_ai_moderate_post(req: RespectAIModerationRequest, request: FastAPIRequest, x_app_secret: Optional[str] = Header(default=None)):
     _check_secret(x_app_secret)
     _enforce_moderation_rate(_client_ip(request))
+
+    # طبقة تعلم البلاغات: تفحص القاموس المتعلم قبل Qwen، حتى يكون الحذف فوريًا ومتسقًا.
+    learned_result = _learned_abuse_violation_guard(req.text or req.postText or "")
+    if learned_result is not None and learned_result.get("shouldDelete") is True:
+        delete_result: Dict[str, Any] = {"deleted": False}
+        if (req.postId or "").strip():
+            delete_result = _delete_supabase_post(req.postId)
+        return {
+            "ok": True,
+            "postId": req.postId,
+            "shouldDelete": True,
+            "deleted": bool(delete_result.get("deleted")),
+            "deleteResult": delete_result,
+            "reason": str(learned_result.get("reason") or "عبارة مخالفة متعلمة من بلاغ صحيح سابق"),
+            "category": str(learned_result.get("category") or "learned_abuse"),
+            "confidence": float(learned_result.get("confidence") or 0.99),
+            "decisionSource": "learned_report_dictionary",
+            "textModeration": learned_result,
+            "imageModeration": {"shouldDelete": False, "category": "skipped", "reason": "تم الحذف من طبقة التعلم النصية"},
+            "videoModeration": {"shouldDelete": False, "category": "skipped", "reason": "تم الحذف من طبقة التعلم النصية"},
+            "linkModeration": {"shouldDelete": False, "category": "skipped", "reason": "تم الحذف من طبقة التعلم النصية"},
+            "virusTotalModeration": {"shouldDelete": False, "category": "skipped", "reason": "تم الحذف من طبقة التعلم النصية"},
+            "learnedMatch": True,
+            "matchedTerm": str(learned_result.get("matchedTerm") or ""),
+            "model": "learned_dictionary",
+            "textModel": QWEN_TEXT_MODEL,
+            "visionModel": QWEN_VISION_MODEL,
+        }
 
     # المسار الجديد:
     # منشور
