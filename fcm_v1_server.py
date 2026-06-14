@@ -287,7 +287,7 @@ SCOPES = ["https://www.googleapis.com/auth/firebase.messaging"]
 app = FastAPI(title="Respect App FCM + Respect AI Qwen Server")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["https://respect-app-9fzq.onrender.com"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
