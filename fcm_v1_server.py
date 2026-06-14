@@ -936,6 +936,8 @@ def health():
         "service_account_file_configured": bool(SA_FILE),
         "ai_provider": "qwen",
         "respect_ai_enabled": bool(QWEN_API_KEY),
+        "respect_cyber_ai_enabled": bool(HF_TOKEN),
+        "cyber_admin_page": "/respect-ai/cyber",
         "server_delete_enabled": bool(SB_SERVICE),
         "link_guard_enabled": bool(GSB_TOKEN),
         "virustotal_enabled": bool(VIRUSTOTAL_API_KEY),
@@ -5899,6 +5901,460 @@ def respect_ai_search_expand(req: RespectAISearchExpandRequest, x_app_secret: Op
         return RespectAISearchExpandResponse(ok=True, query=query, terms=fallback, model="local-fallback")
 
 
+
+
+
+# ================= Respect Cyber Admin Web Center =================
+# صفحة ويب داخل نفس رابط /respect-ai/cyber، مع API إداري محمي بالـ X-App-Secret.
+# ملاحظة مهمة: لا يتم إرسال Supabase service role key إلى المتصفح أبدًا.
+# المتصفح يرسل فقط APP_SHARED_SECRET الذي يكتبه الأدمن، والسيرفر ينفذ العمليات الحساسة من الخلفية.
+
+class CyberAdminListRequest(BaseModel):
+    q: str = ""
+    status: str = "all"
+    limit: int = 30
+    offset: int = 0
+
+
+class CyberAdminUserActionRequest(BaseModel):
+    username: str
+    reason: str = "إجراء إداري من Respect Cyber Center"
+
+
+class CyberAdminPostActionRequest(BaseModel):
+    postId: str
+    reason: str = "إجراء إداري من Respect Cyber Center"
+
+
+class CyberAdminReviewReportRequest(BaseModel):
+    reportId: str
+
+
+def _check_cyber_admin_secret(x_app_secret: Optional[str]) -> None:
+    # لوحة الأدمن أخطر من endpoints العادية، لذلك لا تعمل إذا لم تضبط السر في Render.
+    if not APP_SHARED_SECRET:
+        raise HTTPException(status_code=500, detail="APP_SHARED_SECRET غير مضبوط في Render. لا تفتح لوحة الأدمن قبل ضبطه.")
+    _check_secret(x_app_secret)
+    if not SB_SERVICE:
+        raise HTTPException(status_code=500, detail="SUPABASE_SERVICE_ROLE_KEY غير مضبوط في Render. لوحة الأدمن تحتاجه لقراءة البلاغات وتنفيذ الحظر.")
+
+
+def _cyber_limit(value: int, default: int = 30, maximum: int = 100) -> int:
+    try:
+        n = int(value)
+    except Exception:
+        n = default
+    return max(1, min(n, maximum))
+
+
+def _cyber_offset(value: int) -> int:
+    try:
+        n = int(value)
+    except Exception:
+        n = 0
+    return max(0, n)
+
+
+def _cyber_search_term(value: str) -> str:
+    # PostgREST filter string لا يحب بعض الرموز داخل or/ilike؛ نترك الحروف والأرقام والمسافات والهاشتاق والمنشن.
+    v = re.sub(r"[,(){}\\]", " ", str(value or "").strip())
+    v = re.sub(r"\s+", " ", v).strip()
+    return v[:80]
+
+
+def _cyber_supabase_get(table: str, params: Dict[str, Any], timeout: int = 18) -> list[Dict[str, Any]]:
+    r = requests.get(
+        f"{SB_URL}/rest/v1/{table}",
+        headers=_supabase_headers(use_service_role=True),
+        params=params,
+        timeout=timeout,
+    )
+    if r.status_code >= 400:
+        raise HTTPException(status_code=500, detail=f"Supabase {table} read error {r.status_code}: {_safe_response_text(r.text, 800)}")
+    try:
+        data = r.json() if r.text else []
+    except Exception:
+        data = []
+    if not isinstance(data, list):
+        return []
+    return [dict(x) for x in data if isinstance(x, dict)]
+
+
+def _cyber_supabase_count(table: str, extra_params: Optional[Dict[str, Any]] = None) -> int:
+    params = {"select": "id", "limit": "1"}
+    if extra_params:
+        params.update(extra_params)
+    try:
+        r = requests.get(
+            f"{SB_URL}/rest/v1/{table}",
+            headers={**_supabase_headers(use_service_role=True), "Prefer": "count=exact"},
+            params=params,
+            timeout=12,
+        )
+        if r.status_code >= 400:
+            return 0
+        cr = r.headers.get("content-range", "")
+        if "/" in cr:
+            tail = cr.split("/")[-1].strip()
+            return int(tail) if tail.isdigit() else 0
+        data = r.json() if r.text else []
+        return len(data) if isinstance(data, list) else 0
+    except Exception:
+        return 0
+
+
+def _cyber_patch_table(table: str, filters: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
+    r = requests.patch(
+        f"{SB_URL}/rest/v1/{table}",
+        headers={**_supabase_headers(use_service_role=True), "Prefer": "return=representation"},
+        params=filters,
+        json=payload,
+        timeout=18,
+    )
+    if r.status_code >= 400:
+        return {"ok": False, "status": r.status_code, "body": _safe_response_text(r.text, 800)}
+    try:
+        data = r.json() if r.text else []
+    except Exception:
+        data = []
+    return {"ok": True, "rows": data if isinstance(data, list) else []}
+
+
+def _cyber_scan_report() -> Dict[str, Any]:
+    checks: list[Dict[str, Any]] = []
+
+    def add(name: str, ok: bool, level: str, detail: str) -> None:
+        checks.append({"name": name, "ok": bool(ok), "level": level, "detail": detail})
+
+    add("APP_SHARED_SECRET", bool(APP_SHARED_SECRET), "high", "يحمي لوحة الأدمن وطلبات التطبيق الحساسة.")
+    add("SUPABASE_SERVICE_ROLE_KEY", bool(SB_SERVICE), "high", "مطلوب للعمليات الإدارية من السيرفر فقط.")
+    add("QWEN_API_KEY", bool(QWEN_API_KEY), "medium", "يشغل مراجعة المحتوى والبلاغات بالذكاء الاصطناعي.")
+    add("HF_TOKEN", bool(HF_TOKEN), "medium", "يشغل Respect Cyber AI عبر Hugging Face Router.")
+    add("Firebase Service Account", bool(SA_JSON or SA_FILE), "medium", "مطلوب لإرسال الإشعارات الخارجية FCM.")
+    add("Google Safe Browsing", bool(GSB_TOKEN), "medium", "طبقة حماية الروابط داخل المنشورات.")
+    add("VirusTotal", bool(VIRUSTOTAL_API_KEY), "low", "طبقة اختيارية إضافية للروابط المشبوهة.")
+    add("Metered TURN", bool(METERED_API_KEY), "low", "يحسن ثبات المكالمات بين شبكات مختلفة.")
+    add("Paddle Webhook Secret", bool(PADDLE_WEBHOOK_SECRET), "medium", "مهم للتحقق من اشتراكات التوثيق.")
+    add("CORS", False, "medium", "الكود الحالي يسمح allow_origins=['*']; الأفضل تقييده بدومين التطبيق عند الإنتاج.")
+
+    high_bad = sum(1 for c in checks if not c["ok"] and c["level"] == "high")
+    med_bad = sum(1 for c in checks if not c["ok"] and c["level"] == "medium")
+    low_bad = sum(1 for c in checks if not c["ok"] and c["level"] == "low")
+    score = max(0, 100 - high_bad * 22 - med_bad * 10 - low_bad * 4)
+
+    table_counts = {
+        "users": _cyber_supabase_count("users") if SB_SERVICE else 0,
+        "posts": _cyber_supabase_count("posts") if SB_SERVICE else 0,
+        "pendingReports": _cyber_supabase_count("post_reports", {"status": "eq.pending"}) if SB_SERVICE else 0,
+        "blockedUsers": _cyber_supabase_count("users", {"is_blocked": "eq.true"}) if SB_SERVICE else 0,
+    }
+    return {"ok": True, "score": score, "checks": checks, "counts": table_counts}
+
+
+@app.get("/respect-ai/cyber", response_class=HTMLResponse)
+def respect_ai_cyber_admin_page():
+    return """
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Respect Cyber Center</title>
+  <style>
+    :root{--bg:#090713;--panel:#131020;--panel2:#19142b;--line:rgba(255,255,255,.10);--txt:#f5f3ff;--muted:#b6aacd;--purple:#8b5cf6;--purple2:#a855f7;--danger:#fb7185;--ok:#34d399;--warn:#fbbf24;--blue:#60a5fa}
+    *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top right,#2b1458 0,#090713 35%,#05040a 100%);font-family:system-ui,-apple-system,"Segoe UI",Tahoma,Arial;color:var(--txt)}
+    .app{display:grid;grid-template-columns:280px 1fr;min-height:100vh}.side{border-left:1px solid var(--line);background:rgba(10,8,18,.76);backdrop-filter:blur(20px);padding:20px;position:sticky;top:0;height:100vh}.brand{display:flex;gap:12px;align-items:center;margin-bottom:24px}.logo{width:46px;height:46px;border-radius:17px;background:linear-gradient(135deg,var(--purple),#ec4899);display:grid;place-items:center;font-weight:900;box-shadow:0 12px 40px rgba(139,92,246,.35)}h1{font-size:19px;margin:0}small{color:var(--muted)}.secret{margin:18px 0;padding:12px;border:1px solid var(--line);border-radius:18px;background:rgba(255,255,255,.04)}
+    input,textarea,select{width:100%;border:1px solid var(--line);border-radius:14px;background:#0d0a17;color:var(--txt);padding:12px;outline:none}textarea{min-height:130px;resize:vertical}.nav button{width:100%;text-align:right;margin:6px 0;border:1px solid transparent;background:transparent;color:var(--muted);padding:13px;border-radius:15px;cursor:pointer;font-weight:800}.nav button.active,.nav button:hover{background:linear-gradient(135deg,rgba(139,92,246,.22),rgba(168,85,247,.12));color:#fff;border-color:rgba(139,92,246,.35)}
+    .main{padding:26px}.top{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:20px}.title{font-size:26px;font-weight:950}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.card{background:linear-gradient(180deg,rgba(255,255,255,.08),rgba(255,255,255,.035));border:1px solid var(--line);border-radius:24px;padding:17px;box-shadow:0 18px 55px rgba(0,0,0,.28)}.card h3{margin:0 0 8px;font-size:14px;color:var(--muted)}.num{font-size:28px;font-weight:950}.section{display:none}.section.active{display:block}.row{display:flex;gap:10px;align-items:center}.row>*{flex:1}.btn{border:0;border-radius:14px;background:linear-gradient(135deg,var(--purple),var(--purple2));color:white;padding:12px 15px;font-weight:900;cursor:pointer}.btn.ghost{background:rgba(255,255,255,.07);border:1px solid var(--line)}.btn.danger{background:linear-gradient(135deg,#e11d48,#fb7185)}.btn.ok{background:linear-gradient(135deg,#059669,#34d399)}.btn.warn{background:linear-gradient(135deg,#d97706,#fbbf24);color:#1b1200}.btn:disabled{opacity:.55;cursor:not-allowed}.mt{margin-top:14px}.list{display:grid;gap:12px}.item{border:1px solid var(--line);background:rgba(7,6,12,.45);border-radius:18px;padding:14px}.item .meta{color:var(--muted);font-size:12px;margin-bottom:6px}.pill{display:inline-flex;gap:5px;align-items:center;padding:5px 9px;border-radius:999px;font-size:12px;font-weight:900;background:rgba(255,255,255,.08);border:1px solid var(--line);margin:3px}.pill.high{color:var(--danger)}.pill.medium{color:var(--warn)}.pill.low{color:var(--blue)}.pill.ok{color:var(--ok)}pre{white-space:pre-wrap;word-break:break-word;background:#07050d;border:1px solid var(--line);border-radius:16px;padding:14px;color:#e9ddff;max-height:520px;overflow:auto}.muted{color:var(--muted)}.split{display:grid;grid-template-columns:1fr 1fr;gap:14px}.searchbar{display:flex;gap:10px;margin-bottom:14px}.searchbar input{flex:1}.searchbar button{width:160px}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.dangerText{color:var(--danger)}.okText{color:var(--ok)}.warnText{color:var(--warn)}
+    @media(max-width:900px){.app{grid-template-columns:1fr}.side{height:auto;position:relative;border-left:0;border-bottom:1px solid var(--line)}.grid,.split{grid-template-columns:1fr}.top{align-items:stretch;flex-direction:column}.searchbar{flex-direction:column}.searchbar button{width:100%}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand"><div class="logo">RC</div><div><h1>Respect Cyber Center</h1><small>لوحة أدمن + ذكاء أمني</small></div></div>
+    <div class="secret">
+      <small>كلمة سر الأدمن APP_SHARED_SECRET</small>
+      <input id="secret" type="password" placeholder="اكتب السر هنا" autocomplete="current-password" />
+      <button class="btn mt" onclick="saveSecret()">حفظ السر</button>
+      <button class="btn ghost mt" onclick="clearSecret()">مسح</button>
+    </div>
+    <nav class="nav">
+      <button class="active" data-tab="dashboard" onclick="openTab('dashboard')">الرئيسية</button>
+      <button data-tab="ai" onclick="openTab('ai')">Respect Cyber AI</button>
+      <button data-tab="scan" onclick="openTab('scan')">فحص أمان شامل</button>
+      <button data-tab="reports" onclick="openTab('reports');loadReports()">بلاغات التطبيق</button>
+      <button data-tab="users" onclick="openTab('users')">بحث وحظر المستخدمين</button>
+      <button data-tab="posts" onclick="openTab('posts')">بحث التغريدات</button>
+    </nav>
+  </aside>
+  <main class="main">
+    <div class="top"><div><div class="title">لوحة إدارة Respect</div><div class="muted">نفس الرابط صار موقع مصغر للأدمن، والـ POST القديم للذكاء الاصطناعي بقي شغال.</div></div><button class="btn" onclick="loadSummary()">تحديث البيانات</button></div>
+
+    <section id="dashboard" class="section active">
+      <div class="grid">
+        <div class="card"><h3>المستخدمون</h3><div id="cUsers" class="num">-</div></div>
+        <div class="card"><h3>التغريدات</h3><div id="cPosts" class="num">-</div></div>
+        <div class="card"><h3>بلاغات معلقة</h3><div id="cReports" class="num">-</div></div>
+        <div class="card"><h3>محظورين</h3><div id="cBlocked" class="num">-</div></div>
+      </div>
+      <div class="card mt"><h3>الحالة</h3><pre id="summaryOut">اضغط تحديث البيانات.</pre></div>
+    </section>
+
+    <section id="ai" class="section">
+      <div class="split">
+        <div class="card">
+          <h3>اسأل Respect Cyber AI</h3>
+          <select id="cyberMode"><option value="defensive">حماية دفاعية</option><option value="code_review">مراجعة كود</option><option value="incident_response">استجابة حادث</option><option value="explain">شرح مبسط</option></select>
+          <textarea id="cyberText" class="mt" placeholder="اكتب السؤال الأمني أو الصق كود تريد مراجعته دفاعيًا..."></textarea>
+          <button class="btn mt" onclick="askCyber()">إرسال</button>
+        </div>
+        <div class="card"><h3>الرد</h3><pre id="cyberOut">جاهز.</pre></div>
+      </div>
+    </section>
+
+    <section id="scan" class="section">
+      <div class="card"><h3>فحص شامل للتطبيق من ناحية الأمان</h3><p class="muted">الفحص دفاعي: إعدادات السيرفر، الأسرار، طبقات الحماية، وعدّادات Supabase الأساسية.</p><button class="btn" onclick="runFullScan()">بدء الفحص الآن</button></div>
+      <div class="card mt"><h3>النتيجة</h3><div id="scanScore" class="num">-</div><div id="scanList" class="list mt"></div></div>
+    </section>
+
+    <section id="reports" class="section">
+      <div class="card">
+        <div class="searchbar"><input id="reportsQ" placeholder="بحث في البلاغات: مستخدم / سبب / تفاصيل" /><select id="reportsStatus"><option value="all">كل الحالات</option><option value="pending">معلقة</option><option value="reviewed">تمت المراجعة</option><option value="accepted">مقبولة</option><option value="rejected">مرفوضة</option></select><button class="btn" onclick="loadReports()">بحث</button></div>
+        <div id="reportsList" class="list"></div>
+      </div>
+    </section>
+
+    <section id="users" class="section">
+      <div class="card">
+        <div class="searchbar"><input id="usersQ" placeholder="ابحث باسم المستخدم أو الإيميل أو الاسم" /><button class="btn" onclick="loadUsers()">بحث</button></div>
+        <div id="usersList" class="list"></div>
+      </div>
+    </section>
+
+    <section id="posts" class="section">
+      <div class="card">
+        <div class="searchbar"><input id="postsQ" placeholder="ابحث داخل نص التغريدات" /><button class="btn" onclick="loadPosts()">بحث</button></div>
+        <div id="postsList" class="list"></div>
+      </div>
+    </section>
+  </main>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const secret = () => $('secret').value || localStorage.getItem('respectCyberSecret') || '';
+$('secret').value = localStorage.getItem('respectCyberSecret') || '';
+function saveSecret(){localStorage.setItem('respectCyberSecret', $('secret').value || ''); alert('تم حفظ السر محليًا في المتصفح');}
+function clearSecret(){localStorage.removeItem('respectCyberSecret'); $('secret').value='';}
+function openTab(tab){document.querySelectorAll('.section').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.nav button').forEach(x=>x.classList.remove('active'));$(tab).classList.add('active');document.querySelector(`[data-tab="${tab}"]`).classList.add('active');}
+async function api(path, body={}){const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json','X-App-Secret':secret()},body:JSON.stringify(body)});const txt=await r.text();let data;try{data=JSON.parse(txt)}catch{data={raw:txt}};if(!r.ok) throw new Error(typeof data.detail==='string'?data.detail:JSON.stringify(data.detail||data));return data;}
+function showError(el,e){$(el).innerHTML = 'خطأ: '+esc(e.message||e);}
+async function loadSummary(){try{const d=await api('/respect-ai/cyber/admin/summary');$('cUsers').textContent=d.counts.users;$('cPosts').textContent=d.counts.posts;$('cReports').textContent=d.counts.pendingReports;$('cBlocked').textContent=d.counts.blockedUsers;$('summaryOut').textContent=JSON.stringify(d,null,2);}catch(e){showError('summaryOut',e)}}
+async function askCyber(){try{$('cyberOut').textContent='جاري التفكير...';const d=await api('/respect-ai/cyber',{text:$('cyberText').value,username:'@admin',mode:$('cyberMode').value});$('cyberOut').textContent=d.reply||JSON.stringify(d,null,2);}catch(e){showError('cyberOut',e)}}
+async function runFullScan(){try{$('scanScore').textContent='...';$('scanList').innerHTML='';const d=await api('/respect-ai/cyber/full-scan');$('scanScore').textContent=(d.score||0)+'/100';$('scanList').innerHTML=(d.checks||[]).map(c=>`<div class="item"><span class="pill ${c.ok?'ok':c.level}">${c.ok?'سليم':'يحتاج مراجعة'} · ${esc(c.level)}</span><b>${esc(c.name)}</b><div class="muted mt">${esc(c.detail)}</div></div>`).join('')+`<pre>${esc(JSON.stringify(d.counts||{},null,2))}</pre>`;}catch(e){$('scanScore').textContent='خطأ';$('scanList').innerHTML='<div class="item dangerText">'+esc(e.message||e)+'</div>'}}
+async function loadReports(){try{const d=await api('/respect-ai/cyber/admin/reports',{q:$('reportsQ').value,status:$('reportsStatus').value,limit:40});$('reportsList').innerHTML=(d.items||[]).map(r=>{const id=r.id||r.report_id||'';return `<div class="item"><div class="meta">${esc(r.created_at||'')} · الحالة: ${esc(r.status||'pending')} · المبلّغ: ${esc(r.reporter_username||r.reporterUsername||'')}</div><b>${esc(r.reason||r.type||'بلاغ')}</b><div class="mt">${esc(r.details||'')}</div><div class="mt muted">على: ${esc(r.post_username||r.postUsername||'')} · post: ${esc(r.post_id||r.postId||'')}</div><div class="actions"><button class="btn" onclick="reviewReport('${esc(id)}')">مراجعة AI</button><button class="btn danger" onclick="blockUser('${esc(r.post_username||r.postUsername||'')}')">حظر صاحب التغريدة</button></div></div>`}).join('')||'<div class="muted">لا توجد بلاغات.</div>'}catch(e){showError('reportsList',e)}}
+async function reviewReport(id){if(!id)return alert('لا يوجد report id');try{const d=await api('/respect-ai/cyber/admin/reports/review',{reportId:id});alert('تمت المراجعة: '+(d.reason||JSON.stringify(d)));loadReports();}catch(e){alert(e.message||e)}}
+async function loadUsers(){try{const d=await api('/respect-ai/cyber/admin/users',{q:$('usersQ').value,limit:40});$('usersList').innerHTML=(d.items||[]).map(u=>`<div class="item"><div class="meta">${esc(u.created_at||'')} · ${u.is_blocked?'محظور':'نشط'} · ${u.is_admin?'أدمن':''}</div><b>${esc(u.name||'User')} ${esc(u.username||'')}</b><div class="muted mt">${esc(u.email||'')} ${u.blocked_reason?'· سبب الحظر: '+esc(u.blocked_reason):''}</div><div class="actions"><button class="btn danger" onclick="blockUser('${esc(u.username||'')}')">حظر</button><button class="btn ok" onclick="unblockUser('${esc(u.username||'')}')">فك الحظر</button></div></div>`).join('')||'<div class="muted">لا يوجد نتائج.</div>'}catch(e){showError('usersList',e)}}
+async function blockUser(username){username=(username||'').trim();if(!username)return alert('اسم المستخدم فارغ');const reason=prompt('سبب الحظر:', 'حظر إداري من Respect Cyber Center')||'حظر إداري';try{await api('/respect-ai/cyber/admin/users/block',{username,reason});alert('تم الحظر');loadUsers();loadReports();loadSummary();}catch(e){alert(e.message||e)}}
+async function unblockUser(username){username=(username||'').trim();if(!username)return alert('اسم المستخدم فارغ');try{await api('/respect-ai/cyber/admin/users/unblock',{username,reason:'فك حظر إداري'});alert('تم فك الحظر');loadUsers();loadSummary();}catch(e){alert(e.message||e)}}
+async function loadPosts(){try{const d=await api('/respect-ai/cyber/admin/posts',{q:$('postsQ').value,limit:40});$('postsList').innerHTML=(d.items||[]).map(p=>`<div class="item"><div class="meta">${esc(p.created_at||'')} · ${esc(p.username||'')} · views ${esc(p.views||0)}</div><div>${esc(p.text||'')}</div><div class="actions"><button class="btn warn" onclick="hidePost('${esc(p.id||'')}')">إخفاء التغريدة</button><button class="btn ok" onclick="unhidePost('${esc(p.id||'')}')">إلغاء الإخفاء</button><button class="btn danger" onclick="blockUser('${esc(p.username||'')}')">حظر الكاتب</button></div></div>`).join('')||'<div class="muted">لا يوجد نتائج.</div>'}catch(e){showError('postsList',e)}}
+async function hidePost(id){const reason=prompt('سبب الإخفاء:', 'إخفاء إداري من Respect Cyber Center')||'إخفاء إداري';try{await api('/respect-ai/cyber/admin/posts/hide',{postId:id,reason});alert('تم الإخفاء');loadPosts();}catch(e){alert(e.message||e)}}
+async function unhidePost(id){try{await api('/respect-ai/cyber/admin/posts/unhide',{postId:id,reason:'إلغاء إخفاء إداري'});alert('تم إلغاء الإخفاء');loadPosts();}catch(e){alert(e.message||e)}}
+loadSummary();
+</script>
+</body>
+</html>
+"""
+
+
+@app.post("/respect-ai/cyber/admin/summary")
+def respect_ai_cyber_admin_summary(x_app_secret: Optional[str] = Header(default=None)):
+    _check_cyber_admin_secret(x_app_secret)
+    scan = _cyber_scan_report()
+    return {"ok": True, "counts": scan["counts"], "securityScore": scan["score"], "enabled": {"qwen": bool(QWEN_API_KEY), "cyberAi": bool(HF_TOKEN), "fcm": bool(SA_JSON or SA_FILE), "turn": bool(METERED_API_KEY)}}
+
+
+@app.post("/respect-ai/cyber/full-scan")
+def respect_ai_cyber_full_scan(x_app_secret: Optional[str] = Header(default=None)):
+    _check_cyber_admin_secret(x_app_secret)
+    return _cyber_scan_report()
+
+
+@app.post("/respect-ai/cyber/admin/reports")
+def respect_ai_cyber_admin_reports(req: CyberAdminListRequest, x_app_secret: Optional[str] = Header(default=None)):
+    _check_cyber_admin_secret(x_app_secret)
+    limit = _cyber_limit(req.limit, 30, 100)
+    offset = _cyber_offset(req.offset)
+    q = _cyber_search_term(req.q)
+    status = (req.status or "all").strip().lower()
+    params: Dict[str, Any] = {"select": "*", "order": "created_at.desc", "limit": str(limit), "offset": str(offset)}
+    if status and status != "all":
+        params["status"] = f"eq.{status}"
+    if q:
+        params["or"] = f"(reason.ilike.*{q}*,details.ilike.*{q}*,reporter_username.ilike.*{q}*,post_username.ilike.*{q}*)"
+    try:
+        items = _cyber_supabase_get("post_reports", params)
+    except HTTPException:
+        # fallback لو بعض الأعمدة غير موجودة في جدول قديم.
+        params = {"select": "*", "order": "created_at.desc", "limit": str(limit), "offset": str(offset)}
+        items = _cyber_supabase_get("post_reports", params)
+        if q:
+            low = q.lower()
+            items = [x for x in items if low in json.dumps(x, ensure_ascii=False).lower()]
+        if status and status != "all":
+            items = [x for x in items if str(x.get("status", "pending")).lower() == status]
+    return {"ok": True, "items": items, "limit": limit, "offset": offset}
+
+
+@app.post("/respect-ai/cyber/admin/reports/review")
+def respect_ai_cyber_admin_review_report(req: CyberAdminReviewReportRequest, x_app_secret: Optional[str] = Header(default=None)):
+    _check_cyber_admin_secret(x_app_secret)
+    report_id = str(req.reportId or "").strip()
+    if not report_id:
+        raise HTTPException(status_code=400, detail="reportId مطلوب")
+    reports = _cyber_supabase_get("post_reports", {"select": "*", "id": f"eq.{report_id}", "limit": "1"})
+    if not reports:
+        raise HTTPException(status_code=404, detail="البلاغ غير موجود")
+    report = reports[0]
+    post_id = str(report.get("post_id") or report.get("postId") or "").strip()
+    post_text = str(report.get("post_text") or report.get("postText") or "").strip()
+    post_username = str(report.get("post_username") or report.get("postUsername") or "").strip()
+    if post_id and (not post_text or not post_username):
+        try:
+            posts = _cyber_supabase_get("posts", {"select": "*", "id": f"eq.{post_id}", "limit": "1"})
+            if posts:
+                post_text = post_text or str(posts[0].get("text") or "")
+                post_username = post_username or str(posts[0].get("username") or "")
+        except Exception:
+            pass
+    ai_req = RespectAIModerationRequest(
+        reportId=report_id,
+        postId=post_id,
+        reporterUsername=str(report.get("reporter_username") or report.get("reporterUsername") or ""),
+        reportedUsername=post_username,
+        reason=str(report.get("reason") or report.get("type") or "بلاغ"),
+        details=str(report.get("details") or ""),
+        postText=post_text,
+        communityId=str(report.get("community_id") or report.get("communityId") or ""),
+        communityName=str(report.get("community_name") or report.get("communityName") or ""),
+    )
+    result = respect_ai_review_report(ai_req, x_app_secret=APP_SHARED_SECRET)
+    patch_payload = {
+        "status": "accepted" if result.get("validReport") else "rejected",
+        "ai_status": "reviewed",
+        "ai_reason": str(result.get("reason") or "")[:500],
+        "ai_confidence": result.get("confidence") or 0,
+        "reviewed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    patch = _cyber_patch_table("post_reports", {"id": f"eq.{report_id}"}, patch_payload)
+    if not patch.get("ok"):
+        # fallback لو جدول post_reports لا يحتوي أعمدة ai_reason/reviewed_at.
+        patch = _cyber_patch_table("post_reports", {"id": f"eq.{report_id}"}, {"status": patch_payload["status"], "ai_status": "reviewed"})
+    return {**result, "reportPatch": patch}
+
+
+@app.post("/respect-ai/cyber/admin/users")
+def respect_ai_cyber_admin_users(req: CyberAdminListRequest, x_app_secret: Optional[str] = Header(default=None)):
+    _check_cyber_admin_secret(x_app_secret)
+    limit = _cyber_limit(req.limit, 30, 100)
+    offset = _cyber_offset(req.offset)
+    q = _cyber_search_term(req.q)
+    params: Dict[str, Any] = {"select": "*", "order": "created_at.desc", "limit": str(limit), "offset": str(offset)}
+    if q:
+        params["or"] = f"(username.ilike.*{q}*,name.ilike.*{q}*,email.ilike.*{q}*)"
+    try:
+        items = _cyber_supabase_get("users", params)
+    except HTTPException:
+        params = {"select": "*", "order": "created_at.desc", "limit": str(limit), "offset": str(offset)}
+        items = _cyber_supabase_get("users", params)
+        if q:
+            low = q.lower()
+            items = [x for x in items if low in json.dumps(x, ensure_ascii=False).lower()]
+    safe = [_safe_user_for_client(u) | {"blocked_reason": u.get("blocked_reason", "")} for u in items]
+    return {"ok": True, "items": safe, "limit": limit, "offset": offset}
+
+
+@app.post("/respect-ai/cyber/admin/users/block")
+def respect_ai_cyber_admin_block_user(req: CyberAdminUserActionRequest, x_app_secret: Optional[str] = Header(default=None)):
+    _check_cyber_admin_secret(x_app_secret)
+    username = _display_username(req.username)
+    ok = _block_user_from_server(username, req.reason or "حظر إداري من Respect Cyber Center")
+    if not ok:
+        raise HTTPException(status_code=500, detail="تعذر حظر المستخدم. راجع أعمدة جدول users وصلاحيات service role.")
+    return {"ok": True, "username": username, "blocked": True}
+
+
+@app.post("/respect-ai/cyber/admin/users/unblock")
+def respect_ai_cyber_admin_unblock_user(req: CyberAdminUserActionRequest, x_app_secret: Optional[str] = Header(default=None)):
+    _check_cyber_admin_secret(x_app_secret)
+    username = _display_username(req.username)
+    clean = normalize_username(username)
+    now = datetime.now(timezone.utc).isoformat()
+    patch = _cyber_patch_table("users", {"or": f"(username.eq.{username},username.eq.{clean})"}, {
+        "is_blocked": False,
+        "blocked": False,
+        "banned": False,
+        "disabled": False,
+        "canLogin": True,
+        "blocked_reason": "",
+        "updated_at": now,
+    })
+    if not patch.get("ok"):
+        patch = _cyber_patch_table("users", {"or": f"(username.eq.{username},username.eq.{clean})"}, {"is_blocked": False, "updated_at": now})
+    return {"ok": bool(patch.get("ok")), "username": username, "unblocked": bool(patch.get("ok")), "patch": patch}
+
+
+@app.post("/respect-ai/cyber/admin/posts")
+def respect_ai_cyber_admin_posts(req: CyberAdminListRequest, x_app_secret: Optional[str] = Header(default=None)):
+    _check_cyber_admin_secret(x_app_secret)
+    limit = _cyber_limit(req.limit, 30, 100)
+    offset = _cyber_offset(req.offset)
+    q = _cyber_search_term(req.q)
+    params: Dict[str, Any] = {"select": "*", "order": "created_at.desc", "limit": str(limit), "offset": str(offset)}
+    if q:
+        params["or"] = f"(text.ilike.*{q}*,username.ilike.*{q}*,name.ilike.*{q}*)"
+    try:
+        items = _cyber_supabase_get("posts", params)
+    except HTTPException:
+        params = {"select": "*", "order": "created_at.desc", "limit": str(limit), "offset": str(offset)}
+        items = _cyber_supabase_get("posts", params)
+        if q:
+            low = q.lower()
+            items = [x for x in items if low in json.dumps(x, ensure_ascii=False).lower()]
+    # تقليل الحجم العائد للمتصفح.
+    slim = []
+    for p in items:
+        slim.append({k: p.get(k) for k in ["id", "username", "name", "text", "created_at", "likes", "reposts", "shares", "views", "community_id", "community_name", "community_hidden", "hidden_reason"] if k in p})
+    return {"ok": True, "items": slim, "limit": limit, "offset": offset}
+
+
+@app.post("/respect-ai/cyber/admin/posts/hide")
+def respect_ai_cyber_admin_hide_post(req: CyberAdminPostActionRequest, x_app_secret: Optional[str] = Header(default=None)):
+    _check_cyber_admin_secret(x_app_secret)
+    result = _patch_supabase_post(req.postId, {
+        "community_hidden": True,
+        "hidden_reason": req.reason or "إخفاء إداري من Respect Cyber Center",
+        "moderation_status": "hidden_by_admin",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    })
+    if not result.get("updated"):
+        result = _patch_supabase_post(req.postId, {"community_hidden": True, "hidden_reason": req.reason or "إخفاء إداري"})
+    return {"ok": bool(result.get("updated")), "result": result}
+
+
+@app.post("/respect-ai/cyber/admin/posts/unhide")
+def respect_ai_cyber_admin_unhide_post(req: CyberAdminPostActionRequest, x_app_secret: Optional[str] = Header(default=None)):
+    _check_cyber_admin_secret(x_app_secret)
+    result = _patch_supabase_post(req.postId, {
+        "community_hidden": False,
+        "hidden_reason": "",
+        "moderation_status": "visible",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    })
+    if not result.get("updated"):
+        result = _patch_supabase_post(req.postId, {"community_hidden": False, "hidden_reason": ""})
+    return {"ok": bool(result.get("updated")), "result": result}
 
 @app.post("/respect-ai/cyber", response_model=RespectAICyberResponse)
 def respect_ai_cyber(req: RespectAICyberRequest, x_app_secret: Optional[str] = Header(default=None)):
