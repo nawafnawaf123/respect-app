@@ -221,6 +221,8 @@ LOGIN_MAX_FAILED_ATTEMPTS = int(os.getenv("LOGIN_MAX_FAILED_ATTEMPTS", "6"))
 LOGIN_LOCK_MINUTES = int(os.getenv("LOGIN_LOCK_MINUTES", "30"))
 PASSWORD_RESET_TTL_MINUTES = int(os.getenv("PASSWORD_RESET_TTL_MINUTES", "20"))
 PUBLIC_APP_BASE_URL = os.getenv("PUBLIC_APP_BASE_URL", "https://respect-app-9fzq.onrender.com").rstrip("/")
+RESPECT_EMAIL_LOGO_URL = os.getenv("RESPECT_EMAIL_LOGO_URL", "").strip()
+RESPECT_EMAIL_BRAND_NAME = os.getenv("RESPECT_EMAIL_BRAND_NAME", "Respect App").strip() or "Respect App"
 
 # ================= Respect AI / Qwen Model Studio =================
 # لا تضع المفتاح داخل الكود. ضعه في Render كمتغير بيئة:
@@ -1288,102 +1290,172 @@ def _find_public_user_for_login(login: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _respect_email_shell(*, title: str, preheader: str, heading: str, body_html: str, button_text: str = "", button_url: str = "", code: str = "", footer_note: str = "") -> str:
+def _respect_email_shell(
+    *,
+    title: str,
+    preheader: str,
+    heading: str,
+    body_html: str,
+    button_text: str = "",
+    button_url: str = "",
+    code: str = "",
+    footer_note: str = "",
+) -> str:
+    """
+    قالب HTML Email فاخر وآمن لرسائل Respect App.
+    - يدعم اللوجو من Render عبر RESPECT_EMAIL_LOGO_URL.
+    - يحافظ على نسخة نصية fallback في دوال الإرسال.
+    - يستخدم inline styles حتى يظهر بشكل جيد داخل Gmail و Outlook قدر الإمكان.
+    """
     safe_title = html_lib.escape(title)
     safe_preheader = html_lib.escape(preheader)
     safe_heading = html_lib.escape(heading)
+    safe_brand = html_lib.escape(RESPECT_EMAIL_BRAND_NAME)
     safe_button_text = html_lib.escape(button_text)
     safe_button_url = html_lib.escape(button_url, quote=True)
     safe_code = html_lib.escape(code)
     safe_footer_note = html_lib.escape(footer_note)
+
+    logo_url = RESPECT_EMAIL_LOGO_URL.strip()
+    safe_logo_url = html_lib.escape(logo_url, quote=True)
+
+    if safe_logo_url:
+        logo_block = f"""
+          <table role="presentation" align="center" cellspacing="0" cellpadding="0" border="0" style="margin:0 auto 14px;">
+            <tr>
+              <td align="center" style="width:78px;height:78px;border-radius:28px;background:linear-gradient(135deg,#5b21b6,#a855f7,#d8b4fe);box-shadow:0 20px 50px rgba(124,58,237,.42);padding:4px;">
+                <img src="{safe_logo_url}" width="70" height="70" alt="{safe_brand}" style="display:block;width:70px;height:70px;border-radius:24px;object-fit:cover;border:0;outline:none;text-decoration:none;">
+              </td>
+            </tr>
+          </table>
+        """
+    else:
+        logo_block = f"""
+          <table role="presentation" align="center" cellspacing="0" cellpadding="0" border="0" style="margin:0 auto 14px;">
+            <tr>
+              <td align="center" valign="middle" style="width:78px;height:78px;border-radius:28px;background:linear-gradient(135deg,#5b21b6,#a855f7,#d8b4fe);box-shadow:0 20px 50px rgba(124,58,237,.42);">
+                <span style="display:block;color:#ffffff;font-size:38px;line-height:78px;font-weight:900;font-family:Arial,Tahoma,sans-serif;">R</span>
+              </td>
+            </tr>
+          </table>
+        """
+
     button_block = ""
     if button_text and button_url:
         button_block = f"""
           <tr>
-            <td align="center" style="padding: 22px 0 8px;">
-              <a href="{safe_button_url}" target="_blank" style="display:inline-block;background:linear-gradient(135deg,#7c3aed,#c084fc);color:#ffffff;text-decoration:none;font-weight:800;font-size:16px;padding:15px 26px;border-radius:999px;box-shadow:0 14px 34px rgba(124,58,237,.35);">
+            <td align="center" style="padding:26px 0 10px;">
+              <a href="{safe_button_url}" target="_blank"
+                 style="display:inline-block;background:#7c3aed;background-image:linear-gradient(135deg,#6d28d9 0%,#9333ea 45%,#c084fc 100%);color:#ffffff;text-decoration:none;font-weight:900;font-size:16px;line-height:1;padding:17px 30px;border-radius:999px;box-shadow:0 18px 38px rgba(124,58,237,.44);font-family:Tahoma,Arial,sans-serif;">
                 {safe_button_text}
               </a>
             </td>
           </tr>
           <tr>
-            <td style="padding: 12px 0 0;">
-              <div style="font-size:12px;line-height:1.7;color:#a7a3b8;word-break:break-all;text-align:center;">
-                إذا لم يعمل الزر، انسخ هذا الرابط وافتحه في المتصفح:<br>
-                <a href="{safe_button_url}" style="color:#c084fc;text-decoration:none;">{safe_button_url}</a>
+            <td style="padding:12px 4px 0;">
+              <div style="background:rgba(255,255,255,.045);border:1px solid rgba(192,132,252,.16);border-radius:16px;padding:13px 14px;font-size:12px;line-height:1.8;color:#b7afcf;word-break:break-all;text-align:center;font-family:Tahoma,Arial,sans-serif;">
+                إذا لم يعمل الزر، انسخ الرابط التالي وافتحه في المتصفح:<br>
+                <a href="{safe_button_url}" target="_blank" style="color:#d8b4fe;text-decoration:none;">{safe_button_url}</a>
               </div>
             </td>
           </tr>
         """
+
     code_block = ""
     if code:
         code_block = f"""
           <tr>
-            <td align="center" style="padding: 18px 0 8px;">
-              <div style="display:inline-block;direction:ltr;letter-spacing:9px;background:#171124;border:1px solid rgba(192,132,252,.38);color:#ffffff;font-size:34px;font-weight:900;border-radius:18px;padding:18px 22px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.04);">
+            <td align="center" style="padding:22px 0 10px;">
+              <div style="display:inline-block;direction:ltr;letter-spacing:10px;background:#12091f;background-image:linear-gradient(135deg,#11071d 0%,#1e1033 48%,#160a25 100%);border:1px solid rgba(216,180,254,.36);color:#ffffff;font-size:36px;line-height:1;font-weight:900;border-radius:20px;padding:20px 24px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.045),0 18px 42px rgba(0,0,0,.30);font-family:Arial,Tahoma,sans-serif;">
                 {safe_code}
               </div>
             </td>
           </tr>
         """
+
     footer_block = ""
     if footer_note:
         footer_block = f"""
           <tr>
-            <td style="padding-top:18px;">
-              <div style="background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:13px 14px;color:#b7b0c9;font-size:13px;line-height:1.7;">
+            <td style="padding-top:20px;">
+              <div style="background:linear-gradient(135deg,rgba(124,58,237,.13),rgba(255,255,255,.045));border:1px solid rgba(216,180,254,.15);border-radius:18px;padding:15px 16px;color:#c4bdd8;font-size:13px;line-height:1.9;font-family:Tahoma,Arial,sans-serif;">
                 {safe_footer_note}
               </div>
             </td>
           </tr>
         """
+
     return f"""<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="dark light">
+  <meta name="supported-color-schemes" content="dark light">
   <title>{safe_title}</title>
 </head>
-<body style="margin:0;padding:0;background:#07030f;font-family:Tahoma,Arial,sans-serif;color:#ffffff;">
-  <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">{safe_preheader}</div>
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:radial-gradient(circle at top,#311169 0%,#12091f 42%,#07030f 100%);padding:28px 12px;">
+<body style="margin:0;padding:0;background:#05020a;color:#ffffff;-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%;font-family:'Cairo','Tajawal','IBM Plex Sans Arabic',Tahoma,Arial,sans-serif;">
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;mso-hide:all;">{safe_preheader}</div>
+
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#05020a;">
     <tr>
-      <td align="center">
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:560px;background:rgba(18,9,31,.96);border:1px solid rgba(255,255,255,.10);border-radius:28px;overflow:hidden;box-shadow:0 24px 70px rgba(0,0,0,.42);">
+      <td align="center" style="padding:34px 12px;background:#05020a;background-image:radial-gradient(circle at 50% 0%,rgba(147,51,234,.42) 0%,rgba(88,28,135,.18) 28%,rgba(5,2,10,0) 62%),linear-gradient(135deg,#05020a 0%,#10051d 48%,#07030f 100%);">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:590px;width:100%;border-collapse:separate;border-spacing:0;">
           <tr>
-            <td style="padding:30px 26px 12px;text-align:center;">
-              <div style="width:70px;height:70px;border-radius:24px;margin:0 auto 16px;background:linear-gradient(135deg,#7c3aed,#c084fc);display:inline-grid;place-items:center;box-shadow:0 18px 48px rgba(124,58,237,.38);">
-                <span style="font-size:32px;font-weight:900;color:#fff;line-height:70px;">R</span>
-              </div>
-              <div style="font-size:13px;font-weight:800;letter-spacing:.6px;color:#c084fc;text-transform:uppercase;">Respect App</div>
-              <h1 style="margin:10px 0 0;font-size:25px;line-height:1.4;color:#ffffff;font-weight:900;">{safe_heading}</h1>
+            <td style="padding:1px;border-radius:32px;background:linear-gradient(135deg,rgba(216,180,254,.42),rgba(124,58,237,.20),rgba(255,255,255,.08));">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#100719;background-image:radial-gradient(circle at 50% 0%,rgba(124,58,237,.30),rgba(16,7,25,0) 46%),linear-gradient(180deg,#140821 0%,#0b0413 100%);border-radius:31px;overflow:hidden;">
+                <tr>
+                  <td style="height:7px;background:#7c3aed;background-image:linear-gradient(90deg,#4c1d95 0%,#8b5cf6 45%,#d8b4fe 100%);font-size:0;line-height:0;">&nbsp;</td>
+                </tr>
+
+                <tr>
+                  <td align="center" style="padding:34px 30px 10px;text-align:center;">
+                    {logo_block}
+                    <div style="display:inline-block;padding:6px 12px;border-radius:999px;background:rgba(124,58,237,.16);border:1px solid rgba(216,180,254,.20);color:#d8b4fe;font-size:12px;font-weight:900;letter-spacing:.9px;text-transform:uppercase;font-family:Arial,Tahoma,sans-serif;">
+                      {safe_brand}
+                    </div>
+                    <h1 style="margin:16px 0 0;color:#ffffff;font-size:28px;line-height:1.45;font-weight:900;text-align:center;font-family:'Cairo','Tajawal','IBM Plex Sans Arabic',Tahoma,Arial,sans-serif;">
+                      {safe_heading}
+                    </h1>
+                  </td>
+                </tr>
+
+                <tr>
+                  <td style="padding:12px 34px 0;">
+                    <div style="background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.08);border-radius:22px;padding:20px 20px;color:#e9ddff;font-size:15px;line-height:2;text-align:right;font-family:'Cairo','Tajawal','IBM Plex Sans Arabic',Tahoma,Arial,sans-serif;">
+                      {body_html}
+                    </div>
+                  </td>
+                </tr>
+
+                {code_block}
+                {button_block}
+                {footer_block}
+
+                <tr>
+                  <td style="padding:26px 34px 32px;text-align:center;">
+                    <div style="height:1px;background:linear-gradient(90deg,rgba(255,255,255,0),rgba(216,180,254,.26),rgba(255,255,255,0));margin:0 0 18px;"></div>
+                    <div style="color:#9b91b5;font-size:12px;line-height:1.9;font-family:Tahoma,Arial,sans-serif;">
+                      هذه رسالة أمان تلقائية من <strong style="color:#c4b5fd;">{safe_brand}</strong>.<br>
+                      لا تشارك الرموز أو روابط التحقق مع أي شخص.
+                    </div>
+                  </td>
+                </tr>
+              </table>
             </td>
           </tr>
+
           <tr>
-            <td style="padding:8px 30px 4px;color:#ddd6fe;font-size:15px;line-height:1.9;text-align:right;">
-              {body_html}
-            </td>
-          </tr>
-          {code_block}
-          {button_block}
-          {footer_block}
-          <tr>
-            <td style="padding:24px 30px 30px;text-align:center;color:#8d86a4;font-size:12px;line-height:1.8;">
-              هذه رسالة أمان تلقائية من Respect App.<br>
-              لا تشارك الرموز أو الروابط مع أي شخص.
+            <td align="center" style="padding:18px 12px 0;color:#736989;font-size:11px;line-height:1.7;text-align:center;font-family:Tahoma,Arial,sans-serif;">
+              © {safe_brand} — Security Notification
             </td>
           </tr>
         </table>
-        <div style="max-width:560px;margin:16px auto 0;color:#786f91;font-size:11px;line-height:1.7;text-align:center;">
-          © Respect App — Security Notification
-        </div>
       </td>
     </tr>
   </table>
 </body>
 </html>"""
-
 
 def _send_password_reset_email(email: str, reset_url: str) -> str:
     subject = "إعادة تعيين كلمة مرور Respect App"
@@ -2146,6 +2218,13 @@ def auth_request_password_reset(req: PasswordResetRequest, x_app_secret: Optiona
 @app.get("/auth/reset-password", response_class=HTMLResponse)
 def auth_reset_password_page(token: str = ""):
     safe_token = re.sub(r"[^A-Za-z0-9_\-]", "", str(token or ""))
+    safe_brand = html_lib.escape(RESPECT_EMAIL_BRAND_NAME)
+    safe_logo_url = html_lib.escape(RESPECT_EMAIL_LOGO_URL.strip(), quote=True)
+    if safe_logo_url:
+        logo_html = f'<img src="{safe_logo_url}" alt="{safe_brand}" style="width:72px;height:72px;border-radius:24px;object-fit:cover;display:block;border:0;" />'
+    else:
+        logo_html = '<div style="width:72px;height:72px;border-radius:24px;background:linear-gradient(135deg,#6d28d9,#a855f7,#d8b4fe);display:grid;place-items:center;box-shadow:0 20px 50px rgba(124,58,237,.42);font-size:34px;font-weight:900;">R</div>'
+
     html = f"""
 <!doctype html>
 <html lang="ar" dir="rtl">
@@ -2154,36 +2233,117 @@ def auth_reset_password_page(token: str = ""):
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>إعادة تعيين كلمة مرور Respect</title>
   <style>
-    body {{ margin:0; font-family: system-ui, -apple-system, Segoe UI, sans-serif; background: radial-gradient(circle at top,#33165c,#08040f 55%); color:#fff; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:18px; }}
-    .card {{ width:min(460px,100%); background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.14); border-radius:28px; padding:26px; box-shadow:0 20px 80px rgba(0,0,0,.35); backdrop-filter: blur(18px); }}
-    h1 {{ margin:0 0 8px; font-size:28px; }} p {{ color:#d7cbea; line-height:1.7; }}
-    input {{ width:100%; box-sizing:border-box; margin:8px 0 12px; padding:15px; border-radius:16px; border:1px solid rgba(255,255,255,.18); background:rgba(255,255,255,.09); color:#fff; font-size:16px; outline:none; }}
-    button {{ width:100%; padding:15px; border:0; border-radius:16px; background:#8b5cf6; color:#fff; font-size:17px; font-weight:900; cursor:pointer; }}
-    .msg {{ margin-top:14px; font-weight:800; }}
+    * {{ box-sizing:border-box; }}
+    body {{
+      margin:0;
+      font-family:'Cairo','Tajawal','IBM Plex Sans Arabic',Tahoma,Arial,sans-serif;
+      background:#05020a;
+      background-image:
+        radial-gradient(circle at 50% 0%, rgba(147,51,234,.46) 0%, rgba(88,28,135,.22) 28%, rgba(5,2,10,0) 64%),
+        linear-gradient(135deg,#05020a 0%,#10051d 48%,#07030f 100%);
+      color:#fff;
+      min-height:100vh;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      padding:18px;
+    }}
+    .card {{
+      width:min(480px,100%);
+      background:rgba(16,7,25,.94);
+      background-image:radial-gradient(circle at 50% 0%,rgba(124,58,237,.28),rgba(16,7,25,0) 48%),linear-gradient(180deg,#140821,#0b0413);
+      border:1px solid rgba(216,180,254,.20);
+      border-radius:32px;
+      padding:1px;
+      box-shadow:0 28px 90px rgba(0,0,0,.48);
+      overflow:hidden;
+    }}
+    .bar {{ height:7px; background:linear-gradient(90deg,#4c1d95,#8b5cf6,#d8b4fe); }}
+    .inner {{ padding:30px 26px 28px; }}
+    .logo-wrap {{ display:flex; justify-content:center; margin-bottom:14px; }}
+    .badge {{ display:inline-block; padding:6px 12px; border-radius:999px; background:rgba(124,58,237,.16); border:1px solid rgba(216,180,254,.20); color:#d8b4fe; font-size:12px; font-weight:900; letter-spacing:.8px; }}
+    h1 {{ margin:16px 0 8px; font-size:28px; line-height:1.35; font-weight:900; text-align:center; }}
+    p {{ color:#d7cbea; line-height:1.9; text-align:center; margin:0 0 18px; }}
+    label {{ display:block; margin:12px 2px 7px; color:#efe7ff; font-size:13px; font-weight:900; }}
+    input {{
+      width:100%;
+      padding:15px 16px;
+      border-radius:18px;
+      border:1px solid rgba(216,180,254,.18);
+      background:rgba(255,255,255,.07);
+      color:#fff;
+      font-size:16px;
+      outline:none;
+      transition:.18s ease;
+    }}
+    input:focus {{ border-color:#a855f7; box-shadow:0 0 0 4px rgba(168,85,247,.16); }}
+    button {{
+      width:100%;
+      margin-top:18px;
+      padding:16px;
+      border:0;
+      border-radius:999px;
+      background:#7c3aed;
+      background-image:linear-gradient(135deg,#6d28d9,#9333ea 45%,#c084fc);
+      color:#fff;
+      font-size:17px;
+      font-weight:900;
+      cursor:pointer;
+      box-shadow:0 18px 38px rgba(124,58,237,.42);
+    }}
+    button:disabled {{ opacity:.65; cursor:not-allowed; }}
+    .msg {{ margin-top:15px; min-height:24px; font-weight:900; text-align:center; color:#d8b4fe; line-height:1.7; }}
+    .hint {{ margin-top:18px; padding:13px 14px; border-radius:18px; background:rgba(255,255,255,.045); border:1px solid rgba(255,255,255,.08); color:#b7afcf; font-size:12px; line-height:1.8; text-align:center; }}
   </style>
 </head>
 <body>
-  <div class="card">
-    <h1>إعادة تعيين كلمة المرور</h1>
-    <p>اكتب كلمة المرور الجديدة مرتين. يجب أن تكون 6 أحرف على الأقل.</p>
-    <input id="p1" type="password" placeholder="كلمة المرور الجديدة" autocomplete="new-password" />
-    <input id="p2" type="password" placeholder="تأكيد كلمة المرور" autocomplete="new-password" />
-    <button onclick="resetPassword()">حفظ كلمة المرور</button>
-    <div id="msg" class="msg"></div>
-  </div>
+  <main class="card">
+    <div class="bar"></div>
+    <div class="inner">
+      <div class="logo-wrap">{logo_html}</div>
+      <div style="text-align:center;"><span class="badge">{safe_brand}</span></div>
+      <h1>إعادة تعيين كلمة المرور</h1>
+      <p>اكتب كلمة المرور الجديدة مرتين. يجب أن تكون 6 أحرف على الأقل.</p>
+
+      <label for="p1">كلمة المرور الجديدة</label>
+      <input id="p1" type="password" placeholder="اكتب كلمة المرور الجديدة" autocomplete="new-password" />
+
+      <label for="p2">تأكيد كلمة المرور</label>
+      <input id="p2" type="password" placeholder="أعد كتابة كلمة المرور" autocomplete="new-password" />
+
+      <button id="submitBtn" onclick="resetPassword()">حفظ كلمة المرور</button>
+      <div id="msg" class="msg"></div>
+      <div class="hint">بعد نجاح العملية، ارجع إلى تطبيق Respect وسجّل دخولك بكلمة المرور الجديدة.</div>
+    </div>
+  </main>
 <script>
 async function resetPassword() {{
   const msg = document.getElementById('msg');
+  const btn = document.getElementById('submitBtn');
   const p1 = document.getElementById('p1').value.trim();
   const p2 = document.getElementById('p2').value.trim();
   msg.textContent = '';
   if (p1.length < 6) {{ msg.textContent = 'كلمة المرور لازم تكون 6 أحرف على الأقل'; return; }}
   if (p1 !== p2) {{ msg.textContent = 'كلمتا المرور غير متطابقتان'; return; }}
+  btn.disabled = true;
   msg.textContent = 'جاري الحفظ...';
-  const res = await fetch('/auth/reset-password', {{ method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify({{token:'{safe_token}', password:p1, confirmPassword:p2}}) }});
-  const data = await res.json().catch(() => ({{detail:'تعذر قراءة الرد'}}));
-  if (!res.ok || data.ok === false) {{ msg.textContent = data.detail || data.error || 'تعذر تغيير كلمة المرور'; return; }}
-  msg.textContent = 'تم تغيير كلمة المرور بنجاح. ارجع إلى تطبيق Respect وسجل دخولك.';
+  try {{
+    const res = await fetch('/auth/reset-password', {{
+      method:'POST',
+      headers:{{'Content-Type':'application/json'}},
+      body: JSON.stringify({{token:'{safe_token}', password:p1, confirmPassword:p2}})
+    }});
+    const data = await res.json().catch(() => ({{detail:'تعذر قراءة الرد'}}));
+    if (!res.ok || data.ok === false) {{
+      msg.textContent = data.detail || data.error || 'تعذر تغيير كلمة المرور';
+      btn.disabled = false;
+      return;
+    }}
+    msg.textContent = 'تم تغيير كلمة المرور بنجاح. ارجع إلى تطبيق Respect وسجّل دخولك.';
+  }} catch (e) {{
+    msg.textContent = 'تعذر الاتصال بالسيرفر. حاول مرة أخرى.';
+    btn.disabled = false;
+  }}
 }}
 </script>
 </body>
