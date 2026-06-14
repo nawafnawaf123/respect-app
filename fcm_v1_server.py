@@ -6,6 +6,7 @@ import re
 import smtplib
 import hashlib
 import hmac
+import html as html_lib
 import secrets
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
@@ -1287,18 +1288,125 @@ def _find_public_user_for_login(login: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _respect_email_shell(*, title: str, preheader: str, heading: str, body_html: str, button_text: str = "", button_url: str = "", code: str = "", footer_note: str = "") -> str:
+    safe_title = html_lib.escape(title)
+    safe_preheader = html_lib.escape(preheader)
+    safe_heading = html_lib.escape(heading)
+    safe_button_text = html_lib.escape(button_text)
+    safe_button_url = html_lib.escape(button_url, quote=True)
+    safe_code = html_lib.escape(code)
+    safe_footer_note = html_lib.escape(footer_note)
+    button_block = ""
+    if button_text and button_url:
+        button_block = f"""
+          <tr>
+            <td align="center" style="padding: 22px 0 8px;">
+              <a href="{safe_button_url}" target="_blank" style="display:inline-block;background:linear-gradient(135deg,#7c3aed,#c084fc);color:#ffffff;text-decoration:none;font-weight:800;font-size:16px;padding:15px 26px;border-radius:999px;box-shadow:0 14px 34px rgba(124,58,237,.35);">
+                {safe_button_text}
+              </a>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 12px 0 0;">
+              <div style="font-size:12px;line-height:1.7;color:#a7a3b8;word-break:break-all;text-align:center;">
+                إذا لم يعمل الزر، انسخ هذا الرابط وافتحه في المتصفح:<br>
+                <a href="{safe_button_url}" style="color:#c084fc;text-decoration:none;">{safe_button_url}</a>
+              </div>
+            </td>
+          </tr>
+        """
+    code_block = ""
+    if code:
+        code_block = f"""
+          <tr>
+            <td align="center" style="padding: 18px 0 8px;">
+              <div style="display:inline-block;direction:ltr;letter-spacing:9px;background:#171124;border:1px solid rgba(192,132,252,.38);color:#ffffff;font-size:34px;font-weight:900;border-radius:18px;padding:18px 22px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.04);">
+                {safe_code}
+              </div>
+            </td>
+          </tr>
+        """
+    footer_block = ""
+    if footer_note:
+        footer_block = f"""
+          <tr>
+            <td style="padding-top:18px;">
+              <div style="background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:13px 14px;color:#b7b0c9;font-size:13px;line-height:1.7;">
+                {safe_footer_note}
+              </div>
+            </td>
+          </tr>
+        """
+    return f"""<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark light">
+  <title>{safe_title}</title>
+</head>
+<body style="margin:0;padding:0;background:#07030f;font-family:Tahoma,Arial,sans-serif;color:#ffffff;">
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">{safe_preheader}</div>
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:radial-gradient(circle at top,#311169 0%,#12091f 42%,#07030f 100%);padding:28px 12px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:560px;background:rgba(18,9,31,.96);border:1px solid rgba(255,255,255,.10);border-radius:28px;overflow:hidden;box-shadow:0 24px 70px rgba(0,0,0,.42);">
+          <tr>
+            <td style="padding:30px 26px 12px;text-align:center;">
+              <div style="width:70px;height:70px;border-radius:24px;margin:0 auto 16px;background:linear-gradient(135deg,#7c3aed,#c084fc);display:inline-grid;place-items:center;box-shadow:0 18px 48px rgba(124,58,237,.38);">
+                <span style="font-size:32px;font-weight:900;color:#fff;line-height:70px;">R</span>
+              </div>
+              <div style="font-size:13px;font-weight:800;letter-spacing:.6px;color:#c084fc;text-transform:uppercase;">Respect App</div>
+              <h1 style="margin:10px 0 0;font-size:25px;line-height:1.4;color:#ffffff;font-weight:900;">{safe_heading}</h1>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:8px 30px 4px;color:#ddd6fe;font-size:15px;line-height:1.9;text-align:right;">
+              {body_html}
+            </td>
+          </tr>
+          {code_block}
+          {button_block}
+          {footer_block}
+          <tr>
+            <td style="padding:24px 30px 30px;text-align:center;color:#8d86a4;font-size:12px;line-height:1.8;">
+              هذه رسالة أمان تلقائية من Respect App.<br>
+              لا تشارك الرموز أو الروابط مع أي شخص.
+            </td>
+          </tr>
+        </table>
+        <div style="max-width:560px;margin:16px auto 0;color:#786f91;font-size:11px;line-height:1.7;text-align:center;">
+          © Respect App — Security Notification
+        </div>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"""
+
+
 def _send_password_reset_email(email: str, reset_url: str) -> str:
     subject = "إعادة تعيين كلمة مرور Respect App"
-    body = f"""مرحبًا،
-
-تم طلب إعادة تعيين كلمة المرور لحسابك في Respect App.
-
-افتح الرابط التالي لتعيين كلمة مرور جديدة:
-{reset_url}
-
-صلاحية الرابط: {PASSWORD_RESET_TTL_MINUTES} دقيقة.
-إذا لم تطلب هذا الرابط، تجاهل هذه الرسالة.
-"""
+    body = (
+        "مرحبًا،\n\n"
+        "تم طلب إعادة تعيين كلمة المرور لحسابك في Respect App.\n\n"
+        "افتح الرابط التالي لتعيين كلمة مرور جديدة:\n"
+        f"{reset_url}\n\n"
+        f"صلاحية الرابط: {PASSWORD_RESET_TTL_MINUTES} دقيقة.\n"
+        "إذا لم تطلب هذا الرابط، تجاهل هذه الرسالة.\n"
+    )
+    html_body = _respect_email_shell(
+        title=subject,
+        preheader=f"رابط إعادة تعيين كلمة المرور صالح لمدة {PASSWORD_RESET_TTL_MINUTES} دقيقة.",
+        heading="إعادة تعيين كلمة المرور",
+        body_html=f"""
+          <p style="margin:0 0 12px;">وصلنا طلب لتغيير كلمة مرور حسابك في <strong style="color:#ffffff;">Respect App</strong>.</p>
+          <p style="margin:0;">اضغط الزر بالأسفل لتعيين كلمة مرور جديدة. الرابط صالح لمدة <strong style="color:#ffffff;">{PASSWORD_RESET_TTL_MINUTES} دقيقة</strong>.</p>
+        """,
+        button_text="إعادة تعيين كلمة المرور",
+        button_url=reset_url,
+        footer_note="إذا لم تطلب إعادة تعيين كلمة المرور، تجاهل هذه الرسالة ولن يتم تغيير أي شيء في حسابك.",
+    )
     if not SMTP_HOST or not SMTP_USERNAME or not SMTP_PASSWORD:
         logger.warning("Password reset SMTP is not configured. Reset link for %s: %s", email, reset_url)
         return "log_only"
@@ -1307,6 +1415,7 @@ def _send_password_reset_email(email: str, reset_url: str) -> str:
     msg["From"] = SMTP_FROM
     msg["To"] = email
     msg.set_content(body)
+    msg.add_alternative(html_body, subtype="html")
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
         server.starttls()
         server.login(SMTP_USERNAME, SMTP_PASSWORD)
@@ -1403,17 +1512,25 @@ def _update_supabase_auth_password(email: str, password: str) -> None:
 def _send_otp_email(email: str, code: str, purpose: str) -> str:
     subject = "رمز تحقق Respect App"
     action = "إنشاء الحساب" if purpose == "signup" else "تسجيل الدخول"
-    body = f"""مرحبًا،
-
-رمز التحقق الخاص بك في Respect App هو:
-
-{code}
-
-الغرض: {action}
-صلاحية الرمز: {OTP_TTL_MINUTES} دقائق.
-
-إذا لم تطلب هذا الرمز، تجاهل هذه الرسالة.
-"""
+    body = (
+        "مرحبًا،\n\n"
+        "رمز التحقق الخاص بك في Respect App هو:\n\n"
+        f"{code}\n\n"
+        f"الغرض: {action}\n"
+        f"صلاحية الرمز: {OTP_TTL_MINUTES} دقائق.\n\n"
+        "إذا لم تطلب هذا الرمز، تجاهل هذه الرسالة.\n"
+    )
+    html_body = _respect_email_shell(
+        title=subject,
+        preheader=f"رمز تحقق Respect App صالح لمدة {OTP_TTL_MINUTES} دقائق.",
+        heading="رمز التحقق الخاص بك",
+        body_html=f"""
+          <p style="margin:0 0 12px;">استخدم الرمز التالي لإكمال <strong style="color:#ffffff;">{html_lib.escape(action)}</strong> في Respect App.</p>
+          <p style="margin:0;">صلاحية الرمز <strong style="color:#ffffff;">{OTP_TTL_MINUTES} دقائق</strong>. لا تشاركه مع أي شخص.</p>
+        """,
+        code=code,
+        footer_note="إذا لم تكن أنت من طلب هذا الرمز، تجاهل الرسالة وتأكد من حماية بريدك وكلمة مرورك.",
+    )
     if not SMTP_HOST or not SMTP_USERNAME or not SMTP_PASSWORD:
         logger.warning("OTP email SMTP is not configured. OTP for %s (%s): %s", email, purpose, code)
         return "log_only"
@@ -1423,6 +1540,7 @@ def _send_otp_email(email: str, code: str, purpose: str) -> str:
     msg["From"] = SMTP_FROM
     msg["To"] = email
     msg.set_content(body)
+    msg.add_alternative(html_body, subtype="html")
 
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
         server.starttls()
