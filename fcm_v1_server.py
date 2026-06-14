@@ -235,6 +235,19 @@ QWEN_VISION_MODEL = os.getenv("QWEN_VISION_MODEL", "qwen-vl-plus").strip() or "q
 QWEN_MODEL = QWEN_TEXT_MODEL
 QWEN_BASE_URL = os.getenv("QWEN_BASE_URL", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1").rstrip("/")
 
+
+# ================= Respect Cyber AI / Hugging Face Inference Providers =================
+# هذا لا يشغل الموديل داخل Render، بل يستدعي Hugging Face API حتى لا ينهار السيرفر بسبب RAM/CPU.
+# ضع المتغيرات في Render:
+# HF_TOKEN=hf_xxxxxxxxxxxxxxxxx
+# HF_CYBER_MODEL=ZySec-AI/SecurityLLM
+# ملاحظة: بعض الموديلات تحتاج provider مدعوم، مثال: model:provider أو استخدم موديل آخر من Inference Providers.
+HF_TOKEN = os.getenv("HF_TOKEN", os.getenv("HUGGINGFACE_API_KEY", "")).strip()
+HF_CYBER_MODEL = os.getenv("HF_CYBER_MODEL", "ZySec-AI/SecurityLLM").strip() or "ZySec-AI/SecurityLLM"
+HF_BASE_URL = os.getenv("HF_BASE_URL", "https://router.huggingface.co/v1").rstrip("/")
+HF_BILL_TO = os.getenv("HF_BILL_TO", "").strip()
+HF_TIMEOUT_SECONDS = int(os.getenv("HF_TIMEOUT_SECONDS", "90"))
+
 # ================= Link Safety / Google Safe Browsing =================
 # ضع المفتاح في Render كمتغير بيئة:
 GSB_TOKEN = _env_value("GOOGLE", "_SAFE", "_BROWSING", "_API", "_KEY")
@@ -710,6 +723,20 @@ class RespectAISearchExpandResponse(BaseModel):
     terms: list[str]
     model: str
 
+
+
+
+class RespectAICyberRequest(BaseModel):
+    text: str = Field(default="", min_length=1)
+    username: str = ""
+    mode: str = "defensive"  # defensive / explain / code_review / incident_response
+    language: str = "ar"
+
+
+class RespectAICyberResponse(BaseModel):
+    ok: bool
+    reply: str
+    model: str
 
 class RespectAIModerationRequest(BaseModel):
     text: str = Field(default="")
@@ -2236,6 +2263,84 @@ def ask_qwen_ai(
         reply = reply[:900].rstrip() + "..."
     return reply
 
+
+
+def _respect_cyber_system_prompt(mode: str = "defensive") -> str:
+    return (
+        "أنت Respect Cyber AI، مساعد أمن سيبراني دفاعي داخل تطبيق Respect App. "
+        "مهمتك شرح الحماية، تحليل السجلات، مراجعة الكود، توضيح OWASP/CVE/MITRE، "
+        "واقتراح إصلاحات آمنة لتطبيقات Flutter وFastAPI وSupabase وFirebase. "
+        "لا تقدم خطوات اختراق حقيقية ضد أهداف لا يملكها المستخدم، ولا تنشئ برمجيات خبيثة، "
+        "ولا تعطي أوامر استغلال مباشرة أو سرقة بيانات أو تجاوز صلاحيات. "
+        "إذا كان الطلب هجوميًا، حوّله إلى شرح دفاعي وطريقة اختبار قانونية داخل لاب مصرح. "
+        "أجب بالعربية بشكل مختصر وعملي، واستخدم نقاط واضحة عند الحاجة. "
+        f"الوضع المطلوب: {mode}."
+    )
+
+
+def ask_huggingface_cyber_ai(text: str, username: str = "", mode: str = "defensive") -> str:
+    if not HF_TOKEN:
+        raise HTTPException(status_code=500, detail="HF_TOKEN missing")
+
+    clean_text = (text or "").strip()
+    if not clean_text:
+        raise HTTPException(status_code=400, detail="empty cyber ai prompt")
+
+    headers = {
+        "Authorization": f"Bearer {HF_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    if HF_BILL_TO:
+        headers["X-HF-Bill-To"] = HF_BILL_TO
+
+    payload = {
+        "model": HF_CYBER_MODEL,
+        "messages": [
+            {"role": "system", "content": _respect_cyber_system_prompt(mode)},
+            {
+                "role": "user",
+                "content": (
+                    f"المستخدم: {username or '@user'}\n"
+                    f"السؤال الأمني:\n{clean_text}"
+                ),
+            },
+        ],
+        "temperature": 0.2,
+        "max_tokens": 700,
+        "stream": False,
+    }
+
+    response = requests.post(
+        f"{HF_BASE_URL}/chat/completions",
+        headers=headers,
+        json=payload,
+        timeout=HF_TIMEOUT_SECONDS,
+    )
+
+    logger.info("Respect Cyber AI HF response status=%s model=%s", response.status_code, HF_CYBER_MODEL)
+    logger.debug("Respect Cyber AI HF response body=%s", _safe_response_text(response.text, 800))
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "hf_status": response.status_code,
+                "hf_body": response.text,
+                "hint": "تأكد من HF_TOKEN وصلاحية Inference Providers وأن HF_CYBER_MODEL مدعوم على Hugging Face Router.",
+            },
+        )
+
+    try:
+        data = response.json()
+        reply = str(data["choices"][0]["message"]["content"]).strip()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Invalid HF response: {e}")
+
+    if not reply:
+        raise HTTPException(status_code=500, detail="Hugging Face returned empty reply")
+    if len(reply) > 2500:
+        reply = reply[:2500].rstrip() + "..."
+    return reply
 
 # اسم قديم حتى لا ينكسر أي استدعاء داخلي قديم.
 def ask_groq_ai(
@@ -4942,6 +5047,25 @@ def respect_ai_search_expand(req: RespectAISearchExpandRequest, x_app_secret: Op
     except Exception:
         return RespectAISearchExpandResponse(ok=True, query=query, terms=fallback, model="local-fallback")
 
+
+
+@app.post("/respect-ai/cyber", response_model=RespectAICyberResponse)
+def respect_ai_cyber(req: RespectAICyberRequest, x_app_secret: Optional[str] = Header(default=None)):
+    _check_secret(x_app_secret)
+
+    username = req.username.strip()
+    text = req.text.strip()
+    reply = ask_huggingface_cyber_ai(
+        text=text,
+        username=username,
+        mode=req.mode,
+    )
+
+    return RespectAICyberResponse(
+        ok=True,
+        reply=reply,
+        model=HF_CYBER_MODEL,
+    )
 
 @app.post("/respect-ai/reply", response_model=RespectAIResponse)
 def respect_ai_reply(req: RespectAIRequest, x_app_secret: Optional[str] = Header(default=None)):
