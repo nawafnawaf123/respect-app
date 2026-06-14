@@ -216,6 +216,10 @@ SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "").strip()
 SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USERNAME or "Respect App <no-reply@respect-app.local>").strip()
 OTP_TTL_MINUTES = int(os.getenv("OTP_TTL_MINUTES", "10"))
 TRUSTED_DEVICE_DAYS = int(os.getenv("TRUSTED_DEVICE_DAYS", "90"))
+LOGIN_MAX_FAILED_ATTEMPTS = int(os.getenv("LOGIN_MAX_FAILED_ATTEMPTS", "6"))
+LOGIN_LOCK_MINUTES = int(os.getenv("LOGIN_LOCK_MINUTES", "30"))
+PASSWORD_RESET_TTL_MINUTES = int(os.getenv("PASSWORD_RESET_TTL_MINUTES", "20"))
+PUBLIC_APP_BASE_URL = os.getenv("PUBLIC_APP_BASE_URL", "https://respect-app-9fzq.onrender.com").rstrip("/")
 
 # ================= Respect AI / Qwen Model Studio =================
 # لا تضع المفتاح داخل الكود. ضعه في Render كمتغير بيئة:
@@ -276,6 +280,8 @@ app.add_middleware(
 
 
 _moderation_rate: Dict[str, list[float]] = defaultdict(list)
+_login_failures: Dict[str, Dict[str, Any]] = {}
+_password_reset_tokens: Dict[str, Dict[str, Any]] = {}
 
 
 def _client_ip(request: FastAPIRequest) -> str:
@@ -634,6 +640,22 @@ class TrustedDeviceRequest(BaseModel):
     deviceId: str
     deviceName: str = ""
     days: int = Field(default=90)
+
+
+class LoginAttemptCheckRequest(BaseModel):
+    login: str
+    deviceId: str = ""
+
+
+class LoginAttemptReportRequest(BaseModel):
+    login: str
+    deviceId: str = ""
+    success: bool = False
+
+
+class PasswordResetRequest(BaseModel):
+    login: str
+    deviceId: str = ""
 
 
 class AuthPasswordCreateRequest(BaseModel):
@@ -1183,6 +1205,199 @@ def _normalize_email(value: str) -> str:
 
 def _valid_email(value: str) -> bool:
     return bool(re.match(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", _normalize_email(value)))
+
+
+
+def _login_attempt_key(login: str, device_id: str = "") -> str:
+    clean = str(login or "").strip().lower().replace("@", "")
+    dev = str(device_id or "").strip()[:120]
+    return f"{clean}|{dev}"
+
+
+def _login_attempt_status(login: str, device_id: str = "") -> Dict[str, Any]:
+    key = _login_attempt_key(login, device_id)
+    row = _login_failures.get(key) or {"attempts": 0, "locked_until": None}
+    now = datetime.now(timezone.utc)
+    locked_until = row.get("locked_until")
+    if isinstance(locked_until, str):
+        try:
+            locked_until = datetime.fromisoformat(locked_until.replace("Z", "+00:00"))
+        except Exception:
+            locked_until = None
+    if locked_until and locked_until.tzinfo is None:
+        locked_until = locked_until.replace(tzinfo=timezone.utc)
+    if locked_until and locked_until > now:
+        remaining = max(1, int((locked_until - now).total_seconds()))
+        return {
+            "allowed": False,
+            "attempts": int(row.get("attempts") or 0),
+            "remainingAttempts": 0,
+            "lockedUntil": locked_until.isoformat(),
+            "retryAfterSeconds": remaining,
+            "message": "تم إيقاف تسجيل الدخول مؤقتًا بعد 6 محاولات فاشلة. استخدم نسيت كلمة المرور أو حاول لاحقًا.",
+        }
+    if locked_until and locked_until <= now:
+        _login_failures.pop(key, None)
+        row = {"attempts": 0, "locked_until": None}
+    attempts = int(row.get("attempts") or 0)
+    return {
+        "allowed": True,
+        "attempts": attempts,
+        "remainingAttempts": max(0, LOGIN_MAX_FAILED_ATTEMPTS - attempts),
+        "lockedUntil": None,
+        "retryAfterSeconds": 0,
+    }
+
+
+def _record_login_attempt(login: str, device_id: str = "", success: bool = False) -> Dict[str, Any]:
+    key = _login_attempt_key(login, device_id)
+    if success:
+        _login_failures.pop(key, None)
+        return _login_attempt_status(login, device_id)
+    row = _login_failures.get(key) or {"attempts": 0, "locked_until": None}
+    attempts = int(row.get("attempts") or 0) + 1
+    locked_until = None
+    if attempts >= LOGIN_MAX_FAILED_ATTEMPTS:
+        locked_until = datetime.now(timezone.utc) + timedelta(minutes=LOGIN_LOCK_MINUTES)
+    _login_failures[key] = {"attempts": attempts, "locked_until": locked_until.isoformat() if locked_until else None}
+    status = _login_attempt_status(login, device_id)
+    status["attempts"] = attempts
+    status["remainingAttempts"] = max(0, LOGIN_MAX_FAILED_ATTEMPTS - attempts)
+    return status
+
+
+def _find_public_user_for_login(login: str) -> Optional[Dict[str, Any]]:
+    clean = str(login or "").strip().lower()
+    if not clean:
+        return None
+    display = _display_username(clean)
+    params = {"select": "*", "limit": "1"}
+    if _valid_email(clean):
+        params["email"] = f"eq.{_normalize_email(clean)}"
+    else:
+        params["or"] = f"(username.eq.{display},username.eq.{clean.replace('@','')})"
+    try:
+        r = requests.get(f"{SB_URL}/rest/v1/users", headers=_supabase_headers(use_service_role=True), params=params, timeout=12)
+        if r.status_code // 100 == 2:
+            data = r.json()
+            if isinstance(data, list) and data:
+                return data[0]
+    except Exception as exc:
+        logger.warning("find public user failed: %s", exc)
+    return None
+
+
+def _send_password_reset_email(email: str, reset_url: str) -> str:
+    subject = "إعادة تعيين كلمة مرور Respect App"
+    body = f"""مرحبًا،
+
+تم طلب إعادة تعيين كلمة المرور لحسابك في Respect App.
+
+افتح الرابط التالي لتعيين كلمة مرور جديدة:
+{reset_url}
+
+صلاحية الرابط: {PASSWORD_RESET_TTL_MINUTES} دقيقة.
+إذا لم تطلب هذا الرابط، تجاهل هذه الرسالة.
+"""
+    if not SMTP_HOST or not SMTP_USERNAME or not SMTP_PASSWORD:
+        logger.warning("Password reset SMTP is not configured. Reset link for %s: %s", email, reset_url)
+        return "log_only"
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = SMTP_FROM
+    msg["To"] = email
+    msg.set_content(body)
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
+        server.starttls()
+        server.login(SMTP_USERNAME, SMTP_PASSWORD)
+        server.send_message(msg)
+    return "email"
+
+
+def _password_reset_token_hash(token: str) -> str:
+    return hmac.new(_otp_secret(), str(token or "").encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _store_password_reset_token(email: str, token_hash: str, username: str, device_id: str = "") -> None:
+    expires = datetime.now(timezone.utc) + timedelta(minutes=PASSWORD_RESET_TTL_MINUTES)
+    _password_reset_tokens[token_hash] = {"email": email, "username": username, "device_id": device_id, "expires_at": expires.isoformat(), "used": False}
+    try:
+        requests.post(
+            f"{SB_URL}/rest/v1/respect_password_resets",
+            headers={**_supabase_headers(use_service_role=True), "Prefer": "return=minimal"},
+            json={"email": email, "username": username, "token_hash": token_hash, "device_id": device_id, "expires_at": expires.isoformat(), "used_at": None},
+            timeout=10,
+        )
+    except Exception as exc:
+        logger.warning("password reset token DB store skipped: %s", exc)
+
+
+def _read_password_reset_token(token: str) -> Dict[str, Any]:
+    token_hash = _password_reset_token_hash(token)
+    try:
+        r = requests.get(
+            f"{SB_URL}/rest/v1/respect_password_resets",
+            headers=_supabase_headers(use_service_role=True),
+            params={"select": "*", "token_hash": f"eq.{token_hash}", "used_at": "is.null", "order": "created_at.desc", "limit": "1"},
+            timeout=10,
+        )
+        if r.status_code // 100 == 2:
+            data = r.json()
+            if isinstance(data, list) and data:
+                return data[0]
+    except Exception as exc:
+        logger.warning("password reset token DB read skipped: %s", exc)
+    row = _password_reset_tokens.get(token_hash)
+    if not row or row.get("used"):
+        raise HTTPException(status_code=400, detail="رابط إعادة التعيين غير صحيح أو مستخدم")
+    return {**row, "token_hash": token_hash}
+
+
+def _consume_password_reset_token(token_hash: str) -> None:
+    try:
+        requests.patch(
+            f"{SB_URL}/rest/v1/respect_password_resets",
+            headers={**_supabase_headers(use_service_role=True), "Prefer": "return=minimal"},
+            params={"token_hash": f"eq.{token_hash}"},
+            json={"used_at": datetime.now(timezone.utc).isoformat()},
+            timeout=10,
+        )
+    except Exception:
+        pass
+    if token_hash in _password_reset_tokens:
+        _password_reset_tokens[token_hash]["used"] = True
+
+
+def _update_supabase_auth_password(email: str, password: str) -> None:
+    if not SB_SERVICE:
+        raise HTTPException(status_code=500, detail="SUPABASE_SERVICE_ROLE_KEY غير موجود في Render")
+    headers = {"apikey": SB_SERVICE, "Authorization": f"Bearer {SB_SERVICE}", "Content-Type": "application/json"}
+    find = requests.get(f"{SB_URL}/auth/v1/admin/users", headers=headers, params={"page": 1, "per_page": 1000}, timeout=20)
+    if find.status_code >= 400:
+        raise HTTPException(status_code=400, detail=f"تعذر البحث عن الحساب: {find.status_code} {_safe_response_text(find.text, 500)}")
+    body = find.json() if find.text else {}
+    users = body.get("users", []) if isinstance(body, dict) else []
+    user_id = ""
+    for u in users:
+        if isinstance(u, dict) and str(u.get("email", "")).strip().lower() == email:
+            user_id = str(u.get("id") or "").strip()
+            break
+    if not user_id:
+        raise HTTPException(status_code=404, detail="لم يتم العثور على حساب Auth لهذا البريد")
+    patch = requests.put(f"{SB_URL}/auth/v1/admin/users/{user_id}", headers=headers, json={"password": password, "email_confirm": True}, timeout=20)
+    if patch.status_code >= 400:
+        raise HTTPException(status_code=400, detail=f"تعذر تحديث كلمة المرور: {patch.status_code} {_safe_response_text(patch.text, 500)}")
+    try:
+        protected = "reset_via_supabase_auth_" + hashlib.sha256((email + "|" + str(time.time())).encode()).hexdigest()
+        requests.patch(
+            f"{SB_URL}/rest/v1/users",
+            headers={**_supabase_headers(use_service_role=True), "Prefer": "return=minimal"},
+            params={"email": f"eq.{email}"},
+            json={"password": protected, "password_hash": protected, "password_encryption_version": "supabase_auth_reset_v1", "updated_at": datetime.now(timezone.utc).isoformat()},
+            timeout=10,
+        )
+    except Exception:
+        pass
 
 
 def _send_otp_email(email: str, code: str, purpose: str) -> str:
@@ -1767,6 +1982,130 @@ def auth_create_password_user(req: AuthPasswordCreateRequest, x_app_secret: Opti
         detail=f"تعذر إنشاء مستخدم Auth بدون رسالة Supabase: {r.status_code} {body_text}",
     )
 
+
+
+@app.post("/auth/check-login-attempt")
+def auth_check_login_attempt(req: LoginAttemptCheckRequest, x_app_secret: Optional[str] = Header(default=None)):
+    _check_secret(x_app_secret)
+    login = str(req.login or "").strip()
+    if not login:
+        raise HTTPException(status_code=400, detail="اكتب اسم المستخدم أو الإيميل")
+    return {"ok": True, **_login_attempt_status(login, req.deviceId), "maxAttempts": LOGIN_MAX_FAILED_ATTEMPTS, "lockMinutes": LOGIN_LOCK_MINUTES}
+
+
+@app.post("/auth/report-login-attempt")
+def auth_report_login_attempt(req: LoginAttemptReportRequest, x_app_secret: Optional[str] = Header(default=None)):
+    _check_secret(x_app_secret)
+    login = str(req.login or "").strip()
+    if not login:
+        raise HTTPException(status_code=400, detail="اكتب اسم المستخدم أو الإيميل")
+    status = _record_login_attempt(login, req.deviceId, success=bool(req.success))
+    return {"ok": True, **status, "maxAttempts": LOGIN_MAX_FAILED_ATTEMPTS, "lockMinutes": LOGIN_LOCK_MINUTES}
+
+
+@app.post("/auth/request-password-reset")
+def auth_request_password_reset(req: PasswordResetRequest, x_app_secret: Optional[str] = Header(default=None)):
+    _check_secret(x_app_secret)
+    login = str(req.login or "").strip()
+    if not login:
+        raise HTTPException(status_code=400, detail="اكتب اسم المستخدم أو الإيميل أولاً")
+    user = _find_public_user_for_login(login)
+    # لا نكشف وجود الحساب لغير صاحبه. نرجع ok حتى لو لم نجد المستخدم.
+    if not user:
+        return {"ok": True, "sent": True, "delivery": "hidden"}
+    email = _normalize_email(str(user.get("email") or ""))
+    if not _valid_email(email):
+        raise HTTPException(status_code=400, detail="الحساب لا يحتوي على بريد صالح لإعادة التعيين")
+    username = _display_username(str(user.get("username") or login))
+    token = secrets.token_urlsafe(36)
+    token_hash = _password_reset_token_hash(token)
+    _store_password_reset_token(email, token_hash, username, req.deviceId)
+    reset_url = f"{PUBLIC_APP_BASE_URL}/auth/reset-password?token={token}"
+    delivery = _send_password_reset_email(email, reset_url)
+    return {"ok": True, "sent": True, "delivery": delivery, "expiresInMinutes": PASSWORD_RESET_TTL_MINUTES}
+
+
+@app.get("/auth/reset-password", response_class=HTMLResponse)
+def auth_reset_password_page(token: str = ""):
+    safe_token = re.sub(r"[^A-Za-z0-9_\-]", "", str(token or ""))
+    html = f"""
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>إعادة تعيين كلمة مرور Respect</title>
+  <style>
+    body {{ margin:0; font-family: system-ui, -apple-system, Segoe UI, sans-serif; background: radial-gradient(circle at top,#33165c,#08040f 55%); color:#fff; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:18px; }}
+    .card {{ width:min(460px,100%); background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.14); border-radius:28px; padding:26px; box-shadow:0 20px 80px rgba(0,0,0,.35); backdrop-filter: blur(18px); }}
+    h1 {{ margin:0 0 8px; font-size:28px; }} p {{ color:#d7cbea; line-height:1.7; }}
+    input {{ width:100%; box-sizing:border-box; margin:8px 0 12px; padding:15px; border-radius:16px; border:1px solid rgba(255,255,255,.18); background:rgba(255,255,255,.09); color:#fff; font-size:16px; outline:none; }}
+    button {{ width:100%; padding:15px; border:0; border-radius:16px; background:#8b5cf6; color:#fff; font-size:17px; font-weight:900; cursor:pointer; }}
+    .msg {{ margin-top:14px; font-weight:800; }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>إعادة تعيين كلمة المرور</h1>
+    <p>اكتب كلمة المرور الجديدة مرتين. يجب أن تكون 6 أحرف على الأقل.</p>
+    <input id="p1" type="password" placeholder="كلمة المرور الجديدة" autocomplete="new-password" />
+    <input id="p2" type="password" placeholder="تأكيد كلمة المرور" autocomplete="new-password" />
+    <button onclick="resetPassword()">حفظ كلمة المرور</button>
+    <div id="msg" class="msg"></div>
+  </div>
+<script>
+async function resetPassword() {{
+  const msg = document.getElementById('msg');
+  const p1 = document.getElementById('p1').value.trim();
+  const p2 = document.getElementById('p2').value.trim();
+  msg.textContent = '';
+  if (p1.length < 6) {{ msg.textContent = 'كلمة المرور لازم تكون 6 أحرف على الأقل'; return; }}
+  if (p1 !== p2) {{ msg.textContent = 'كلمتا المرور غير متطابقتان'; return; }}
+  msg.textContent = 'جاري الحفظ...';
+  const res = await fetch('/auth/reset-password', {{ method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify({{token:'{safe_token}', password:p1, confirmPassword:p2}}) }});
+  const data = await res.json().catch(() => ({{detail:'تعذر قراءة الرد'}}));
+  if (!res.ok || data.ok === false) {{ msg.textContent = data.detail || data.error || 'تعذر تغيير كلمة المرور'; return; }}
+  msg.textContent = 'تم تغيير كلمة المرور بنجاح. ارجع إلى تطبيق Respect وسجل دخولك.';
+}}
+</script>
+</body>
+</html>
+"""
+    return HTMLResponse(html)
+
+
+@app.post("/auth/reset-password")
+async def auth_reset_password_submit(request: FastAPIRequest):
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="طلب غير صحيح")
+    token = str(body.get("token") or "").strip()
+    password = str(body.get("password") or "").strip()
+    confirm = str(body.get("confirmPassword") or body.get("confirm_password") or "").strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="رابط إعادة التعيين غير صحيح")
+    if len(password) < 6:
+        raise HTTPException(status_code=400, detail="كلمة المرور لازم تكون 6 أحرف على الأقل")
+    if password != confirm:
+        raise HTTPException(status_code=400, detail="كلمتا المرور غير متطابقتان")
+    row = _read_password_reset_token(token)
+    expires_raw = str(row.get("expires_at") or "")
+    try:
+        expires = datetime.fromisoformat(expires_raw.replace("Z", "+00:00"))
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+    except Exception:
+        expires = datetime.now(timezone.utc) - timedelta(seconds=1)
+    if expires <= datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="انتهت صلاحية رابط إعادة التعيين")
+    email = _normalize_email(str(row.get("email") or ""))
+    if not _valid_email(email):
+        raise HTTPException(status_code=400, detail="البريد غير صالح داخل رابط إعادة التعيين")
+    _update_supabase_auth_password(email, password)
+    _consume_password_reset_token(str(row.get("token_hash") or _password_reset_token_hash(token)))
+    _record_login_attempt(email, "", success=True)
+    return {"ok": True, "message": "تم تغيير كلمة المرور بنجاح"}
 
 @app.post("/auth/send-otp")
 def auth_send_otp(req: AuthOtpSendRequest, x_app_secret: Optional[str] = Header(default=None)):
