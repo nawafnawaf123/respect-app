@@ -55,6 +55,23 @@ SB_ANON = _env_value("SUPABASE", "_ANON", "_KEY")
 SB_SERVICE = _env_value("SUPABASE", "_SERVICE", "_ROLE", "_KEY")
 APP_SHARED_SECRET = os.getenv("APP_SHARED_SECRET", "")
 
+# ================= App request hardening =================
+# نفس القيمة تضبطها في Flutter وقت البناء:
+# --dart-define=RESPECT_REQUEST_SIGNING_SECRET=...
+# لا تعتبره سرًا نهائيًا داخل APK، لكنه يمنع الطلبات العشوائية ويصعّب إعادة تشغيل الطلبات القديمة.
+RESPECT_REQUEST_SIGNING_SECRET = os.getenv("RESPECT_REQUEST_SIGNING_SECRET", "").strip()
+REQUIRE_REQUEST_SIGNATURE = os.getenv("REQUIRE_REQUEST_SIGNATURE", "false").strip().lower() in {"1", "true", "yes", "on"}
+REQUEST_SIGNATURE_MAX_AGE_SECONDS = int(os.getenv("REQUEST_SIGNATURE_MAX_AGE_SECONDS", "300"))
+REQUEST_NONCE_TTL_SECONDS = int(os.getenv("REQUEST_NONCE_TTL_SECONDS", "600"))
+APP_REQUEST_RATE_LIMIT_PER_MINUTE = int(os.getenv("APP_REQUEST_RATE_LIMIT_PER_MINUTE", "180"))
+
+ALLOWED_ORIGINS = [
+    origin.strip().rstrip("/")
+    for origin in os.getenv("ALLOWED_ORIGINS", "https://respect-app-9fzq.onrender.com").split(",")
+    if origin.strip()
+]
+
+
 # ================= Paddle Billing / Verification Subscription =================
 # ضع هذه القيم في Render كمتغيرات بيئة:
 # PADDLE_ENVIRONMENT=sandbox  أو production
@@ -287,10 +304,20 @@ SCOPES = ["https://www.googleapis.com/auth/firebase.messaging"]
 app = FastAPI(title="Respect App FCM + Respect AI Qwen Server")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://respect-app-9fzq.onrender.com"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=[
+        "Content-Type",
+        "Authorization",
+        "X-App-Secret",
+        "X-App-Timestamp",
+        "X-App-Nonce",
+        "X-App-Signature",
+        "X-App-Signature-Version",
+        "X-Respect-Client",
+        "X-Respect-Platform",
+    ],
 )
 
 
@@ -317,6 +344,124 @@ def _enforce_moderation_rate(ip: str, limit: int = 60) -> None:
 def _check_secret(x_app_secret: Optional[str]) -> None:
     if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
         raise HTTPException(status_code=401, detail="Invalid X-App-Secret")
+
+
+_app_request_rate: Dict[str, list[float]] = defaultdict(list)
+_seen_request_nonces: Dict[str, float] = {}
+
+
+def _is_sensitive_app_path(path: str) -> bool:
+    if path in {"/send_push", "/send_user_push", "/send_general_push", "/send_message_push", "/send_call_push"}:
+        return True
+    prefixes = (
+        "/auth/",
+        "/respect-ai/",
+        "/paddle/",
+        "/turn/",
+        "/metered/",
+        "/push_debug",
+    )
+    return any(path.startswith(prefix) for prefix in prefixes)
+
+
+def _enforce_app_request_rate(ip: str, path: str) -> None:
+    if APP_REQUEST_RATE_LIMIT_PER_MINUTE <= 0:
+        return
+    now = time.time()
+    family = path.strip("/").split("/", 1)[0] or "root"
+    key = f"{ip}:{family}"
+    window = [t for t in _app_request_rate[key] if now - t < 60]
+    if len(window) >= APP_REQUEST_RATE_LIMIT_PER_MINUTE:
+        raise HTTPException(status_code=429, detail="Too many requests")
+    _app_request_rate[key] = window + [now]
+
+
+def _cleanup_request_nonces(now: float) -> None:
+    if len(_seen_request_nonces) < 10000:
+        return
+    expired = [k for k, expires_at in _seen_request_nonces.items() if expires_at < now]
+    for key in expired[:5000]:
+        _seen_request_nonces.pop(key, None)
+
+
+def _verify_signed_request(path: str, body: bytes, headers: Any) -> None:
+    """
+    توقيع دفاعي اختياري للطلبات الحساسة:
+    X-App-Timestamp + X-App-Nonce + X-App-Signature
+    signature = base64url(HMAC_SHA256(secret, "timestamp\\nnonce\\npath\\nraw_body"))
+    """
+    signing_secret = RESPECT_REQUEST_SIGNING_SECRET
+    if not signing_secret:
+        return
+
+    timestamp = str(headers.get("x-app-timestamp", "") or "").strip()
+    nonce = str(headers.get("x-app-nonce", "") or "").strip()
+    signature = str(headers.get("x-app-signature", "") or "").strip()
+    has_any_signature_header = bool(timestamp or nonce or signature)
+
+    if not has_any_signature_header:
+        if REQUIRE_REQUEST_SIGNATURE:
+            raise HTTPException(status_code=401, detail="Missing request signature")
+        return
+
+    if not timestamp or not nonce or not signature:
+        raise HTTPException(status_code=401, detail="Incomplete request signature")
+
+    try:
+        ts = int(timestamp)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid request timestamp")
+
+    now = time.time()
+    if abs(now - ts) > REQUEST_SIGNATURE_MAX_AGE_SECONDS:
+        raise HTTPException(status_code=401, detail="Expired request signature")
+
+    if len(nonce) < 12 or len(nonce) > 128:
+        raise HTTPException(status_code=401, detail="Invalid request nonce")
+
+    _cleanup_request_nonces(now)
+    nonce_key = f"{timestamp}:{nonce}"
+    if _seen_request_nonces.get(nonce_key, 0) > now:
+        raise HTTPException(status_code=401, detail="Replay request blocked")
+
+    body_text = body.decode("utf-8", errors="replace")
+    payload = f"{timestamp}\n{nonce}\n{path}\n{body_text}".encode("utf-8")
+    expected = base64.urlsafe_b64encode(
+        hmac.new(signing_secret.encode("utf-8"), payload, hashlib.sha256).digest()
+    ).decode("utf-8").rstrip("=")
+
+    if not hmac.compare_digest(signature, expected):
+        raise HTTPException(status_code=401, detail="Invalid request signature")
+
+    _seen_request_nonces[nonce_key] = now + REQUEST_NONCE_TTL_SECONDS
+
+
+@app.middleware("http")
+async def _respect_security_middleware(request: FastAPIRequest, call_next):
+    path = request.url.path
+    scheme = request.url.scheme
+
+    if _is_sensitive_app_path(path):
+        _enforce_app_request_rate(_client_ip(request), path)
+        body = await request.body()
+        _verify_signed_request(path, body, request.headers)
+
+        async def receive():
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        request = FastAPIRequest(request.scope, receive)
+
+    response = await call_next(request)
+
+    # Headers أمنية عامة للوحة الويب وواجهات API.
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("Permissions-Policy", "geolocation=(), camera=(), microphone=()")
+    response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
+    if scheme == "https":
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return response
 
 
 def _first_env_value(*names: str) -> str:
