@@ -224,6 +224,18 @@ PUBLIC_APP_BASE_URL = os.getenv("PUBLIC_APP_BASE_URL", "https://respect-app-9fzq
 RESPECT_EMAIL_LOGO_URL = os.getenv("RESPECT_EMAIL_LOGO_URL", "").strip()
 RESPECT_EMAIL_BRAND_NAME = os.getenv("RESPECT_EMAIL_BRAND_NAME", "Respect App").strip() or "Respect App"
 
+# ================= Twilio Verify SMS =================
+# ضع هذه القيم في Render فقط ولا تضعها داخل Flutter:
+# SMS_PROVIDER=twilio
+# TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxx
+# TWILIO_AUTH_TOKEN=xxxxxxxxxxxxxxxx
+# TWILIO_VERIFY_SERVICE_SID=VAxxxxxxxxxxxxxxxx
+SMS_PROVIDER = os.getenv("SMS_PROVIDER", "").strip().lower()
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "").strip()
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "").strip()
+TWILIO_VERIFY_SERVICE_SID = os.getenv("TWILIO_VERIFY_SERVICE_SID", "").strip()
+TWILIO_TIMEOUT_SECONDS = int(os.getenv("TWILIO_TIMEOUT_SECONDS", "20"))
+
 # ================= Respect AI / Qwen Model Studio =================
 # لا تضع المفتاح داخل الكود. ضعه في Render كمتغير بيئة:
 #
@@ -661,6 +673,31 @@ class PasswordResetRequest(BaseModel):
     deviceId: str = ""
 
 
+class PhoneSecuritySendRequest(BaseModel):
+    username: str
+    countryCode: str = "+961"
+    phone: str
+    deviceId: str = ""
+
+
+class PhoneSecurityVerifyRequest(BaseModel):
+    username: str
+    phoneE164: str
+    code: str
+    deviceId: str = ""
+
+
+class SmsLoginSendRequest(BaseModel):
+    login: str
+    deviceId: str = ""
+
+
+class SmsLoginVerifyRequest(BaseModel):
+    login: str
+    code: str
+    deviceId: str = ""
+
+
 class AuthPasswordCreateRequest(BaseModel):
     email: str
     password: str
@@ -916,6 +953,8 @@ def health():
         "paddle_client_side_token_configured": bool(PADDLE_CLIENT_SIDE_TOKEN),
         "paddle_checkout_page": "/paddle/checkout",
         "paddle_checkout_endpoint": "/paddle/create-verification-checkout",
+        "sms_provider": SMS_PROVIDER,
+        "twilio_verify_enabled": _twilio_configured(),
     }
 
 
@@ -1208,6 +1247,118 @@ def _normalize_email(value: str) -> str:
 
 def _valid_email(value: str) -> bool:
     return bool(re.match(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", _normalize_email(value)))
+
+
+
+def _normalize_phone_e164(country_code: str, phone: str) -> str:
+    raw_phone = str(phone or "").strip()
+    raw_country = str(country_code or "").strip()
+    if not raw_phone:
+        raise HTTPException(status_code=400, detail="اكتب رقم الجوال")
+
+    # لو المستخدم كتب الرقم كاملًا مع + نأخذه كما هو بعد تنظيفه.
+    if raw_phone.startswith("+"):
+        digits = re.sub(r"\D+", "", raw_phone)
+        e164 = f"+{digits}"
+    else:
+        cc_digits = re.sub(r"\D+", "", raw_country)
+        phone_digits = re.sub(r"\D+", "", raw_phone)
+        # إزالة الأصفار الأولى من الرقم المحلي حتى لا يصبح +96103...
+        phone_digits = phone_digits.lstrip("0")
+        if not cc_digits:
+            raise HTTPException(status_code=400, detail="اكتب كود الدولة مثل +961")
+        e164 = f"+{cc_digits}{phone_digits}"
+
+    if not re.match(r"^\+[1-9]\d{7,14}$", e164):
+        raise HTTPException(status_code=400, detail="رقم الجوال غير صحيح. استخدم الصيغة الدولية مثل +961xxxxxxxx")
+    return e164
+
+
+def _twilio_configured() -> bool:
+    return SMS_PROVIDER == "twilio" and bool(TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_VERIFY_SERVICE_SID)
+
+
+def _twilio_verify_start(phone_e164: str) -> Dict[str, Any]:
+    if not _twilio_configured():
+        raise HTTPException(status_code=500, detail="Twilio Verify غير مضبوط في Render")
+    url = f"https://verify.twilio.com/v2/Services/{TWILIO_VERIFY_SERVICE_SID}/Verifications"
+    try:
+        r = requests.post(
+            url,
+            data={"To": phone_e164, "Channel": "sms"},
+            auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
+            timeout=TWILIO_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"تعذر إرسال SMS: {exc}")
+    if r.status_code >= 400:
+        raise HTTPException(status_code=400, detail=f"Twilio SMS error {r.status_code}: {_safe_response_text(r.text, 700)}")
+    try:
+        return r.json()
+    except Exception:
+        return {"raw": r.text}
+
+
+def _twilio_verify_check(phone_e164: str, code: str) -> Dict[str, Any]:
+    if not _twilio_configured():
+        raise HTTPException(status_code=500, detail="Twilio Verify غير مضبوط في Render")
+    clean_code = re.sub(r"\D+", "", str(code or ""))
+    if not re.match(r"^\d{4,10}$", clean_code):
+        raise HTTPException(status_code=400, detail="رمز SMS غير صحيح")
+    url = f"https://verify.twilio.com/v2/Services/{TWILIO_VERIFY_SERVICE_SID}/VerificationCheck"
+    try:
+        r = requests.post(
+            url,
+            data={"To": phone_e164, "Code": clean_code},
+            auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
+            timeout=TWILIO_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"تعذر التحقق من SMS: {exc}")
+    if r.status_code >= 400:
+        raise HTTPException(status_code=400, detail=f"Twilio verify error {r.status_code}: {_safe_response_text(r.text, 700)}")
+    try:
+        data = r.json()
+    except Exception:
+        data = {"raw": r.text}
+    if str(data.get("status") or "").lower() != "approved":
+        raise HTTPException(status_code=400, detail="رمز SMS غير صحيح أو انتهت صلاحيته")
+    return data
+
+
+def _safe_user_for_client(user: Dict[str, Any]) -> Dict[str, Any]:
+    allowed = {
+        "id", "username", "name", "bio", "email", "avatar_url", "cover_url",
+        "is_verified", "verified", "verified_until", "verification_status", "subscription_tier",
+        "is_blocked", "blocked_at", "created_at", "is_admin",
+        "phone_e164", "phone_country_code", "phone_national", "phone_verified",
+        "phone_verified_at", "sms_security_enabled", "sms_login_enabled",
+    }
+    return {str(k): v for k, v in (user or {}).items() if str(k) in allowed}
+
+
+def _update_user_phone_security(username: str, phone_e164: str, country_code: str = "", phone_national: str = "") -> None:
+    user = _display_username(username)
+    clean = normalize_username(user)
+    payload = {
+        "phone_e164": phone_e164,
+        "phone_country_code": str(country_code or "").strip(),
+        "phone_national": str(phone_national or "").strip(),
+        "phone_verified": True,
+        "phone_verified_at": datetime.now(timezone.utc).isoformat(),
+        "sms_security_enabled": True,
+        "sms_login_enabled": True,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    r = requests.patch(
+        f"{SB_URL}/rest/v1/users",
+        headers={**_supabase_headers(use_service_role=True), "Prefer": "return=minimal"},
+        params={"or": f"(username.eq.{user},username.eq.{clean})"},
+        json=payload,
+        timeout=12,
+    )
+    if r.status_code >= 400:
+        raise HTTPException(status_code=500, detail=f"تعذر حفظ رقم الجوال: {_safe_response_text(r.text, 700)}")
 
 
 
@@ -2213,6 +2364,89 @@ def auth_request_password_reset(req: PasswordResetRequest, x_app_secret: Optiona
     reset_url = f"{PUBLIC_APP_BASE_URL}/auth/reset-password?token={token}"
     delivery = _send_password_reset_email(email, reset_url)
     return {"ok": True, "sent": True, "delivery": delivery, "expiresInMinutes": PASSWORD_RESET_TTL_MINUTES}
+
+
+@app.post("/auth/phone-security/send")
+def auth_phone_security_send(req: PhoneSecuritySendRequest, x_app_secret: Optional[str] = Header(default=None)):
+    _check_secret(x_app_secret)
+    username = _display_username(req.username)
+    if normalize_username(username) in {"", "user"}:
+        raise HTTPException(status_code=400, detail="username غير صحيح")
+    phone_e164 = _normalize_phone_e164(req.countryCode, req.phone)
+    sent = _twilio_verify_start(phone_e164)
+    return {
+        "ok": True,
+        "sent": True,
+        "phoneE164": phone_e164,
+        "service": "twilio_verify",
+        "status": sent.get("status"),
+    }
+
+
+@app.post("/auth/phone-security/verify")
+def auth_phone_security_verify(req: PhoneSecurityVerifyRequest, x_app_secret: Optional[str] = Header(default=None)):
+    _check_secret(x_app_secret)
+    username = _display_username(req.username)
+    if normalize_username(username) in {"", "user"}:
+        raise HTTPException(status_code=400, detail="username غير صحيح")
+    phone_e164 = _normalize_phone_e164("", req.phoneE164)
+    _twilio_verify_check(phone_e164, req.code)
+    # نعيد استخراج كود الدولة بشكل بسيط للعرض فقط.
+    country_code = ""
+    national = phone_e164
+    _update_user_phone_security(username, phone_e164, country_code=country_code, phone_national=national)
+    return {
+        "ok": True,
+        "verified": True,
+        "phoneE164": phone_e164,
+        "smsSecurityEnabled": True,
+        "smsLoginEnabled": True,
+    }
+
+
+@app.post("/auth/sms-login/send")
+def auth_sms_login_send(req: SmsLoginSendRequest, x_app_secret: Optional[str] = Header(default=None)):
+    _check_secret(x_app_secret)
+    login = str(req.login or "").strip()
+    if not login:
+        raise HTTPException(status_code=400, detail="اكتب اسم المستخدم أو الإيميل أولاً")
+    user = _find_public_user_for_login(login)
+    # لا نكشف وجود الحساب أو رقم الهاتف. لو لا يوجد رقم، نعيد ok برسالة عامة.
+    if not user:
+        return {"ok": True, "sent": True, "delivery": "hidden"}
+    phone = str(user.get("phone_e164") or "").strip()
+    phone_ok = _truthy(user.get("phone_verified")) and _truthy(user.get("sms_security_enabled")) and _truthy(user.get("sms_login_enabled"))
+    if not phone or not phone_ok:
+        return {"ok": True, "sent": True, "delivery": "hidden"}
+    sent = _twilio_verify_start(phone)
+    return {"ok": True, "sent": True, "delivery": "sms", "status": sent.get("status"), "expiresInMinutes": 10}
+
+
+@app.post("/auth/sms-login/verify")
+def auth_sms_login_verify(req: SmsLoginVerifyRequest, x_app_secret: Optional[str] = Header(default=None)):
+    _check_secret(x_app_secret)
+    login = str(req.login or "").strip()
+    if not login:
+        raise HTTPException(status_code=400, detail="اكتب اسم المستخدم أو الإيميل")
+    status = _login_attempt_status(login, req.deviceId)
+    if status.get("allowed") is False:
+        return {"ok": False, **status}
+    user = _find_public_user_for_login(login)
+    if not user:
+        _record_login_attempt(login, req.deviceId, success=False)
+        raise HTTPException(status_code=400, detail="رمز SMS غير صحيح أو الحساب غير مجهز للأمان عبر الرقم")
+    phone = str(user.get("phone_e164") or "").strip()
+    phone_ok = _truthy(user.get("phone_verified")) and _truthy(user.get("sms_security_enabled")) and _truthy(user.get("sms_login_enabled"))
+    if not phone or not phone_ok:
+        _record_login_attempt(login, req.deviceId, success=False)
+        raise HTTPException(status_code=400, detail="هذا الحساب لم يفعل الأمان عبر الرقم من الإعدادات")
+    try:
+        _twilio_verify_check(phone, req.code)
+    except HTTPException:
+        _record_login_attempt(login, req.deviceId, success=False)
+        raise
+    _record_login_attempt(login, req.deviceId, success=True)
+    return {"ok": True, "verified": True, "loginMode": "sms", "user": _safe_user_for_client(user)}
 
 
 @app.get("/auth/reset-password", response_class=HTMLResponse)
