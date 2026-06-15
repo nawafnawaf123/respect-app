@@ -8,7 +8,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:permission_handler/permission_handler.dart';
-
+import 'package:flutter/foundation.dart';
 import '../services/respect_live_service.dart';
 import '../services/supabase_service.dart';
 import '../services/notification_service.dart';
@@ -16,10 +16,9 @@ import '../theme/app_theme.dart';
 import '../widgets/glass_card.dart';
 
 void _logIgnoredError(Object error, StackTrace stackTrace) {
-  assert(() {
-    developer.log('Ignored recoverable error', error: error, stackTrace: stackTrace, name: 'respect.recoverable');
-    return true;
-  }());
+  if (kDebugMode) {
+    debugPrint('Ignored error: $error\n$stackTrace');
+  }
 }
 
 

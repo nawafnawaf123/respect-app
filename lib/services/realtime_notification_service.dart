@@ -15,6 +15,7 @@ class RealtimeNotificationService {
   static final Set<String> _handledCalls = <String>{};
   static final Set<String> _handledPosts = <String>{};
   static final Set<String> _handledPostEvents = <String>{};
+  static final Set<String> _handledGeneralNotifications = <String>{};
 
   static Future<void> start() async {
     final user = await SupabaseService.currentUser();
@@ -58,6 +59,12 @@ class RealtimeNotificationService {
       table: 'post_events',
       callback: (payload) async => _handlePostEvent(payload.newRecord),
     )
+        .onPostgresChanges(
+      event: PostgresChangeEvent.insert,
+      schema: 'public',
+      table: 'respect_general_notifications',
+      callback: (payload) async => _handleGeneralNotification(payload.newRecord),
+    )
         .subscribe();
   }
 
@@ -66,6 +73,23 @@ class RealtimeNotificationService {
     _channel = null;
     _currentUsername = null;
     if (channel != null) await channel.unsubscribe();
+  }
+
+
+  static Future<void> _handleGeneralNotification(Map<String, dynamic> row) async {
+    final id = (row['id'] ?? 'general_${DateTime.now().microsecondsSinceEpoch}').toString();
+    if (_handledGeneralNotifications.contains(id)) return;
+    _handledGeneralNotifications.add(id);
+
+    await NotificationService.showGeneralNotification(
+      id: id,
+      title: (row['title'] ?? 'Respect').toString(),
+      body: (row['body'] ?? row['text'] ?? 'لديك إشعار جديد').toString(),
+      createdAt: (row['created_at'] ?? '').toString(),
+      senderUsername: (row['sender_username'] ?? '').toString(),
+      senderName: (row['sender_name'] ?? '').toString(),
+      showSystemNotification: false,
+    );
   }
 
   static Future<void> _handleMessage(Map<String, dynamic> row) async {
@@ -85,7 +109,7 @@ class RealtimeNotificationService {
       messageId: id,
       senderUsername: sender,
       senderName: senderName,
-      text: (row['text'] ?? '').toString(),
+      text: 'رسالة جديدة',
     );
   }
 
@@ -135,7 +159,7 @@ class RealtimeNotificationService {
       postId: id,
       authorUsername: author,
       authorName: authorName,
-      text: (row['text'] ?? '').toString(),
+      text: 'رسالة جديدة',
     );
   }
 
@@ -146,6 +170,11 @@ class RealtimeNotificationService {
     _handledCalls.add(callId);
 
     final callerUsername = SupabaseService.displayUsername((payload['caller_username'] ?? '').toString());
+    try {
+      final me = SupabaseService.displayUsername(_currentUsername ?? '');
+      final allowed = await SupabaseService.canCallUser(caller: callerUsername, receiver: me);
+      if (allowed['allowed'] != true) return;
+    } catch (_) { _scannerSafeIgnore(); }
     final callerName = (payload['caller_name'] ?? callerUsername).toString();
     final callerAvatar = payload['caller_avatar']?.toString();
     final video = _payloadBool(payload['video']) ||

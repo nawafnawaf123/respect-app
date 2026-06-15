@@ -27,6 +27,8 @@ class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController _confirmPasswordCtrl = TextEditingController();
   final TextEditingController _nameCtrl = TextEditingController();
   final TextEditingController _birthDateCtrl = TextEditingController();
+  final TextEditingController _signupPhoneCountryCtrl = TextEditingController(text: '+961');
+  final TextEditingController _signupPhoneCtrl = TextEditingController();
 
   StreamSubscription<AuthState>? _authSub;
 
@@ -38,6 +40,10 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _navigated = false;
   bool _googleLoginInProgress = false;
   bool _handlingAuthState = false;
+  bool _manualAuthFlowInProgress = false;
+  bool _rememberDevice = true;
+  bool _resettingPassword = false;
+  bool _smsCodeRequested = false;
 
   @override
   void initState() {
@@ -47,7 +53,7 @@ class _LoginScreenState extends State<LoginScreen> {
     // أثناء ضغط زر Google نفسه لا نشغل sync مرتين، لأن _loginWithGoogle يعالج الدخول مباشرة.
     _authSub = SupabaseService.client.auth.onAuthStateChange.listen((state) async {
       if (!mounted) return;
-      if (_googleLoginInProgress || _handlingAuthState || _navigated) return;
+      if (_googleLoginInProgress || _handlingAuthState || _manualAuthFlowInProgress || _navigated) return;
       if (state.event != AuthChangeEvent.signedIn || state.session == null) return;
 
       _handlingAuthState = true;
@@ -77,6 +83,8 @@ class _LoginScreenState extends State<LoginScreen> {
     _confirmPasswordCtrl.dispose();
     _nameCtrl.dispose();
     _birthDateCtrl.dispose();
+    _signupPhoneCountryCtrl.dispose();
+    _signupPhoneCtrl.dispose();
     super.dispose();
   }
 
@@ -110,6 +118,8 @@ class _LoginScreenState extends State<LoginScreen> {
     final confirmPassword = _confirmPasswordCtrl.text.trim();
     final fullName = SupabaseService.cleanProfileName(_nameCtrl.text);
     final birthDate = _birthDateCtrl.text.trim();
+    final signupPhoneCountry = _signupPhoneCountryCtrl.text.trim();
+    final signupPhone = _signupPhoneCtrl.text.trim();
 
     if (_isCreateMode) {
       final usernameError = SupabaseService.usernameRuleError(_usernameCtrl.text);
@@ -134,7 +144,7 @@ class _LoginScreenState extends State<LoginScreen> {
         return;
       }
       if (password != confirmPassword) {
-        _showMessage('كلمتا المرور غير متطابقتين');
+        _showMessage('كلمتا المرور غير متطابقتان');
         return;
       }
       if (!_acceptedTerms) {
@@ -152,10 +162,42 @@ class _LoginScreenState extends State<LoginScreen> {
       }
     }
 
+    FocusScope.of(context).unfocus();
+    _manualAuthFlowInProgress = true;
     setState(() => _loading = true);
 
     try {
       if (_isCreateMode) {
+        await SupabaseService.validateNewAccountFields(
+          username: username,
+          email: email,
+          profileName: fullName,
+        );
+
+        await SupabaseService.requestAuthOtp(
+          email: email,
+          username: username,
+          purpose: 'signup',
+        );
+
+        if (!mounted) return;
+        setState(() => _loading = false);
+        final otp = await _showOtpSheet(
+          email: email,
+          title: 'تأكيد إنشاء الحساب',
+          subtitle: 'أرسلنا رمز تحقق مكون من 6 أرقام إلى بريدك. أدخله لإكمال إنشاء الحساب.',
+          allowRememberDevice: true,
+        );
+        if (otp == null) return;
+
+        setState(() => _loading = true);
+        await SupabaseService.verifyAuthOtp(
+          email: email,
+          code: otp,
+          username: username,
+          purpose: 'signup',
+        );
+
         await SupabaseService.register(
           username: username,
           email: email,
@@ -164,12 +206,142 @@ class _LoginScreenState extends State<LoginScreen> {
           birthDate: birthDate,
           acceptedTerms: _acceptedTerms,
         );
-        _showMessage('تم إنشاء الحساب بنجاح');
+
+        if (_rememberDevice) {
+          await SupabaseService.trustCurrentDeviceForUsername(username);
+        }
+
+        if (signupPhone.trim().isNotEmpty) {
+          final phoneE164 = SupabaseService.normalizePhoneE164(
+            countryCode: signupPhoneCountry,
+            phone: signupPhone,
+          );
+          if (phoneE164.isNotEmpty) {
+            await SupabaseService.requestPhoneSecurityCode(
+              username: username,
+              countryCode: signupPhoneCountry,
+              phone: signupPhone,
+            );
+            if (!mounted) return;
+            setState(() => _loading = false);
+            final smsCode = await _showPhoneCodeSheet(
+              phoneE164: phoneE164,
+              title: 'تأكيد رقم الجوال',
+              subtitle: 'أرسلنا رمز SMS إلى رقمك. أدخله لتفعيل الأمان عبر الرقم.',
+              onResend: () => SupabaseService.requestPhoneSecurityCode(
+                username: username,
+                countryCode: signupPhoneCountry,
+                phone: signupPhone,
+              ),
+            );
+            if (smsCode != null) {
+              setState(() => _loading = true);
+              await SupabaseService.verifyPhoneSecurityCode(
+                username: username,
+                phoneE164: phoneE164,
+                code: smsCode,
+              );
+              _showMessage('تم إنشاء الحساب وتفعيل الأمان عبر الرقم بنجاح');
+            } else {
+              _showMessage('تم إنشاء الحساب. يمكنك تفعيل رقم الجوال لاحقًا من الإعدادات');
+            }
+          }
+        } else {
+          _showMessage('تم إنشاء الحساب وتأكيد البريد بنجاح');
+        }
       } else {
+        if (_smsCodeRequested && RegExp(r'^\d{4,10}$').hasMatch(password)) {
+          final user = await SupabaseService.loginWithSmsCode(loginInput, password);
+          if (user == null) {
+            _showMessage('رمز SMS غير صحيح أو الحساب لم يفعل الأمان عبر الرقم');
+            return;
+          }
+          await SupabaseService.reportLoginAttempt(usernameOrEmail: loginInput, success: true);
+          if (_rememberDevice) {
+            await SupabaseService.trustCurrentDeviceForUsername((user['username'] ?? loginInput).toString());
+          }
+          _showMessage('تم تسجيل الدخول عبر رمز SMS');
+          _goHome();
+          return;
+        }
+
+        final allowed = await SupabaseService.checkLoginAttemptAllowed(loginInput);
+        if (allowed['allowed'] == false) {
+          final message = (allowed['message'] ?? 'تم إيقاف تسجيل الدخول مؤقتًا بعد 6 محاولات فاشلة. استخدم نسيت كلمة المرور أو حاول لاحقًا.').toString();
+          _showMessage(message);
+          return;
+        }
+
+        Map<String, dynamic>? candidate;
+        try {
+          candidate = await SupabaseService.verifyLoginPasswordOnly(loginInput, password);
+        } catch (e) {
+          final status = await SupabaseService.reportLoginAttempt(usernameOrEmail: loginInput, success: false);
+          final remaining = int.tryParse((status['remainingAttempts'] ?? 0).toString()) ?? 0;
+          if (status['allowed'] == false) {
+            _showMessage('تم إيقاف تسجيل الدخول مؤقتًا بعد 6 محاولات فاشلة. اضغط نسيت كلمة المرور لاستعادة الحساب.');
+          } else {
+            _showMessage('كلمة المرور غير صحيحة. المتبقي $remaining محاولات.');
+          }
+          return;
+        }
+
+        if (candidate == null) {
+          final status = await SupabaseService.reportLoginAttempt(usernameOrEmail: loginInput, success: false);
+          final remaining = int.tryParse((status['remainingAttempts'] ?? 0).toString()) ?? 0;
+          if (status['allowed'] == false) {
+            _showMessage('تم إيقاف تسجيل الدخول مؤقتًا بعد 6 محاولات فاشلة. اضغط نسيت كلمة المرور لاستعادة الحساب.');
+          } else {
+            _showMessage('اسم المستخدم/الإيميل أو كلمة المرور غير صحيحة. المتبقي $remaining محاولات.');
+          }
+          return;
+        }
+
+        final candidateUsername = (candidate['username'] ?? loginInput).toString();
+        final candidateEmail = SupabaseService.normalizeEmail((candidate['email'] ?? '').toString());
+        if (candidateEmail.isEmpty) {
+          _showMessage('هذا الحساب لا يحتوي على إيميل صالح للتحقق');
+          return;
+        }
+
+        final trusted = await SupabaseService.isTrustedDeviceForUsername(candidateUsername);
+        if (!trusted) {
+          await SupabaseService.requestAuthOtp(
+            email: candidateEmail,
+            username: candidateUsername,
+            purpose: 'login',
+          );
+
+          if (!mounted) return;
+          setState(() => _loading = false);
+          final otp = await _showOtpSheet(
+            email: candidateEmail,
+            title: 'تأكيد تسجيل الدخول',
+            subtitle: 'هذا الجهاز غير موثوق بعد. أدخل رمز التحقق المرسل إلى بريدك للمتابعة.',
+            allowRememberDevice: true,
+          );
+          if (otp == null) return;
+
+          setState(() => _loading = true);
+          await SupabaseService.verifyAuthOtp(
+            email: candidateEmail,
+            code: otp,
+            username: candidateUsername,
+            purpose: 'login',
+          );
+        }
+
         final user = await SupabaseService.login(loginInput, password);
         if (user == null) {
+          await SupabaseService.reportLoginAttempt(usernameOrEmail: loginInput, success: false);
           _showMessage('اسم المستخدم/الإيميل أو كلمة المرور غير صحيحة أو الحساب محظور');
           return;
+        }
+
+        await SupabaseService.reportLoginAttempt(usernameOrEmail: loginInput, success: true);
+
+        if (_rememberDevice && !trusted) {
+          await SupabaseService.trustCurrentDeviceForUsername((user['username'] ?? candidateUsername).toString());
         }
       }
 
@@ -178,6 +350,7 @@ class _LoginScreenState extends State<LoginScreen> {
       final msg = e.toString().replaceFirst('Exception: ', '');
       _showMessage(msg);
     } finally {
+      _manualAuthFlowInProgress = false;
       if (mounted) setState(() => _loading = false);
     }
   }
@@ -206,6 +379,80 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  Future<void> _requestPasswordReset() async {
+    if (_loading || _resettingPassword || _isCreateMode) return;
+    final input = _usernameCtrl.text.trim();
+    if (input.isEmpty) {
+      _showMessage('اكتب اسم المستخدم أو الإيميل أولاً ثم اضغط نسيت كلمة المرور');
+      return;
+    }
+    FocusScope.of(context).unfocus();
+
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        return SafeArea(
+          child: Container(
+            margin: const EdgeInsets.all(14),
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+            decoration: BoxDecoration(
+              color: isDark ? AppColors.darkCard : AppColors.lightCard,
+              borderRadius: BorderRadius.circular(26),
+              border: Border.all(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(width: 44, height: 5, decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: .45), borderRadius: BorderRadius.circular(99))),
+                const SizedBox(height: 14),
+                const Text('استعادة الحساب', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w900)),
+                const SizedBox(height: 6),
+                Text('اختر طريقة الاستعادة المناسبة لحسابك', style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 14),
+                ListTile(
+                  leading: const CircleAvatar(backgroundColor: AppColors.purple, foregroundColor: Colors.white, child: Icon(Icons.email_rounded)),
+                  title: const Text('رابط عبر البريد الإلكتروني', style: TextStyle(fontWeight: FontWeight.w900)),
+                  subtitle: const Text('يصلك رابط تغيير كلمة المرور'),
+                  onTap: () => Navigator.pop(context, 'email'),
+                ),
+                ListTile(
+                  leading: const CircleAvatar(backgroundColor: AppColors.purple, foregroundColor: Colors.white, child: Icon(Icons.sms_rounded)),
+                  title: const Text('رمز SMS عبر رقم الجوال', style: TextStyle(fontWeight: FontWeight.w900)),
+                  subtitle: const Text('إذا كنت مفعّل الأمان عبر الرقم من الإعدادات'),
+                  onTap: () => Navigator.pop(context, 'sms'),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    if (action == null) return;
+
+    setState(() => _resettingPassword = true);
+    try {
+      if (action == 'sms') {
+        await SupabaseService.requestSmsLoginCode(input);
+        if (!mounted) return;
+        setState(() {
+          _smsCodeRequested = true;
+          _obscurePassword = false;
+          _passwordCtrl.clear();
+        });
+        _showMessage('إذا كان الرقم مفعّلًا، وصل رمز SMS. اكتب الرمز في خانة كلمة المرور ثم اضغط تسجيل الدخول.');
+      } else {
+        await SupabaseService.requestPasswordReset(input);
+        _showMessage('إذا كان الحساب موجودًا، وصل رابط إعادة تعيين كلمة المرور إلى البريد المرتبط به.');
+      }
+    } catch (e) {
+      _showMessage(e.toString().replaceFirst('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _resettingPassword = false);
+    }
+  }
+
   void _goHome() {
     if (!mounted || _navigated) return;
     _navigated = true;
@@ -220,10 +467,12 @@ class _LoginScreenState extends State<LoginScreen> {
       _isCreateMode = !_isCreateMode;
       _passwordCtrl.clear();
       _confirmPasswordCtrl.clear();
+      _smsCodeRequested = false;
       if (!_isCreateMode) {
         _nameCtrl.clear();
         _emailCtrl.clear();
         _birthDateCtrl.clear();
+        _signupPhoneCtrl.clear();
         _acceptedTerms = false;
       }
     });
@@ -296,6 +545,59 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
         ),
       ],
+    );
+  }
+
+
+  Future<String?> _showOtpSheet({
+    required String email,
+    required String title,
+    required String subtitle,
+    bool allowRememberDevice = true,
+  }) async {
+    final result = await Navigator.of(context).push<_OtpResult>(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (_) => _OtpVerificationPage(
+          email: email,
+          title: title,
+          subtitle: subtitle,
+          allowRememberDevice: allowRememberDevice,
+          initialRememberDevice: _rememberDevice,
+          onResend: () async {
+            await SupabaseService.requestAuthOtp(
+              email: email,
+              username: _isCreateMode
+                  ? SupabaseService.strictUsername(_usernameCtrl.text)
+                  : _usernameCtrl.text.trim(),
+              purpose: _isCreateMode ? 'signup' : 'login',
+            );
+          },
+        ),
+      ),
+    );
+
+    if (result == null) return null;
+    if (mounted) setState(() => _rememberDevice = result.rememberDevice);
+    return result.code;
+  }
+
+  Future<String?> _showPhoneCodeSheet({
+    required String phoneE164,
+    required String title,
+    required String subtitle,
+    required Future<void> Function() onResend,
+  }) async {
+    return Navigator.of(context).push<String>(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (_) => _PhoneCodeVerificationPage(
+          phoneE164: phoneE164,
+          title: title,
+          subtitle: subtitle,
+          onResend: onResend,
+        ),
+      ),
     );
   }
 
@@ -612,6 +914,33 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
               ).animate().fadeIn(delay: 80.ms, duration: 240.ms).slideX(begin: -0.08),
               const SizedBox(height: 12),
+              Row(
+                children: [
+                  SizedBox(
+                    width: 105,
+                    child: _field(
+                      controller: _signupPhoneCountryCtrl,
+                      keyboardType: TextInputType.phone,
+                      icon: Icons.flag_rounded,
+                      label: 'الدولة',
+                      hint: '+961',
+                      helperText: 'اختياري',
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _field(
+                      controller: _signupPhoneCtrl,
+                      keyboardType: TextInputType.phone,
+                      icon: Icons.phone_iphone_rounded,
+                      label: 'رقم الجوال للأمان',
+                      hint: '70123456',
+                      helperText: 'اختياري ويمكن تفعيله لاحقًا من الإعدادات.',
+                    ),
+                  ),
+                ],
+              ).animate().fadeIn(delay: 100.ms, duration: 240.ms).slideX(begin: -0.08),
+              const SizedBox(height: 12),
             ],
             _field(
               controller: _usernameCtrl,
@@ -634,8 +963,8 @@ class _LoginScreenState extends State<LoginScreen> {
               textInputAction: _isCreateMode ? TextInputAction.next : TextInputAction.done,
               onSubmitted: (_) => _isCreateMode ? null : _submit(),
               icon: Icons.lock_rounded,
-              label: 'كلمة المرور',
-              hint: _isCreateMode ? '6 أحرف على الأقل' : 'كلمة المرور',
+              label: _smsCodeRequested && !_isCreateMode ? 'رمز SMS' : 'كلمة المرور',
+              hint: _isCreateMode ? '6 أحرف على الأقل' : (_smsCodeRequested ? 'اكتب رمز SMS المكون من 6 أرقام' : 'كلمة المرور'),
               suffixIcon: IconButton(
                 onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
                 icon: Icon(_obscurePassword ? Icons.visibility_rounded : Icons.visibility_off_rounded),
@@ -663,10 +992,26 @@ class _LoginScreenState extends State<LoginScreen> {
             ],
             const SizedBox(height: 18),
             PrimaryButton(
-              text: _loading ? 'جاري المعالجة...' : (_isCreateMode ? 'إنشاء الحساب' : 'تسجيل الدخول'),
+              text: _loading ? 'جاري المعالجة...' : (_isCreateMode ? 'إنشاء الحساب' : (_smsCodeRequested ? 'تسجيل الدخول برمز SMS' : 'تسجيل الدخول')), 
               icon: _isCreateMode ? Icons.person_add_alt_1_rounded : Icons.login_rounded,
               onPressed: _loading ? () {} : _submit,
             ).animate().fadeIn(delay: 300.ms),
+            if (!_isCreateMode) ...[
+              const SizedBox(height: 8),
+              Align(
+                alignment: AlignmentDirectional.centerEnd,
+                child: TextButton.icon(
+                  onPressed: (_loading || _resettingPassword) ? null : _requestPasswordReset,
+                  icon: _resettingPassword
+                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.lock_reset_rounded, size: 19),
+                  label: Text(
+                    _resettingPassword ? 'جاري إرسال الرابط...' : 'نسيت كلمة المرور؟',
+                    style: const TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                ),
+              ),
+            ],
             const SizedBox(height: 10),
             SizedBox(
               height: 52,
@@ -771,6 +1116,503 @@ class _LoginScreenState extends State<LoginScreen> {
         borderRadius: BorderRadius.circular(99),
         color: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.white.withValues(alpha: 0.42),
         border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
+      ),
+    );
+  }
+}
+
+
+class _OtpResult {
+  final String code;
+  final bool rememberDevice;
+
+  const _OtpResult({
+    required this.code,
+    required this.rememberDevice,
+  });
+}
+
+class _OtpVerificationPage extends StatefulWidget {
+  final String email;
+  final String title;
+  final String subtitle;
+  final bool allowRememberDevice;
+  final bool initialRememberDevice;
+  final Future<void> Function() onResend;
+
+  const _OtpVerificationPage({
+    required this.email,
+    required this.title,
+    required this.subtitle,
+    required this.allowRememberDevice,
+    required this.initialRememberDevice,
+    required this.onResend,
+  });
+
+  @override
+  State<_OtpVerificationPage> createState() => _OtpVerificationPageState();
+}
+
+class _OtpVerificationPageState extends State<_OtpVerificationPage> {
+  String _code = '';
+  late bool _rememberDevice;
+  bool _submitting = false;
+  bool _resending = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _rememberDevice = widget.initialRememberDevice;
+  }
+
+  void _showMessage(String message, {bool success = false, bool error = false}) {
+    final clean = message.trim();
+    if (clean.isEmpty) return;
+    if (error) {
+      NotificationService.showTopError(clean);
+    } else if (success) {
+      NotificationService.showTopSuccess(clean);
+    } else {
+      NotificationService.showTopNotification(clean);
+    }
+  }
+
+  void _confirm() {
+    final clean = _code.trim();
+    if (clean.length != 6) {
+      _showMessage('اكتب رمز التحقق المكون من 6 أرقام', error: true);
+      return;
+    }
+    if (_submitting) return;
+    setState(() => _submitting = true);
+    FocusScope.of(context).unfocus();
+    Navigator.of(context).pop(_OtpResult(code: clean, rememberDevice: _rememberDevice));
+  }
+
+  Future<void> _resend() async {
+    if (_resending || _submitting) return;
+    setState(() => _resending = true);
+    try {
+      await widget.onResend();
+      _showMessage('تم إرسال رمز جديد إلى بريدك', success: true);
+    } catch (e) {
+      _showMessage(e.toString().replaceFirst('Exception: ', ''), error: true);
+    } finally {
+      if (mounted) setState(() => _resending = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bg = isDark ? AppColors.darkBg : AppColors.lightBg;
+    final muted = isDark ? AppColors.darkMuted : AppColors.lightMuted;
+
+    return PopScope(
+      canPop: !_submitting,
+      child: Scaffold(
+        resizeToAvoidBottomInset: true,
+        backgroundColor: bg,
+        appBar: AppBar(
+          title: const Text('رمز التحقق', style: TextStyle(fontWeight: FontWeight.w900)),
+          centerTitle: true,
+          leading: IconButton(
+            onPressed: _submitting ? null : () => Navigator.of(context).pop(null),
+            icon: const Icon(Icons.close_rounded),
+          ),
+        ),
+        body: SafeArea(
+          child: SingleChildScrollView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            padding: EdgeInsets.fromLTRB(20, 18, 20, 24 + MediaQuery.of(context).viewInsets.bottom),
+            child: Column(
+              children: [
+                Container(
+                  width: 82,
+                  height: 82,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: const LinearGradient(colors: [AppColors.purple, AppColors.purpleLight]),
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppColors.purple.withValues(alpha: .32),
+                        blurRadius: 30,
+                        offset: const Offset(0, 12),
+                      ),
+                    ],
+                  ),
+                  child: const Icon(Icons.mark_email_read_rounded, color: Colors.white, size: 40),
+                ),
+                const SizedBox(height: 18),
+                Text(
+                  widget.title,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 9),
+                Text(
+                  widget.subtitle,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: muted, height: 1.5, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 14),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(13),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(20),
+                    color: AppColors.purple.withValues(alpha: .09),
+                    border: Border.all(color: AppColors.purple.withValues(alpha: .18)),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.email_rounded, color: AppColors.purple, size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          widget.email,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.w900),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 18),
+                TextField(
+                  enabled: !_submitting,
+                  autofocus: true,
+                  keyboardType: TextInputType.number,
+                  textInputAction: TextInputAction.done,
+                  textAlign: TextAlign.center,
+                  maxLength: 6,
+                  style: const TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 8,
+                  ),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(6),
+                  ],
+                  onChanged: (value) {
+                    _code = value.trim();
+                    if (_code.length == 6) FocusScope.of(context).unfocus();
+                  },
+                  onSubmitted: (_) => _confirm(),
+                  decoration: InputDecoration(
+                    counterText: '',
+                    hintText: '000000',
+                    prefixIcon: const Icon(Icons.pin_rounded),
+                    filled: true,
+                    fillColor: isDark ? Colors.white.withValues(alpha: .055) : Colors.white.withValues(alpha: .78),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(22),
+                      borderSide: BorderSide(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(22),
+                      borderSide: BorderSide(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(22),
+                      borderSide: const BorderSide(color: AppColors.purple, width: 1.7),
+                    ),
+                  ),
+                ),
+                if (widget.allowRememberDevice) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(18),
+                      color: isDark ? Colors.white.withValues(alpha: .04) : Colors.white.withValues(alpha: .55),
+                      border: Border.all(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
+                    ),
+                    child: CheckboxListTile(
+                      value: _rememberDevice,
+                      onChanged: _submitting
+                          ? null
+                          : (value) => setState(() => _rememberDevice = value ?? true),
+                      activeColor: AppColors.purple,
+                      contentPadding: EdgeInsets.zero,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      title: const Text('تذكر هذا الجهاز', style: TextStyle(fontWeight: FontWeight.w900)),
+                      subtitle: Text(
+                        'لن نطلب رمز تحقق مرة أخرى على هذا الجهاز لمدة 90 يوم تقريبًا.',
+                        style: TextStyle(color: muted, fontWeight: FontWeight.w700, fontSize: 12),
+                      ),
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 20),
+                PrimaryButton(
+                  text: _submitting ? 'جاري التحقق...' : 'تأكيد الرمز',
+                  icon: Icons.verified_rounded,
+                  onPressed: _submitting ? () {} : _confirm,
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _submitting ? null : () => Navigator.of(context).pop(null),
+                        icon: const Icon(Icons.close_rounded),
+                        label: const Text('إلغاء', style: TextStyle(fontWeight: FontWeight.w900)),
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size.fromHeight(50),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: TextButton.icon(
+                        onPressed: (_submitting || _resending) ? null : _resend,
+                        icon: _resending
+                            ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                            : const Icon(Icons.refresh_rounded, size: 18),
+                        label: Text(
+                          _resending ? 'جاري الإرسال...' : 'إعادة الإرسال',
+                          style: const TextStyle(fontWeight: FontWeight.w900),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+
+
+class _PhoneCodeVerificationPage extends StatefulWidget {
+  final String phoneE164;
+  final String title;
+  final String subtitle;
+  final Future<void> Function() onResend;
+
+  const _PhoneCodeVerificationPage({
+    required this.phoneE164,
+    required this.title,
+    required this.subtitle,
+    required this.onResend,
+  });
+
+  @override
+  State<_PhoneCodeVerificationPage> createState() => _PhoneCodeVerificationPageState();
+}
+
+class _PhoneCodeVerificationPageState extends State<_PhoneCodeVerificationPage> {
+  String _code = '';
+  bool _submitting = false;
+  bool _resending = false;
+
+  void _showMessage(String message, {bool success = false, bool error = false}) {
+    final clean = message.trim();
+    if (clean.isEmpty) return;
+    if (error) {
+      NotificationService.showTopError(clean);
+    } else if (success) {
+      NotificationService.showTopSuccess(clean);
+    } else {
+      NotificationService.showTopNotification(clean);
+    }
+  }
+
+  void _confirm() {
+    final clean = _code.trim();
+    if (clean.length < 4 || clean.length > 10) {
+      _showMessage('اكتب رمز SMS الصحيح', error: true);
+      return;
+    }
+    if (_submitting) return;
+    setState(() => _submitting = true);
+    FocusScope.of(context).unfocus();
+    Navigator.of(context).pop(clean);
+  }
+
+  Future<void> _resend() async {
+    if (_resending || _submitting) return;
+    setState(() => _resending = true);
+    try {
+      await widget.onResend();
+      _showMessage('تم إرسال رمز SMS جديد', success: true);
+    } catch (e) {
+      _showMessage(e.toString().replaceFirst('Exception: ', ''), error: true);
+    } finally {
+      if (mounted) setState(() => _resending = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bg = isDark ? AppColors.darkBg : AppColors.lightBg;
+    final muted = isDark ? AppColors.darkMuted : AppColors.lightMuted;
+
+    return PopScope(
+      canPop: !_submitting,
+      child: Scaffold(
+        resizeToAvoidBottomInset: true,
+        backgroundColor: bg,
+        appBar: AppBar(
+          title: const Text('تأكيد رقم الجوال', style: TextStyle(fontWeight: FontWeight.w900)),
+          centerTitle: true,
+          leading: IconButton(
+            onPressed: _submitting ? null : () => Navigator.of(context).pop(null),
+            icon: const Icon(Icons.close_rounded),
+          ),
+        ),
+        body: SafeArea(
+          child: SingleChildScrollView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            padding: EdgeInsets.fromLTRB(20, 18, 20, 24 + MediaQuery.of(context).viewInsets.bottom),
+            child: Column(
+              children: [
+                Container(
+                  width: 82,
+                  height: 82,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: const LinearGradient(colors: [AppColors.purple, AppColors.purpleLight]),
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppColors.purple.withValues(alpha: .32),
+                        blurRadius: 30,
+                        offset: const Offset(0, 12),
+                      ),
+                    ],
+                  ),
+                  child: const Icon(Icons.sms_rounded, color: Colors.white, size: 40),
+                ),
+                const SizedBox(height: 18),
+                Text(
+                  widget.title,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 9),
+                Text(
+                  widget.subtitle,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: muted, height: 1.5, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 14),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(13),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(20),
+                    color: AppColors.purple.withValues(alpha: .09),
+                    border: Border.all(color: AppColors.purple.withValues(alpha: .18)),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.phone_iphone_rounded, color: AppColors.purple, size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          widget.phoneE164,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.w900),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 18),
+                TextField(
+                  enabled: !_submitting,
+                  autofocus: true,
+                  keyboardType: TextInputType.number,
+                  textInputAction: TextInputAction.done,
+                  textAlign: TextAlign.center,
+                  maxLength: 10,
+                  style: const TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 6,
+                  ),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(10),
+                  ],
+                  onChanged: (value) {
+                    _code = value.trim();
+                    if (_code.length >= 6) FocusScope.of(context).unfocus();
+                  },
+                  onSubmitted: (_) => _confirm(),
+                  decoration: InputDecoration(
+                    counterText: '',
+                    hintText: '000000',
+                    prefixIcon: const Icon(Icons.pin_rounded),
+                    filled: true,
+                    fillColor: isDark ? Colors.white.withValues(alpha: .055) : Colors.white.withValues(alpha: .78),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(22),
+                      borderSide: BorderSide(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(22),
+                      borderSide: BorderSide(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(22),
+                      borderSide: const BorderSide(color: AppColors.purple, width: 1.7),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                PrimaryButton(
+                  text: _submitting ? 'جاري التحقق...' : 'تأكيد الرمز',
+                  icon: Icons.verified_rounded,
+                  onPressed: _submitting ? () {} : _confirm,
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _submitting ? null : () => Navigator.of(context).pop(null),
+                        icon: const Icon(Icons.close_rounded),
+                        label: const Text('إلغاء', style: TextStyle(fontWeight: FontWeight.w900)),
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size.fromHeight(50),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: TextButton.icon(
+                        onPressed: (_submitting || _resending) ? null : _resend,
+                        icon: _resending
+                            ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                            : const Icon(Icons.refresh_rounded, size: 18),
+                        label: Text(
+                          _resending ? 'جاري الإرسال...' : 'إعادة الإرسال',
+                          style: const TextStyle(fontWeight: FontWeight.w900),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

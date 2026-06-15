@@ -49,6 +49,7 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
   List<Map<String, dynamic>> _userResults = [];
   List<Map<String, dynamic>> _postResults = [];
   List<Map<String, dynamic>> _trendingHashtags = [];
+  List<Map<String, dynamic>> _featuredVerifiedUsers = [];
   bool _searchingUsers = false;
   bool _searchingPosts = false;
 
@@ -158,6 +159,11 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
       _postNotificationTargets = <String>{};
     }
 
+    List<Map<String, dynamic>> featuredVerified = <Map<String, dynamic>>[];
+    try {
+      featuredVerified = await SupabaseService.getFeaturedVerifiedUsers(limit: 12);
+    } catch (_) { _scannerSafeIgnore(); }
+
     if (!mounted) return;
     setState(() {
       _accounts = accounts;
@@ -167,6 +173,7 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
       _currentUsername = _cleanUsername((current?['username'] ?? currentId ?? '@user').toString());
       _currentAvatarPath = (current?['imagePath'] ?? current?['profileImagePath'] ?? current?['avatar_url'])?.toString();
       _loading = false;
+      _featuredVerifiedUsers = featuredVerified;
     });
 
     unawaited(_runExploreSearch());
@@ -228,15 +235,11 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
   }
 
   void _openHashtag(String tag) {
-    final clean = tag.trim().startsWith('#') ? tag.trim() : '#${tag.trim()}';
-    _searchCtrl.text = clean;
-    _searchCtrl.selection = TextSelection.collapsed(offset: clean.length);
-    setState(() {
-      _query = clean;
-      _timeFilter = 'all';
-    });
-    _tabController.animateTo(0);
-    _runExploreSearch(includeUsers: false);
+    final clean = HashtagPostsScreen.normalizeHashtag(tag);
+    if (clean.length <= 1) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => HashtagPostsScreen(hashtag: clean)),
+    );
   }
 
   Future<void> _saveCommunities() async {
@@ -326,8 +329,21 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
   }
 
   List<Map<String, dynamic>> get _displayedAccounts {
-    if (_query.trim().isEmpty) return _accounts;
-    return _userResults;
+    if (_query.trim().isEmpty) {
+      final seen = <String>{};
+      final out = <Map<String, dynamic>>[];
+      for (final user in [..._featuredVerifiedUsers, ..._accounts]) {
+        final username = _cleanUsername((user['username'] ?? user['id'] ?? '').toString());
+        if (username == '@user' || seen.contains(username)) continue;
+        seen.add(username);
+        out.add(user);
+      }
+      out.sort((a, b) => SupabaseService.searchPriorityWeightForUser(b).compareTo(SupabaseService.searchPriorityWeightForUser(a)));
+      return out;
+    }
+    final out = List<Map<String, dynamic>>.from(_userResults);
+    out.sort((a, b) => SupabaseService.searchPriorityWeightForUser(b).compareTo(SupabaseService.searchPriorityWeightForUser(a)));
+    return out;
   }
 
   List<CityCommunity> get _filteredCommunities {
@@ -1057,6 +1073,13 @@ class _ExplorePostCard extends StatelessWidget {
     final muted = isDark ? Colors.white60 : const Color(0xFF7B7286);
     final imageProviderValue = imageProvider(avatar);
     final verified = SupabaseService.truthy(post['author_verified'] ?? post['is_verified'] ?? post['verified']);
+    final rawTier = (post['author_subscription_tier'] ?? post['subscription_tier'] ?? post['tier'] ?? '')
+        .toString()
+        .trim()
+        .toLowerCase();
+    final tier = rawTier == 'premium' || rawTier == 'gold' || rawTier == 'silver'
+        ? rawTier
+        : (verified ? 'premium' : 'free');
 
     return _PremiumPanel(
       isDark: isDark,
@@ -1070,6 +1093,7 @@ class _ExplorePostCard extends StatelessWidget {
                 padding: const EdgeInsets.all(2),
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
+                  gradient: tier == 'free' ? null : LinearGradient(colors: tier == 'premium' ? const [Color(0xFF5B21B6), Color(0xFFE879F9), Color(0xFF22D3EE)] : tier == 'gold' ? const [Color(0xFFF59E0B), Color(0xFFFDE68A)] : const [Color(0xFFCBD5E1), Color(0xFF94A3B8)]),
                   border: Border.all(color: AppColors.purple.withValues(alpha: .18)),
                 ),
                 child: CircleAvatar(
@@ -1247,6 +1271,329 @@ class _ExplorePostText extends StatelessWidget {
   }
 }
 
+
+class HashtagPostsScreen extends StatefulWidget {
+  final String hashtag;
+
+  const HashtagPostsScreen({
+    super.key,
+    required this.hashtag,
+  });
+
+  static String normalizeHashtag(String value) {
+    var clean = value.trim();
+    while (clean.isNotEmpty && RegExp(r'[\.,،؛:!؟\)\]\}]$').hasMatch(clean)) {
+      clean = clean.substring(0, clean.length - 1);
+    }
+    clean = clean.replaceAll(RegExp(r'\s+'), '');
+    if (clean.isEmpty) return '#';
+    if (!clean.startsWith('#')) clean = '#$clean';
+    return clean;
+  }
+
+  @override
+  State<HashtagPostsScreen> createState() => _HashtagPostsScreenState();
+}
+
+class _HashtagPostsScreenState extends State<HashtagPostsScreen> {
+  List<Map<String, dynamic>> _posts = <Map<String, dynamic>>[];
+  bool _loading = true;
+  String? _error;
+
+  String get _hashtag => HashtagPostsScreen.normalizeHashtag(widget.hashtag);
+
+  @override
+  void initState() {
+    super.initState();
+    _loadHashtagPosts();
+  }
+
+  bool _containsExactHashtag(String text, String hashtag) {
+    final clean = HashtagPostsScreen.normalizeHashtag(hashtag).toLowerCase();
+    if (clean.length <= 1) return false;
+    final pattern = RegExp(
+      '(^|[\\s\\n\\r\\t\\.,،؛:!؟\\(\\)\\[\\]\\{\\}])${RegExp.escape(clean)}(?=\$|[\\s\\n\\r\\t\\.,،؛:!؟\\(\\)\\[\\]\\{\\}])',
+      caseSensitive: false,
+      unicode: true,
+    );
+    return pattern.hasMatch(text.toLowerCase());
+  }
+
+  int _sortMillis(Map<String, dynamic> post) {
+    final raw = (post['created_at'] ?? post['time'] ?? '').toString();
+    final parsed = DateTime.tryParse(raw);
+    if (parsed != null) return parsed.millisecondsSinceEpoch;
+    final id = (post['id'] ?? '').toString();
+    return int.tryParse(id.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+  }
+
+  Future<List<Map<String, dynamic>>> _fetchHashtagPosts() async {
+    final tag = _hashtag;
+    final rows = <Map<String, dynamic>>[];
+
+    try {
+      final found = await SupabaseService.searchPosts(
+        query: tag,
+        timeFilter: 'all',
+        limit: 180,
+        smart: false,
+      );
+      rows.addAll(found);
+    } catch (_) {
+      _scannerSafeIgnore();
+    }
+
+    if (rows.isEmpty) {
+      try {
+        final data = await SupabaseService.client
+            .from('posts')
+            .select('id,username,name,user,text,created_at,time,avatar_url,avatarPath,image_url,video_url,voice_url,voicePath,likes,reposts,views,replies,author_verified,author_subscription_tier')
+            .ilike('text', '%$tag%')
+            .order('created_at', ascending: false)
+            .limit(180);
+        rows.addAll(
+          List<Map<String, dynamic>>.from(
+            data.map((e) => Map<String, dynamic>.from(e as Map)),
+          ),
+        );
+      } catch (_) {
+        try {
+          final data = await SupabaseService.client
+              .from('posts')
+              .select()
+              .ilike('text', '%$tag%')
+              .order('created_at', ascending: false)
+              .limit(180);
+          rows.addAll(
+            List<Map<String, dynamic>>.from(
+              data.map((e) => Map<String, dynamic>.from(e as Map)),
+            ),
+          );
+        } catch (_) {
+          _scannerSafeIgnore();
+        }
+      }
+    }
+
+    final seen = <String>{};
+    final exact = <Map<String, dynamic>>[];
+    for (final row in rows) {
+      final id = (row['id'] ?? '').toString();
+      final text = (row['text'] ?? '').toString();
+      if (!_containsExactHashtag(text, tag)) continue;
+      final key = id.trim().isEmpty ? '${row['username']}_${row['created_at']}_${text.hashCode}' : id;
+      if (seen.contains(key)) continue;
+      seen.add(key);
+      exact.add(row);
+    }
+    exact.sort((a, b) => _sortMillis(b).compareTo(_sortMillis(a)));
+    return exact;
+  }
+
+  Future<void> _loadHashtagPosts({bool silent = false}) async {
+    if (!silent && mounted) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
+
+    try {
+      final posts = await _fetchHashtagPosts();
+      if (!mounted) return;
+      setState(() {
+        _posts = posts;
+        _loading = false;
+        _error = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = e.toString();
+      });
+    }
+  }
+
+  ImageProvider? _imageProvider(String? path) {
+    if (path == null || path.trim().isEmpty) return null;
+    final value = path.trim();
+    if (value.startsWith('http://') || value.startsWith('https://')) return NetworkImage(value);
+    final file = File(value);
+    if (!file.existsSync()) return null;
+    return FileImage(file);
+  }
+
+  void _openNestedHashtag(String tag) {
+    final clean = HashtagPostsScreen.normalizeHashtag(tag);
+    if (clean.length <= 1) return;
+    if (clean.toLowerCase() == _hashtag.toLowerCase()) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => HashtagPostsScreen(hashtag: clean)),
+    );
+  }
+
+  Widget _buildHeader(bool isDark) {
+    final muted = isDark ? Colors.white60 : const Color(0xFF7B7286);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+      child: Row(
+        children: [
+          InkWell(
+            onTap: () => Navigator.of(context).maybePop(),
+            borderRadius: BorderRadius.circular(999),
+            child: Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: isDark ? Colors.white.withValues(alpha: .06) : Colors.white.withValues(alpha: .86),
+                shape: BoxShape.circle,
+                border: Border.all(color: AppColors.purple.withValues(alpha: .14)),
+              ),
+              child: const Icon(Icons.arrow_back_rounded, color: AppColors.purple),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _hashtag,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900, letterSpacing: -.4),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  _loading ? 'جاري تحميل التغريدات...' : '${_posts.length} تغريدة تحتوي على هذا الهاشتاق',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: muted, fontWeight: FontWeight.w800, fontSize: 12.5),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(colors: [Color(0xFF7C3AED), Color(0xFFB678FF)]),
+              borderRadius: BorderRadius.circular(17),
+              boxShadow: [
+                BoxShadow(
+                  color: AppColors.purple.withValues(alpha: .24),
+                  blurRadius: 18,
+                  offset: const Offset(0, 9),
+                ),
+              ],
+            ),
+            child: const Icon(Icons.tag_rounded, color: Colors.white),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBody(bool isDark) {
+    if (_loading && _posts.isEmpty) {
+      return ListView(
+        physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+        padding: const EdgeInsets.fromLTRB(16, 45, 16, 120),
+        children: const [
+          Center(child: CircularProgressIndicator(color: AppColors.purple, strokeWidth: 2.6)),
+        ],
+      );
+    }
+
+    if (_error != null && _posts.isEmpty) {
+      return ListView(
+        physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 120),
+        children: [
+          _EmptyExploreState(
+            icon: Icons.wifi_off_rounded,
+            title: 'تعذر تحميل الهاشتاق',
+            subtitle: 'اسحب للأسفل للمحاولة مرة ثانية.',
+          ),
+        ],
+      );
+    }
+
+    if (_posts.isEmpty) {
+      return ListView(
+        physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 120),
+        children: [
+          _EmptyExploreState(
+            icon: Icons.tag_faces_rounded,
+            title: 'لا توجد تغريدات لهذا الهاشتاق',
+            subtitle: 'أي تغريدة تحتوي على $_hashtag ستظهر هنا تلقائيًا.',
+          ),
+        ],
+      );
+    }
+
+    return ListView.separated(
+      physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 120),
+      itemCount: _posts.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 12),
+      itemBuilder: (context, index) {
+        return _ExplorePostCard(
+          post: _posts[index],
+          isDark: isDark,
+          imageProvider: _imageProvider,
+          onHashtagTap: _openNestedHashtag,
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bgTop = isDark ? const Color(0xFF0D0D12) : const Color(0xFFF5F5F7);
+    final bgBottom = isDark ? const Color(0xFF080810) : const Color(0xFFFFFFFF);
+
+    return Scaffold(
+      appBar: null,
+      extendBody: true,
+      backgroundColor: bgBottom,
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [bgTop, bgBottom],
+                ),
+              ),
+            ),
+          ),
+          SafeArea(
+            child: Column(
+              children: [
+                _buildHeader(isDark),
+                Expanded(
+                  child: RefreshIndicator(
+                    color: AppColors.purple,
+                    onRefresh: () => _loadHashtagPosts(silent: true),
+                    child: _buildBody(isDark),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _PremiumPanel extends StatelessWidget {
   final bool isDark;
   final Widget child;
@@ -1336,23 +1683,36 @@ class _EmptyExploreState extends StatelessWidget {
 }
 
 class _RespectAiVerifiedBadge extends StatelessWidget {
-  const _RespectAiVerifiedBadge();
+  final String tier;
+  final bool large;
+  const _RespectAiVerifiedBadge({this.tier = 'premium', this.large = false});
+
+  static String _tier(String value) {
+    final v = value.trim().toLowerCase();
+    if (v == 'premium' || v == 'gold' || v == 'silver') return v;
+    return 'premium';
+  }
+
+  static List<Color> _colors(String value) {
+    final t = _tier(value);
+    if (t == 'premium') return const [Color(0xFF5B21B6), Color(0xFFE879F9), Color(0xFF22D3EE)];
+    if (t == 'gold') return const [Color(0xFF92400E), Color(0xFFF59E0B), Color(0xFFFDE68A)];
+    return const [Color(0xFF475569), Color(0xFFCBD5E1), Color(0xFF94A3B8)];
+  }
 
   @override
   Widget build(BuildContext context) {
+    final t = _tier(tier);
     return Container(
       margin: const EdgeInsetsDirectional.only(start: 5),
-      padding: const EdgeInsets.all(2.2),
+      padding: EdgeInsets.all(large ? 3.7 : 2.2),
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        gradient: const LinearGradient(
-          colors: [Color(0xFF7C3AED), Color(0xFFC084FC)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        boxShadow: [BoxShadow(color: AppColors.purple.withValues(alpha: 0.30), blurRadius: 8)],
+        gradient: LinearGradient(colors: _colors(t), begin: Alignment.topLeft, end: Alignment.bottomRight),
+        border: Border.all(color: Colors.white.withValues(alpha: .72), width: large ? 1.2 : .7),
+        boxShadow: [BoxShadow(color: _colors(t).first.withValues(alpha: 0.38), blurRadius: large ? 14 : 8)],
       ),
-      child: const Icon(Icons.check_rounded, color: Colors.white, size: 12),
+      child: Icon(t == 'premium' ? Icons.diamond_rounded : t == 'gold' ? Icons.workspace_premium_rounded : Icons.check_rounded, color: Colors.white, size: large ? 15 : 12),
     );
   }
 }
@@ -1451,6 +1811,9 @@ class _UserResultCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final rawUsername = _clean((user['username'] ?? user['id'] ?? '@user').toString());
     final isRespectAi = _isRespectAiUsername(rawUsername);
+    final tier = isRespectAi ? 'premium' : SupabaseService.subscriptionTierForUser(user);
+    final isVerified = isRespectAi || SupabaseService.isVerifiedUser(user);
+    final powerText = SupabaseService.tierPowerDescription(tier);
     final username = isRespectAi ? SupabaseService.respectAiUsername : rawUsername;
     final name = isRespectAi ? SupabaseService.respectAiName : (user['profileName'] ?? user['name'] ?? 'User').toString();
     final bio = isRespectAi ? 'مساعد ذكي رسمي وموثق داخل Respect App' : (user['bio'] ?? 'Respect App user').toString();
@@ -1490,6 +1853,13 @@ class _UserResultCard extends StatelessWidget {
                 padding: const EdgeInsets.all(2.2),
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
+                  gradient: tier == 'free' ? null : LinearGradient(
+                    colors: tier == 'premium'
+                        ? const [Color(0xFF5B21B6), Color(0xFFE879F9), Color(0xFF22D3EE)]
+                        : tier == 'gold'
+                            ? const [Color(0xFFF59E0B), Color(0xFFFDE68A)]
+                            : const [Color(0xFFCBD5E1), Color(0xFF94A3B8)],
+                  ),
                   border: Border.all(color: AppColors.purple.withValues(alpha: .18)),
                 ),
                 child: CircleAvatar(
@@ -1514,11 +1884,11 @@ class _UserResultCard extends StatelessWidget {
                             style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
                           ),
                         ),
-                        if (isRespectAi) const _RespectAiVerifiedBadge(),
+                        if (isVerified) _RespectAiVerifiedBadge(tier: tier),
                       ],
                     ),
                     const SizedBox(height: 2),
-                    Text(username, style: TextStyle(color: muted, fontWeight: FontWeight.w800, fontSize: 12.5)),
+                    Row(children: [Expanded(child: Text(username, style: TextStyle(color: muted, fontWeight: FontWeight.w800, fontSize: 12.5))), if (tier != 'free') Container(padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3), decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: .10), borderRadius: BorderRadius.circular(999)), child: Text(SupabaseService.tierDisplayName(tier), style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w900, fontSize: 10))) ]),
                     if (bio.trim().isNotEmpty) ...[
                       const SizedBox(height: 5),
                       Text(
@@ -1533,6 +1903,7 @@ class _UserResultCard extends StatelessWidget {
                         ),
                       ),
                     ],
+                    if (tier != 'free') ...[const SizedBox(height: 5), Text(powerText, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: AppColors.purple.withValues(alpha: .92), fontWeight: FontWeight.w800, fontSize: 11.5))],
                   ],
                 ),
               ),

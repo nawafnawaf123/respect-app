@@ -109,6 +109,14 @@ class PushNotificationService {
 
   static Map<String, dynamic> _payloadFromData(Map<String, dynamic> data) {
     final type = data['type']?.toString();
+    if (type == 'general_notification' || type == 'general') {
+      return {
+        'type': 'general_notification',
+        'id': (data['id'] ?? data['notificationId'] ?? data['notification_id'] ?? '').toString(),
+        'title': (data['title'] ?? 'Respect').toString(),
+        'body': (data['body'] ?? data['text'] ?? '').toString(),
+      };
+    }
     if (type == 'call') {
       return {
         'type': 'call',

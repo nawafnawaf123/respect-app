@@ -311,7 +311,7 @@ class IncomingCallFullScreenActivity : AppCompatActivity() {
     private fun executeAction(accepted: Boolean) {
         val action = if (accepted) "accept" else "reject"
 
-        sendResultToFlutter(action)
+        IncomingCallForegroundService.stop(this)
 
         if (accepted) {
             val launchIntent = Intent(this, MainActivity::class.java).apply {
@@ -330,11 +330,9 @@ class IncomingCallFullScreenActivity : AppCompatActivity() {
             startActivity(launchIntent)
         }
 
-        // تأخير إنهاء النشاط لإعطاء وقت للبث والتطبيق الرئيسي للظهور
         swipePillContainer.postDelayed({
             finishAndRemoveTask()
-            IncomingCallForegroundService.stop(this@IncomingCallFullScreenActivity)
-        }, 300)
+        }, 180)
     }
 
     private fun startPulseAnimation() {
@@ -398,9 +396,18 @@ class IncomingCallFullScreenActivity : AppCompatActivity() {
             actionTriggered = true
             triggerActionFlash(false)
             swipePillContainer.postDelayed({
-                sendResultToFlutter("reject")
-                finishAndRemoveTask()
                 IncomingCallForegroundService.stop(this)
+                val launchIntent = Intent(this, MainActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    putExtra("action", "reject")
+                    putExtra("callId", callId)
+                    putExtra("callerName", callerName)
+                    putExtra("callerUsername", callerUsername)
+                    putExtra("callerAvatarPath", callerAvatar)
+                    putExtra("video", video)
+                }
+                startActivity(launchIntent)
+                finishAndRemoveTask()
             }, 250)
         }
     }

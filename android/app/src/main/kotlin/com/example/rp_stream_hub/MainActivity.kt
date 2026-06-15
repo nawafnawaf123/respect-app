@@ -11,6 +11,28 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "incoming_call_channel"
+
+    companion object {
+        private val handledActions = LinkedHashMap<String, Long>()
+        private const val ACTION_TTL_MS = 2 * 60 * 1000L
+
+        private fun cleanupHandledActions() {
+            val now = System.currentTimeMillis()
+            val iterator = handledActions.entries.iterator()
+            while (iterator.hasNext()) {
+                val entry = iterator.next()
+                if (now - entry.value > ACTION_TTL_MS) iterator.remove()
+            }
+        }
+
+        private fun markActionHandled(action: String, callId: String): Boolean {
+            cleanupHandledActions()
+            val key = "$action:$callId"
+            if (handledActions.containsKey(key)) return false
+            handledActions[key] = System.currentTimeMillis()
+            return true
+        }
+    }
     private lateinit var methodChannel: MethodChannel
 
     private var pendingAction: String? = null
@@ -63,6 +85,15 @@ class MainActivity : FlutterActivity() {
                     result.success(true)
                 }
 
+                "stopIncomingCall" -> {
+                    try {
+                        IncomingCallForegroundService.stop(this)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.success(false)
+                    }
+                }
+
                 "consumePendingCallAction" -> {
                     val action = pendingAction
                     val callId = pendingCallId
@@ -105,6 +136,11 @@ class MainActivity : FlutterActivity() {
 
         if (action.isBlank() || callId.isBlank()) return
 
+        if (sendNow && !markActionHandled(action, callId)) {
+            clearIntentCallAction(intent)
+            return
+        }
+
         pendingAction = action
         pendingCallId = callId
         pendingCallerName = intent.getStringExtra("callerName") ?: intent.getStringExtra("caller_name") ?: "مستخدم"
@@ -127,6 +163,20 @@ class MainActivity : FlutterActivity() {
                     "video" to pendingVideo
                 )
             )
+            clearPendingAction()
+            clearIntentCallAction(intent)
+        }
+    }
+
+    private fun clearIntentCallAction(intent: Intent?) {
+        try {
+            intent?.removeExtra("action")
+            intent?.removeExtra("callId")
+            intent?.removeExtra("callerName")
+            intent?.removeExtra("callerUsername")
+            intent?.removeExtra("callerAvatarPath")
+            intent?.removeExtra("video")
+        } catch (_: Exception) {
         }
     }
 

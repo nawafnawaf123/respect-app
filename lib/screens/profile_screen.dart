@@ -12,12 +12,14 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:video_player/video_player.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:webview_flutter/webview_flutter.dart';
 
 import '../theme/app_theme.dart';
 import '../widgets/glass_card.dart';
 import '../widgets/primary_button.dart';
 import '../services/supabase_service.dart';
 import '../services/notification_service.dart';
+import 'search_screen.dart';
 
 void _scannerSafeIgnore([Object? error, StackTrace? stackTrace]) {}
 
@@ -69,6 +71,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   List<Map<String, dynamic>> _followersUsers = <Map<String, dynamic>>[];
   List<Map<String, dynamic>> _followingUsers = <Map<String, dynamic>>[];
   bool _profileVerified = false;
+  String _profileSubscriptionTier = 'free';
+  Map<String, int> _profileAnalytics = const <String, int>{};
   int _activeWarnings = 0;
   DateTime? _verifiedUntil;
   bool _activatingVerification = false;
@@ -79,6 +83,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Set<String> _repostedPostIds = <String>{};
   Set<String> _savedPostIds = <String>{};
   final Set<String> _pendingPostActionIds = <String>{};
+  int _selectedProfileTab = 0;
 
   @override
   void initState() {
@@ -86,10 +91,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _loadProfile().then((_) {
       if (!mounted) return;
       _loadProfileContent();
-      _refreshSavedStream(silent: true);
-      _streamRefreshTimer = Timer.periodic(const Duration(seconds: 25), (_) {
-        if (mounted) _refreshSavedStream(silent: true);
-      });
     });
   }
 
@@ -269,10 +270,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _bioCtrl.text = (account['bio'] ?? 'لاعب ومتابع لمجتمع Respect App').toString();
     _locationCtrl.text = (account['location'] ?? 'Respect City').toString();
     _websiteCtrl.text = (account['website'] ?? '').toString();
-    _streamUrlCtrl.text = (account['streamUrl'] ?? '').toString();
-    _streamerNameCtrl.text = (account['streamName'] ?? account['streamerName'] ?? '').toString();
-    _streamTitleCtrl.text = (account['streamTitle'] ?? '').toString();
-    _streamViewersCtrl.text = (account['streamViewers'] ?? '0').toString();
     setState(() {
       final accountSafeId = _safeFileId(id ?? _usernameCtrl.text);
       // نفضّل رابط السيرفر حتى تظهر الصورة من كل الأجهزة، ونبقي المحلي كاحتياط.
@@ -282,9 +279,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
           account['imagePath'])
           ?.toString();
       _coverPath = (account['cover_url'] ?? account['coverPath'] ?? account['localCoverPath_$accountSafeId'])?.toString();
-      _streamThumbnailPath = (account['streamThumbnailPath'] ?? account['streamThumbnailUrl'])?.toString();
-      _streamIsLive = account['streamIsLive'] == true || account['streamIsLive']?.toString() == 'true';
       _profileVerified = SupabaseService.isVerifiedUser(account);
+      _profileSubscriptionTier = SupabaseService.subscriptionTierForUser(account);
       _verifiedUntil = SupabaseService.verifiedUntilForUser(account);
       _loading = false;
       _following = loadedFollowing;
@@ -293,6 +289,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     try {
       final warnings = await SupabaseService.activeWarningCount(_cleanUsername(_usernameCtrl.text));
       if (mounted) setState(() => _activeWarnings = warnings);
+    } catch (_) { _scannerSafeIgnore(); }
+    try {
+      final analytics = await SupabaseService.getPostAnalyticsSummary(_cleanUsername(_usernameCtrl.text));
+      if (mounted) setState(() => _profileAnalytics = analytics);
     } catch (_) { _scannerSafeIgnore(); }
     unawaited(_refreshMyStories());
   }
@@ -651,114 +651,562 @@ class _ProfileScreenState extends State<ProfileScreen> {
       backgroundColor: Colors.transparent,
       builder: (context) {
         final isDark = Theme.of(context).brightness == Brightness.dark;
+        final muted = isDark ? AppColors.darkMuted : AppColors.lightMuted;
+        final plans = SupabaseService.verificationPlans;
+
+        List<Map<String, dynamic>> plansForTier(String tierId) {
+          return plans
+              .where((p) => (p['tier'] ?? '').toString() == tierId)
+              .map((p) => Map<String, dynamic>.from(p))
+              .toList();
+        }
+
+        IconData tierIcon(String id) {
+          if (id == 'premium') return Icons.diamond_rounded;
+          if (id == 'gold') return Icons.workspace_premium_rounded;
+          return Icons.star_rounded;
+        }
+
+        List<Color> tierGradient(String id) {
+          if (id == 'premium') return const [Color(0xFF5B21B6), Color(0xFFE879F9), Color(0xFF22D3EE)];
+          if (id == 'gold') return const [Color(0xFF92400E), Color(0xFFF59E0B), Color(0xFFFDE68A)];
+          return const [Color(0xFF475569), Color(0xFFCBD5E1), Color(0xFF94A3B8)];
+        }
+
+        String priceText(dynamic value) {
+          final price = double.tryParse((value ?? 0).toString()) ?? 0;
+          return '\$${price.toStringAsFixed(price.truncateToDouble() == price ? 0 : 2)}';
+        }
+
+        Map<String, List<String>> benefitGroups(String tierId, String maxChars, String aiLimit) {
+          if (tierId == 'premium') {
+            return <String, List<String>>{
+              'التوثيق والهوية': <String>[
+                'توثيق ألماسي واضح يظهر بجانب اسمك في البروفايل والفيد والبحث',
+                'إطار ألماسي للبروفايل والصورة والغلاف',
+                'حماية أعلى لاسم المستخدم من التقليد',
+              ],
+              'الظهور والانتشار': <String>[
+                'أقوى أولوية ظهور في الفيد مع الحفاظ على حداثة المنشورات',
+                'أولوية أعلى في نتائج البحث وقسم الحسابات المميزة',
+                'تواصل رسمي وظهور احترافي في البروفايل',
+              ],
+              'النشر والمحتوى': <String>[
+                '$maxChars حرف للتغريدة الواحدة',
+                'تثبيت 3 منشورات في البروفايل',
+                'رفع فيديوهات أطول وجودة أعلى حسب إعدادات التطبيق',
+                'فتح الستوري والميزات القادمة للموثقين',
+              ],
+              'الذكاء والخصوصية': <String>[
+                '$aiLimit رد Respect AI يوميًا',
+                'إحصائيات متقدمة للحساب والمنشورات',
+                'استقبال الرسائل من الحسابات الموثقة فقط عند تفعيل الخصوصية',
+                'أولوية دعم ومراجعة أسرع للبلاغات والمشاكل',
+              ],
+            };
+          }
+          if (tierId == 'gold') {
+            return <String, List<String>>{
+              'التوثيق والهوية': <String>[
+                'توثيق ذهبي واضح بجانب الاسم في البروفايل والفيد والبحث',
+                'إطار ذهبي للبروفايل والصورة',
+                'زر تواصل رسمي في البروفايل',
+              ],
+              'الظهور والانتشار': <String>[
+                'أولوية ظهور قوية في الفيد',
+                'ظهور أفضل في نتائج البحث من الحسابات العادية والفضية',
+                'مناسب لصناع المحتوى والحسابات النشطة',
+              ],
+              'النشر والمحتوى': <String>[
+                '$maxChars حرف للتغريدة الواحدة',
+                'تثبيت منشورين في البروفايل',
+                'فتح الستوري وميزات الموثقين',
+              ],
+              'الذكاء والخصوصية': <String>[
+                '$aiLimit رد Respect AI يوميًا',
+                'إحصائيات للمنشورات والتفاعل',
+                'استقبال الرسائل من الحسابات الموثقة فقط عند تفعيل الخصوصية',
+              ],
+            };
+          }
+          return <String, List<String>>{
+            'التوثيق والهوية': <String>[
+              'توثيق فضي يظهر بجانب الاسم في البروفايل والفيد والبحث',
+              'إطار فضي للبروفايل والصورة',
+              'شارة عضو موثق في التعليقات والرسائل',
+            ],
+            'الظهور والانتشار': <String>[
+              'أولوية ظهور خفيفة في الفيد',
+              'تمييز بسيط في نتائج البحث',
+            ],
+            'النشر والمحتوى': <String>[
+              '$maxChars حرف للتغريدة الواحدة',
+              'تثبيت منشور واحد في البروفايل',
+              'فتح الستوري',
+            ],
+            'الذكاء والمساعدة': <String>[
+              '$aiLimit رد Respect AI يوميًا',
+              'مناسبة للمستخدمين الجدد والتجربة',
+            ],
+          };
+        }
+
+        String tierSummary(String tierId) {
+          if (tierId == 'premium') return 'أقوى حضور وهيبة داخل Respect: توثيق ألماسي، أولوية ظهور، بروفايل مميز، وإحصائيات متقدمة.';
+          if (tierId == 'gold') return 'أفضل خيار للحسابات النشطة: توثيق ذهبي، ظهور أعلى، رسائل موثقين فقط، وتثبيت منشورين.';
+          return 'بداية قوية للتوثيق: علامة فضية، ستوري، حد كتابة أعلى، وظهور أفضل من الحسابات العادية.';
+        }
+
         return StatefulBuilder(
           builder: (context, setSheet) {
-            return Padding(
-              padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-              child: Container(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+            Widget featureChip(String text, List<Color> gradient) {
+              return Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
                 decoration: BoxDecoration(
-                  color: isDark ? AppColors.darkBg : AppColors.lightBg,
-                  borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-                  border: Border.all(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
+                  color: gradient.first.withValues(alpha: .10),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: gradient.first.withValues(alpha: .18)),
                 ),
-                child: SafeArea(
-                  top: false,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Center(child: Container(width: 46, height: 5, decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: .55), borderRadius: BorderRadius.circular(99)))),
-                      const SizedBox(height: 16),
-                      Row(
+                child: Text(
+                  text,
+                  style: TextStyle(
+                    color: isDark ? Colors.white.withValues(alpha: .90) : const Color(0xFF2D2338),
+                    fontWeight: FontWeight.w800,
+                    fontSize: 11.5,
+                  ),
+                ),
+              );
+            }
+
+            Widget featureRow(String text, List<Color> gradient) {
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 9),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: 20,
+                      height: 20,
+                      margin: const EdgeInsets.only(top: 1),
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: LinearGradient(colors: gradient),
+                      ),
+                      child: const Icon(Icons.check_rounded, size: 14, color: Colors.white),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        text,
+                        style: TextStyle(
+                          height: 1.35,
+                          fontWeight: FontWeight.w800,
+                          color: isDark ? Colors.white.withValues(alpha: .92) : const Color(0xFF201726),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }
+
+            Widget powerPreview(String tierId, List<Color> gradient) {
+              final verifiedLabel = tierId == 'premium'
+                  ? 'توثيق ألماسي'
+                  : tierId == 'gold'
+                      ? 'توثيق ذهبي'
+                      : 'توثيق فضي';
+              return Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(20),
+                  gradient: LinearGradient(
+                    begin: Alignment.topRight,
+                    end: Alignment.bottomLeft,
+                    colors: [gradient.first.withValues(alpha: .22), gradient.last.withValues(alpha: .08)],
+                  ),
+                  border: Border.all(color: gradient.first.withValues(alpha: .24)),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 48,
+                      height: 48,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: LinearGradient(colors: gradient),
+                        boxShadow: [BoxShadow(color: gradient.first.withValues(alpha: .30), blurRadius: 18)],
+                      ),
+                      child: Icon(tierIcon(tierId), color: Colors.white),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Container(
-                            padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: .15), shape: BoxShape.circle),
-                            child: const Icon(Icons.verified_rounded, color: AppColors.purple),
+                          Row(
+                            children: [
+                              Flexible(
+                                child: Text(
+                                  'اسمك يظهر بشكل مميز',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14),
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              _RespectAiVerifiedBadge(tier: tierId, large: false),
+                            ],
                           ),
-                          const SizedBox(width: 10),
-                          const Expanded(child: Text('توثيق حساب Respect', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900))),
+                          const SizedBox(height: 3),
+                          Text(verifiedLabel, style: TextStyle(color: muted, fontWeight: FontWeight.w800, fontSize: 12)),
                         ],
                       ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'التوثيق يفتح الستوري، علامة التوثيق، 2000 حرف للتغريدة، و 50 رد Respect AI يوميًا.',
-                        style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, height: 1.45, fontWeight: FontWeight.w700),
-                      ),
-                      const SizedBox(height: 14),
-                      ...SupabaseService.verificationPlans.map((plan) {
-                        final id = (plan['id'] ?? '').toString();
-                        final title = (plan['title'] ?? '').toString();
-                        final months = (plan['months'] ?? 1).toString();
-                        final price = double.tryParse((plan['price'] ?? 0).toString()) ?? 0;
-                        final badge = (plan['badge'] ?? '').toString();
-                        return Container(
-                          margin: const EdgeInsets.only(bottom: 10),
-                          padding: const EdgeInsets.all(12),
+                    ),
+                  ],
+                ),
+              );
+            }
+
+            Widget tierCard(Map<String, dynamic> tier) {
+              final tierId = (tier['id'] ?? '').toString();
+              final title = (tier['title'] ?? '').toString();
+              final badge = (tier['badge'] ?? '').toString();
+              final maxChars = (tier['maxPostChars'] ?? '').toString();
+              final aiLimit = (tier['aiDailyLimit'] ?? '').toString();
+              final groupedBenefits = benefitGroups(tierId, maxChars, aiLimit);
+              final tierPlans = plansForTier(tierId);
+              final gradient = tierGradient(tierId);
+
+              return Container(
+                margin: const EdgeInsets.only(bottom: 16),
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: isDark ? Colors.white.withValues(alpha: .045) : Colors.white.withValues(alpha: .86),
+                  borderRadius: BorderRadius.circular(26),
+                  border: Border.all(color: gradient.first.withValues(alpha: .38)),
+                  boxShadow: [BoxShadow(color: gradient.first.withValues(alpha: .12), blurRadius: 24, offset: const Offset(0, 12))],
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          width: 54,
+                          height: 54,
                           decoration: BoxDecoration(
-                            color: isDark ? Colors.white.withValues(alpha: .04) : Colors.white.withValues(alpha: .78),
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: AppColors.purple.withValues(alpha: .20)),
+                            shape: BoxShape.circle,
+                            gradient: LinearGradient(colors: gradient),
+                            boxShadow: [BoxShadow(color: gradient.first.withValues(alpha: .30), blurRadius: 18)],
+                          ),
+                          child: Icon(tierIcon(tierId), color: Colors.white, size: 27),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Flexible(child: Text(title, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 17))),
+                                  const SizedBox(width: 7),
+                                  _RespectAiVerifiedBadge(tier: tierId, large: false),
+                                ],
+                              ),
+                              const SizedBox(height: 4),
+                              Text('$badge • $maxChars حرف • $aiLimit AI يوميًا', style: TextStyle(color: muted, fontWeight: FontWeight.w800, fontSize: 12.5)),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      tierSummary(tierId),
+                      style: TextStyle(color: isDark ? Colors.white.withValues(alpha: .88) : const Color(0xFF2D2338), height: 1.45, fontWeight: FontWeight.w800),
+                    ),
+                    const SizedBox(height: 12),
+                    powerPreview(tierId, gradient),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        featureChip('شكل توثيق خاص', gradient),
+                        featureChip('ظهور أقوى', gradient),
+                        featureChip('بروفايل مميز', gradient),
+                        if (tierId != 'silver') featureChip('رسائل موثقين فقط', gradient),
+                        if (tierId == 'premium') featureChip('حماية الاسم', gradient),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    Text('المزايا مرتبة حسب الاستخدام:', style: TextStyle(fontWeight: FontWeight.w900, color: isDark ? Colors.white : const Color(0xFF201726))),
+                    const SizedBox(height: 10),
+                    for (final group in groupedBenefits.entries) ...[
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4, bottom: 8),
+                        child: Text(
+                          group.key,
+                          style: TextStyle(
+                            color: gradient.first,
+                            fontWeight: FontWeight.w900,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ),
+                      ...group.value.map((feature) => featureRow(feature, gradient)),
+                    ],
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: isDark ? Colors.black.withValues(alpha: .18) : Colors.white.withValues(alpha: .70),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: gradient.first.withValues(alpha: .16)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(Icons.payments_rounded, color: gradient.first),
+                              const SizedBox(width: 8),
+                              const Text('اختر مدة الاشتراك', style: TextStyle(fontWeight: FontWeight.w900)),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          Row(
+                            children: tierPlans.map((plan) {
+                              final id = (plan['id'] ?? '').toString();
+                              final duration = (plan['duration'] ?? '').toString();
+                              final durationTitle = duration == 'yearly'
+                                  ? 'سنة'
+                                  : duration == 'quarterly'
+                                      ? '3 أشهر'
+                                      : 'شهر';
+                              final planBadge = (plan['badge'] ?? '').toString();
+                              return Expanded(
+                                child: Padding(
+                                  padding: const EdgeInsetsDirectional.only(end: 7),
+                                  child: FilledButton(
+                                    onPressed: _activatingVerification
+                                        ? null
+                                        : () async {
+                                            setSheet(() => _activatingVerification = true);
+                                            await _startVerificationCheckout(id);
+                                            if (mounted) setSheet(() => _activatingVerification = false);
+                                          },
+                                    style: FilledButton.styleFrom(
+                                      backgroundColor: gradient.first,
+                                      foregroundColor: Colors.white,
+                                      padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 6),
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                    ),
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(durationTitle, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12)),
+                                        const SizedBox(height: 2),
+                                        Text(priceText(plan['price']), style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13)),
+                                        if (planBadge.isNotEmpty) ...[
+                                          const SizedBox(height: 2),
+                                          Text(planBadge, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontWeight: FontWeight.w800, fontSize: 9.5, color: Colors.white.withValues(alpha: .88))),
+                                        ],
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }
+
+            return DraggableScrollableSheet(
+              initialChildSize: .92,
+              minChildSize: .58,
+              maxChildSize: .97,
+              expand: false,
+              builder: (context, scrollController) {
+                return Container(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 22),
+                  decoration: BoxDecoration(
+                    color: isDark ? AppColors.darkBg : AppColors.lightBg,
+                    borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+                    border: Border.all(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
+                  ),
+                  child: SafeArea(
+                    top: false,
+                    child: ListView(
+                      controller: scrollController,
+                      physics: const BouncingScrollPhysics(),
+                      children: [
+                        Center(child: Container(width: 46, height: 5, decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: .55), borderRadius: BorderRadius.circular(99)))),
+                        const SizedBox(height: 16),
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: .15), shape: BoxShape.circle),
+                              child: const _RespectAiVerifiedBadge(tier: 'premium', large: true),
+                            ),
+                            const SizedBox(width: 10),
+                            const Expanded(child: Text('اشتراكات Respect', style: TextStyle(fontSize: 21, fontWeight: FontWeight.w900))),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'كل باقة لها شكل توثيق مختلف ومزايا واضحة. اختر الباقة المناسبة لك، ثم اختر مدة الاشتراك: شهر، 3 أشهر، أو سنة.',
+                          style: TextStyle(color: muted, height: 1.45, fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(height: 12),
+                        Container(
+                          padding: const EdgeInsets.all(13),
+                          decoration: BoxDecoration(
+                            color: AppColors.purple.withValues(alpha: .10),
+                            borderRadius: BorderRadius.circular(22),
+                            border: Border.all(color: AppColors.purple.withValues(alpha: .18)),
                           ),
                           child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Container(
-                                width: 46,
-                                height: 46,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  gradient: const LinearGradient(colors: [Color(0xFF7C3AED), Color(0xFFC084FC)]),
-                                  boxShadow: [BoxShadow(color: AppColors.purple.withValues(alpha: .28), blurRadius: 14)],
-                                ),
-                                child: const Icon(Icons.workspace_premium_rounded, color: Colors.white),
-                              ),
-                              const SizedBox(width: 12),
+                              const Icon(Icons.info_rounded, color: AppColors.purple),
+                              const SizedBox(width: 9),
                               Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(title, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
-                                    const SizedBox(height: 3),
-                                    Text('$months شهر • $badge', style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, fontWeight: FontWeight.w700)),
-                                  ],
+                                child: Text(
+                                  'بعد الاشتراك تظهر شارة الباقة على حسابك ومنشوراتك، وتتفعل حدود الكتابة وRespect AI والستوري وأولوية الظهور والميزات الخاصة حسب نوع الباقة.',
+                                  style: TextStyle(color: isDark ? Colors.white.withValues(alpha: .90) : const Color(0xFF2D2338), height: 1.45, fontWeight: FontWeight.w800),
                                 ),
-                              ),
-                              const SizedBox(width: 8),
-                              FilledButton(
-                                onPressed: _activatingVerification
-                                    ? null
-                                    : () async {
-                                  setSheet(() => _activatingVerification = true);
-                                  await _activateVerificationPlan(id);
-                                  if (mounted && Navigator.canPop(context)) Navigator.pop(context);
-                                },
-                                style: FilledButton.styleFrom(
-                                  backgroundColor: AppColors.purple,
-                                  foregroundColor: Colors.white,
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
-                                ),
-                                child: Text('\$${price.toStringAsFixed(price.truncateToDouble() == price ? 0 : 2)}', style: const TextStyle(fontWeight: FontWeight.w900)),
                               ),
                             ],
                           ),
-                        );
-                      }),
-                      const SizedBox(height: 4),
-                      Text(
-                        'ملاحظة: الزر الحالي يفعّل الاشتراك داخل قاعدة البيانات مباشرة. لاحقًا اربطه ببوابة دفع حقيقية قبل إطلاق التطبيق.',
-                        style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, fontSize: 12, height: 1.35),
-                      ),
-                    ],
+                        ),
+                        const SizedBox(height: 14),
+                        ...SupabaseService.subscriptionTiers.map((tier) => tierCard(Map<String, dynamic>.from(tier))),
+                        const SizedBox(height: 4),
+                        Text(
+                          'ملاحظة: الدفع يتم عبر Paddle. التفعيل يصير تلقائيًا بعد تأكيد الدفع من السيرفر عبر Webhook.',
+                          style: TextStyle(color: muted, fontSize: 12, height: 1.35),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-              ),
+                );
+              },
             );
           },
         );
       },
     );
     if (mounted) setState(() => _activatingVerification = false);
+  }
+
+
+  Future<void> _startVerificationCheckout(String planId) async {
+    try {
+      final username = _cleanUsername(_usernameCtrl.text);
+      final checkoutUrl = await SupabaseService.createVerificationCheckout(
+        username: username,
+        planId: planId,
+      );
+
+      if (!mounted) return;
+
+      // iOS: نفتح الدفع خارج التطبيق بدل WebView لتقليل مشاكل WebKit/الدفع داخل التطبيق.
+      // ملاحظة مهمة: لو سترفع التطبيق إلى App Store، اشتراكات الميزات الرقمية غالبًا تحتاج StoreKit/IAP.
+      if (Platform.isIOS) {
+        final opened = await launchUrl(Uri.parse(checkoutUrl), mode: LaunchMode.externalApplication);
+        if (!mounted) return;
+        NotificationService.showTopNotification(
+          opened
+              ? 'تم فتح صفحة الدفع في Safari. بعد إكمال الدفع ارجع للتطبيق وسيتم تحديث الاشتراك تلقائيًا.'
+              : 'تعذر فتح صفحة الدفع خارج التطبيق.',
+        );
+        await Future<void>.delayed(const Duration(seconds: 4));
+        await _refreshVerificationStatusFromServer();
+        Future<void>.delayed(const Duration(seconds: 10), () async {
+          await _refreshVerificationStatusFromServer();
+        });
+        return;
+      }
+
+      final paidOrClosed = await Navigator.of(context).push<bool>(
+        MaterialPageRoute(
+          fullscreenDialog: true,
+          builder: (_) => _PaddleCheckoutWebViewScreen(
+            checkoutUrl: checkoutUrl,
+            title: 'دفع الاشتراك',
+          ),
+        ),
+      );
+
+      if (!mounted) return;
+
+      if (paidOrClosed == true) {
+        NotificationService.showTopNotification(
+          'تم تأكيد الدفع داخل التطبيق. يتم الآن تحديث حالة الاشتراك...',
+        );
+      } else {
+        NotificationService.showTopNotification(
+          'تم إغلاق صفحة الدفع. إذا أكملت الدفع سيتم تفعيل التوثيق تلقائيًا خلال لحظات.',
+        );
+      }
+
+      await Future<void>.delayed(const Duration(seconds: 2));
+      await _refreshVerificationStatusFromServer();
+
+      Future<void>.delayed(const Duration(seconds: 7), () async {
+        await _refreshVerificationStatusFromServer();
+      });
+    } catch (e) {
+      if (!mounted) return;
+      NotificationService.showTopError('تعذر إنشاء صفحة الدفع داخل التطبيق: $e');
+    } finally {
+      if (mounted) setState(() => _activatingVerification = false);
+    }
+  }
+
+  Future<void> _refreshVerificationStatusFromServer() async {
+    try {
+      final username = _cleanUsername(_usernameCtrl.text);
+      final user = await SupabaseService.getUserByUsername(username);
+      if (user == null) return;
+
+      final verified = SupabaseService.isVerifiedUser(user);
+      final until = SupabaseService.verifiedUntilForUser(user);
+
+      final fresh = <String, dynamic>{
+        'is_verified': user['is_verified'] ?? verified,
+        'verified': user['verified'] ?? verified,
+        'respect_verified': user['respect_verified'] ?? verified,
+        'verification_status': user['verification_status'] ?? (verified ? 'active' : null),
+        'subscription_tier': user['subscription_tier'] ?? (verified ? 'verified' : null),
+        'verified_until': user['verified_until'],
+        'verification_expires_at': user['verification_expires_at'],
+        'subscription_expires_at': user['subscription_expires_at'],
+        'verification_plan': user['verification_plan'],
+      }..removeWhere((key, value) => value == null);
+
+      await _updateAccount(fresh);
+      if (!mounted) return;
+      setState(() {
+        _profileVerified = verified;
+        _verifiedUntil = until;
+      });
+
+      if (verified) {
+        await widget.onProfileUpdated?.call();
+        NotificationService.showTopSuccess('تم تفعيل التوثيق حتى ${_formatVerifiedUntil(_verifiedUntil)}');
+      }
+    } catch (_) {
+      _scannerSafeIgnore();
+    }
   }
 
   Future<void> _activateVerificationPlan(String planId) async {
@@ -818,6 +1266,98 @@ class _ProfileScreenState extends State<ProfileScreen> {
         .toSet();
     if (ids.isEmpty) return false;
     return ids.every(_seenStoryIds.contains);
+  }
+
+
+  bool get _hasPrivateStory => _myStories.any((s) =>
+      SupabaseService.truthy(s['is_private']) || (s['privacy'] ?? '').toString().toLowerCase() == 'private');
+
+  Future<List<String>?> _choosePrivateStoryViewers() async {
+    final current = _cleanUsername(_usernameCtrl.text);
+    List<Map<String, dynamic>> following = <Map<String, dynamic>>[];
+    try {
+      following = await SupabaseService.getUserFollowing(current);
+    } catch (_) { _scannerSafeIgnore(); }
+    if (!mounted) return null;
+    final selected = <String>{};
+    return showModalBottomSheet<List<String>>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            return DraggableScrollableSheet(
+              initialChildSize: .72,
+              minChildSize: .45,
+              maxChildSize: .92,
+              builder: (_, controller) => Container(
+                decoration: BoxDecoration(
+                  color: isDark ? AppColors.darkCard : AppColors.lightCard,
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+                  border: Border.all(color: AppColors.purple.withValues(alpha: .20)),
+                ),
+                child: Column(
+                  children: [
+                    const SizedBox(height: 10),
+                    Container(width: 42, height: 5, decoration: BoxDecoration(color: Colors.grey.withValues(alpha: .45), borderRadius: BorderRadius.circular(99))),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(18, 18, 18, 10),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.lock_rounded, color: Color(0xFF00C853)),
+                          const SizedBox(width: 8),
+                          const Expanded(child: Text('ستوري خاص', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18))),
+                          TextButton(onPressed: () => Navigator.pop(context, <String>[]), child: const Text('عام')),
+                          FilledButton(
+                            onPressed: selected.isEmpty ? null : () => Navigator.pop(context, selected.toList()),
+                            child: Text('نشر خاص (${selected.length})'),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 18),
+                      child: Text(
+                        'اختر الأشخاص من الذين تتابعهم. سيظهر إطار الستوري عندهم باللون الأخضر ولن يستطيع غيرهم فتح الملف المشفر.',
+                        style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, height: 1.45),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Expanded(
+                      child: following.isEmpty
+                          ? const Center(child: Text('لا يوجد أشخاص تتابعهم لاختيارهم'))
+                          : ListView.builder(
+                              controller: controller,
+                              itemCount: following.length,
+                              itemBuilder: (_, i) {
+                                final user = following[i];
+                                final username = SupabaseService.displayUsername((user['username'] ?? '').toString());
+                                final name = (user['name'] ?? user['profileName'] ?? username).toString();
+                                final avatar = (user['avatar_url'] ?? user['imagePath'] ?? user['profileImagePath'] ?? '').toString();
+                                final checked = selected.contains(username);
+                                return CheckboxListTile(
+                                  value: checked,
+                                  activeColor: const Color(0xFF00C853),
+                                  onChanged: (_) => setSheetState(() {
+                                    checked ? selected.remove(username) : selected.add(username);
+                                  }),
+                                  secondary: CircleAvatar(backgroundImage: _fileImage(avatar), child: _fileImage(avatar) == null ? const Icon(Icons.person) : null),
+                                  title: Text(name, style: const TextStyle(fontWeight: FontWeight.w900)),
+                                  subtitle: Text(username),
+                                );
+                              },
+                            ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 
   Future<void> _handleProfileAvatarTap() async {
@@ -954,6 +1494,52 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
 
     if (items.isEmpty) return;
+
+    final privacy = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        padding: const EdgeInsets.fromLTRB(18, 18, 18, 26),
+        decoration: BoxDecoration(
+          color: Theme.of(context).brightness == Brightness.dark ? AppColors.darkCard : AppColors.lightCard,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(width: 42, height: 5, decoration: BoxDecoration(color: Colors.grey.withValues(alpha: .45), borderRadius: BorderRadius.circular(99))),
+            const SizedBox(height: 18),
+            const Text('نوع الستوري', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 19)),
+            const SizedBox(height: 14),
+            ListTile(
+              leading: const Icon(Icons.public_rounded, color: AppColors.purple),
+              title: const Text('ستوري عادي مشفر', style: TextStyle(fontWeight: FontWeight.w900)),
+              subtitle: const Text('يظهر بشكل عادي لكن ملف الصورة/الفيديو يكون مشفرًا'),
+              onTap: () => Navigator.pop(context, 'normal'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.lock_rounded, color: Color(0xFF00C853)),
+              title: const Text('ستوري خاص', style: TextStyle(fontWeight: FontWeight.w900)),
+              subtitle: const Text('تختار أشخاص محددين ويظهر لهم بإطار أخضر'),
+              onTap: () => Navigator.pop(context, 'private'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (privacy == null) return;
+    var privateStory = privacy == 'private';
+    var allowedViewers = <String>[];
+    if (privateStory) {
+      final selected = await _choosePrivateStoryViewers();
+      if (selected == null) return;
+      if (selected.isEmpty) {
+        privateStory = false;
+      } else {
+        allowedViewers = selected;
+      }
+    }
+
     setState(() => _loadingStory = true);
     try {
       await SupabaseService.addStoryMediaItems(
@@ -961,10 +1547,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
         name: _nameCtrl.text.trim().isEmpty ? _cleanUsername(_usernameCtrl.text) : _nameCtrl.text.trim(),
         mediaItems: items,
         avatarUrl: _profileImagePath ?? '',
+        privateStory: privateStory,
+        allowedViewers: allowedViewers,
       );
       await _refreshMyStories();
       if (!mounted) return;
-      NotificationService.showTopNotification('تم نشر ${items.length} عنصر في الستوري لمدة 24 ساعة');
+      NotificationService.showTopNotification(privateStory
+          ? 'تم نشر ستوري خاص مشفر لـ ${allowedViewers.length} شخص'
+          : 'تم نشر ${items.length} عنصر مشفر في الستوري لمدة 24 ساعة');
     } catch (e) {
       if (mounted) NotificationService.showTopError('تعذر نشر الستوري: $e');
     } finally {
@@ -1249,25 +1839,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Future<void> _saveProfile() async {
     if (_saving) return;
-    setState(() {
-      _saving = true;
-      _checkingStream = _streamUrlCtrl.text.trim().isNotEmpty;
-    });
+    setState(() => _saving = true);
 
     final name = _nameCtrl.text.trim().isEmpty ? 'Nawaf RP' : _nameCtrl.text.trim();
     final username = _cleanUsername(_usernameCtrl.text);
-    final streamUrl = _cleanStreamUrl(_streamUrlCtrl.text);
-    final metadata =
-    streamUrl.isEmpty ? _StreamMetadata.empty() : await _fetchStreamMetadata(streamUrl, fallbackName: name);
-    final cachedThumbnailPath = metadata.thumbnailUrl.trim().isEmpty
-        ? ''
-        : await _cacheBestStreamThumbnail(metadata.thumbnailUrl,
-        platform: metadata.platform, channel: _channelFromUrl(streamUrl));
-    final finalThumbnailPath = _safeStreamThumbnailValue(
-      cachedPath: cachedThumbnailPath,
-      remoteUrl: metadata.thumbnailUrl,
-      previousValue: _streamThumbnailPath,
-    );
 
     final profileUpdates = <String, dynamic>{};
     final pendingAvatar = _pendingProfileImagePath;
@@ -1301,16 +1876,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
       'bio': _bioCtrl.text.trim(),
       'location': _locationCtrl.text.trim(),
       'website': _websiteCtrl.text.trim(),
-      'streamUrl': streamUrl,
-      'streamName':
-      metadata.channelName.isNotEmpty ? metadata.channelName : _streamerNameCtrl.text.trim(),
-      'streamTitle': metadata.title,
-      'streamIsLive': metadata.isLive,
-      'streamViewers': metadata.viewers,
-      'streamThumbnailUrl': metadata.thumbnailUrl,
-      'streamThumbnailPath': finalThumbnailPath,
-      'streamPlatform': metadata.platform,
-      'streamLastCheckedAt': DateTime.now().toIso8601String(),
       ...profileUpdates,
     });
     try {
@@ -1325,14 +1890,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
     if (!mounted) return;
     _usernameCtrl.text = username;
-    _streamUrlCtrl.text = streamUrl;
-    _streamerNameCtrl.text =
-    metadata.channelName.isNotEmpty ? metadata.channelName : _streamerNameCtrl.text.trim();
-    _streamTitleCtrl.text = metadata.title;
-    _streamViewersCtrl.text = metadata.viewers.toString();
     setState(() {
-      _streamIsLive = metadata.isLive;
-      _streamThumbnailPath = finalThumbnailPath;
       if (profileUpdates['avatar_url'] != null) {
         _profileImagePath = profileUpdates['avatar_url']?.toString();
       } else if (profileUpdates['imagePath'] != null) {
@@ -1347,12 +1905,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
       _pendingCoverPath = null;
       _saving = false;
       _editing = false;
-      _checkingStream = false;
     });
     await _loadProfileContent();
-    NotificationService.showTopNotification(streamUrl.isEmpty
-        ? 'تم حفظ بيانات البروفايل'
-        : 'تم فحص رابط البث وحفظ البيانات تلقائيًا');
+    NotificationService.showTopNotification('تم حفظ بيانات البروفايل');
   }
 
   int _followersCount(String username) {
@@ -1365,441 +1920,427 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Premium profile layout: improved cover, avatar, stats card, tabs height without duplicating the file.
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final profileImage = _fileImage(_pendingProfileImagePath ?? _profileImagePath);
     final coverImage = _fileImage(_pendingCoverPath ?? _coverPath);
-    final streamThumbnail = _streamThumbnailPath;
+    final tierFrameColors = _profileSubscriptionTier == 'premium'
+        ? const [Color(0xFF5B21B6), Color(0xFFE879F9), Color(0xFF22D3EE)]
+        : _profileSubscriptionTier == 'gold'
+            ? const [Color(0xFF92400E), Color(0xFFF59E0B), Color(0xFFFDE68A)]
+            : _profileSubscriptionTier == 'silver'
+                ? const [Color(0xFF475569), Color(0xFFCBD5E1), Color(0xFF94A3B8)]
+                : const <Color>[];
+
+    final bg = isDark ? const Color(0xFF080810) : Colors.white;
+    final cardBg = isDark ? const Color(0xFF0D0D14) : Colors.white;
+    final border = isDark ? Colors.white.withValues(alpha: .10) : const Color(0xFFE6ECF0);
+    final muted = isDark ? AppColors.darkMuted : AppColors.lightMuted;
+    final displayName = _nameCtrl.text.trim().isEmpty ? 'Nawaf RP' : _nameCtrl.text.trim();
+    final username = _cleanUsername(_usernameCtrl.text);
+
+    Widget inlineStat({required String value, required String label, VoidCallback? onTap}) {
+      final child = Text.rich(
+        TextSpan(
+          children: [
+            TextSpan(text: value, style: TextStyle(color: isDark ? Colors.white : Colors.black, fontWeight: FontWeight.w900)),
+            TextSpan(text: ' $label', style: TextStyle(color: muted, fontWeight: FontWeight.w700)),
+          ],
+        ),
+      );
+      if (onTap == null) return child;
+      return InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: Padding(padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 4), child: child),
+      );
+    }
+
+    Widget actionPill({required IconData icon, required String text, required VoidCallback? onTap, bool filled = false}) {
+      return OutlinedButton.icon(
+        onPressed: onTap,
+        style: OutlinedButton.styleFrom(
+          backgroundColor: filled ? AppColors.purple : AppColors.purple.withValues(alpha: isDark ? .10 : .07),
+          foregroundColor: filled ? Colors.white : AppColors.purple,
+          side: BorderSide(color: filled ? AppColors.purple : AppColors.purple.withValues(alpha: .24)),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+          visualDensity: VisualDensity.compact,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+        ),
+        icon: Icon(icon, size: 17),
+        label: Text(text, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12.5)),
+      );
+    }
 
     return Scaffold(
       appBar: null,
+      backgroundColor: bg,
       body: _loading
           ? const Center(child: CircularProgressIndicator(color: AppColors.purple))
-          : ListView(
-        physics: const BouncingScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(14, 10, 14, 26),
-        children: [
-          GlassCard(
-            padding: EdgeInsets.zero,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    InkWell(
-                      onTap: _editing ? () => _pickImage(cover: true) : null,
-                      child: Container(
-                        height: 178,
-                        decoration: BoxDecoration(
-                          borderRadius:
-                          const BorderRadius.vertical(top: Radius.circular(30)),
-                          gradient: const LinearGradient(
-                              begin: Alignment.topRight,
-                              end: Alignment.bottomLeft,
-                              colors: [Color(0xFF160A2E), AppColors.purple, Color(0xFF05040A)]),
-                          image: coverImage == null
-                              ? null
-                              : DecorationImage(image: coverImage, fit: BoxFit.cover),
-                        ),
-                        child: _editing
-                            ? Align(
-                          alignment: Alignment.topLeft,
-                          child: Padding(
-                            padding: const EdgeInsets.all(12),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 10, vertical: 6),
-                              decoration: BoxDecoration(
-                                  color: Colors.black.withValues(alpha: .50),
-                                  border: Border.all(color: Colors.white.withValues(alpha: .18)),
-                                  borderRadius: BorderRadius.circular(999)),
-                              child: const Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(Icons.image_rounded, color: Colors.white, size: 16),
-                                  SizedBox(width: 5),
-                                  Text('تغيير الغلاف',
-                                      style: TextStyle(
+          : RefreshIndicator(
+              color: AppColors.purple,
+              onRefresh: _refreshProfileTimeline,
+              child: ListView(
+                physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
+                padding: EdgeInsets.zero,
+                children: [
+                  Container(
+                    color: cardBg,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SizedBox(
+                          height: 224,
+                          child: Stack(
+                            clipBehavior: Clip.none,
+                            children: [
+                            InkWell(
+                              onTap: _editing ? () => _pickImage(cover: true) : null,
+                              child: Container(
+                                height: 168,
+                                width: double.infinity,
+                                decoration: BoxDecoration(
+                                  gradient: const LinearGradient(
+                                    begin: Alignment.topRight,
+                                    end: Alignment.bottomLeft,
+                                    colors: [Color(0xFF14051F), AppColors.purple, Color(0xFF040308)],
+                                  ),
+                                  image: coverImage == null ? null : DecorationImage(image: coverImage, fit: BoxFit.cover),
+                                ),
+                                child: Stack(
+                                  children: [
+                                    Positioned.fill(
+                                      child: DecoratedBox(
+                                        decoration: BoxDecoration(
+                                          gradient: LinearGradient(
+                                            begin: Alignment.topCenter,
+                                            end: Alignment.bottomCenter,
+                                            colors: [Colors.transparent, Colors.black.withValues(alpha: .35)],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    if (_editing)
+                                      PositionedDirectional(
+                                        top: 12,
+                                        end: 12,
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                          decoration: BoxDecoration(
+                                            color: Colors.black.withValues(alpha: .48),
+                                            border: Border.all(color: Colors.white.withValues(alpha: .16)),
+                                            borderRadius: BorderRadius.circular(999),
+                                          ),
+                                          child: const Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Icon(Icons.image_rounded, color: Colors.white, size: 16),
+                                              SizedBox(width: 5),
+                                              Text('تغيير الغلاف', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            PositionedDirectional(
+                              start: 14,
+                              bottom: 8,
+                              child: InkWell(
+                                onTap: _handleProfileAvatarTap,
+                                borderRadius: BorderRadius.circular(999),
+                                child: Stack(
+                                  children: [
+                                    Container(
+                                      padding: EdgeInsets.all(_myStories.isNotEmpty || tierFrameColors.isNotEmpty ? 3.5 : 0),
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        gradient: _myStories.isEmpty
+                                            ? (tierFrameColors.isEmpty ? null : LinearGradient(colors: tierFrameColors))
+                                            : (_myStoriesFullySeen
+                                                ? const LinearGradient(colors: [Color(0xFF7A7A7A), Color(0xFF4B5563)])
+                                                : (_hasPrivateStory
+                                                    ? const LinearGradient(colors: [Color(0xFF00C853), Color(0xFF00E676), Color(0xFF1B5E20)])
+                                                    : const LinearGradient(colors: [Color(0xFFFFD166), AppColors.purple, Color(0xFF06D6A0)]))),
+                                        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: .20), blurRadius: 18, offset: const Offset(0, 8))],
+                                      ),
+                                      child: CircleAvatar(
+                                        radius: 54,
+                                        backgroundColor: cardBg,
+                                        child: CircleAvatar(
+                                          radius: 49,
+                                          backgroundColor: AppColors.purple,
+                                          backgroundImage: profileImage,
+                                          child: profileImage == null ? const Icon(Icons.person, color: Colors.white, size: 44) : null,
+                                        ),
+                                      ),
+                                    ),
+                                    PositionedDirectional(
+                                      end: 2,
+                                      bottom: 2,
+                                      child: Container(
+                                        padding: const EdgeInsets.all(7),
+                                        decoration: BoxDecoration(
+                                          color: _editing
+                                              ? AppColors.purple
+                                              : (_myStories.isEmpty ? AppColors.purple.withValues(alpha: .92) : (_myStoriesFullySeen ? Colors.grey.shade700 : AppColors.purple)),
+                                          shape: BoxShape.circle,
+                                          border: Border.all(color: cardBg, width: 2),
+                                        ),
+                                        child: Icon(
+                                          _editing ? Icons.camera_alt_rounded : (_myStories.isEmpty ? Icons.add_rounded : Icons.play_arrow_rounded),
                                           color: Colors.white,
-                                          fontWeight: FontWeight.w900)),
+                                          size: 17,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            PositionedDirectional(
+                              end: 14,
+                              bottom: 16,
+                              child: OutlinedButton.icon(
+                                onPressed: _saving
+                                    ? null
+                                    : () async {
+                                        if (_editing) {
+                                          await _saveProfile();
+                                        } else {
+                                          setState(() => _editing = true);
+                                        }
+                                      },
+                                style: OutlinedButton.styleFrom(
+                                  backgroundColor: _editing ? AppColors.purple : cardBg,
+                                  foregroundColor: _editing ? Colors.white : (isDark ? Colors.white : Colors.black),
+                                  side: BorderSide(color: _editing ? AppColors.purple : border, width: 1.2),
+                                  padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 9),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+                                ),
+                                icon: Icon(_editing ? Icons.save_rounded : Icons.edit_rounded, size: 17),
+                                label: Text(_editing ? (_saving ? 'جاري الحفظ...' : 'حفظ التعديل') : 'تعديل الملف الشخصي', style: const TextStyle(fontWeight: FontWeight.w900)),
+                              ),
+                            ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Padding(
+                          padding: const EdgeInsetsDirectional.fromSTEB(14, 0, 14, 14),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Flexible(
+                                          child: Text(
+                                            displayName,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900, letterSpacing: -.4),
+                                          ),
+                                        ),
+                                        if (_isRespectAiUsername(_usernameCtrl.text) || _profileVerified)
+                                          _RespectAiVerifiedBadge(
+                                            tier: _isRespectAiUsername(_usernameCtrl.text) ? 'premium' : _profileSubscriptionTier,
+                                            large: true,
+                                          ),
+                                      ],
+                                    ),
+                                  ),
                                 ],
                               ),
-                            ),
-                          ),
-                        )
-                            : Container(
-                          decoration: BoxDecoration(
-                            borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
-                            gradient: LinearGradient(
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                              colors: [Colors.transparent, Colors.black.withValues(alpha: .32)],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    PositionedDirectional(
-                      start: 18,
-                      bottom: -54,
-                      child: InkWell(
-                        onTap: _handleProfileAvatarTap,
-                        borderRadius: BorderRadius.circular(99),
-                        child: Stack(
-                          children: [
-                            Container(
-                              padding: EdgeInsets.all(_myStories.isNotEmpty ? 3 : 0),
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                gradient: _myStories.isEmpty
-                                    ? null
-                                    : (_myStoriesFullySeen
-                                    ? const LinearGradient(colors: [Color(0xFF7A7A7A), Color(0xFF4B5563)])
-                                    : const LinearGradient(colors: [Color(0xFFFFD166), AppColors.purple, Color(0xFF06D6A0)])),
+                              const SizedBox(height: 2),
+                              Row(
+                                children: [
+                                  Text(username, style: TextStyle(color: muted, fontWeight: FontWeight.w700)),
+                                  if (_profileSubscriptionTier != 'free') ...[
+                                    const SizedBox(width: 8),
+                                    _SubscriptionTierMiniBadge(tier: _profileSubscriptionTier),
+                                  ],
+                                ],
                               ),
-                              child: CircleAvatar(
-                                radius: 58,
-                                backgroundColor: isDark ? AppColors.darkBg : AppColors.lightBg,
-                                child: CircleAvatar(
-                                  radius: 51,
-                                  backgroundColor: AppColors.purple,
-                                  backgroundImage: profileImage,
-                                  child: profileImage == null
-                                      ? const Icon(Icons.person, color: Colors.white, size: 46)
-                                      : null,
-                                ),
+                              const SizedBox(height: 10),
+                              Text(
+                                _bioCtrl.text.trim().isEmpty ? 'أضف نبذة شخصية ليظهر حسابك بشكل أجمل' : _bioCtrl.text.trim(),
+                                style: const TextStyle(height: 1.42, fontSize: 14.5, fontWeight: FontWeight.w600),
                               ),
-                            ),
-                            if (_editing)
-                              PositionedDirectional(
-                                end: 2,
-                                bottom: 2,
-                                child: Container(
-                                  padding: const EdgeInsets.all(7),
-                                  decoration: const BoxDecoration(
-                                      color: AppColors.purple, shape: BoxShape.circle),
-                                  child: const Icon(Icons.camera_alt_rounded,
-                                      color: Colors.white, size: 16),
-                                ),
-                              )
-                            else if (_myStories.isNotEmpty)
-                              PositionedDirectional(
-                                end: 2,
-                                bottom: 2,
-                                child: Container(
-                                  padding: const EdgeInsets.all(7),
+                              if (_activeWarnings > 0) ...[
+                                const SizedBox(height: 10),
+                                Container(
+                                  padding: const EdgeInsets.all(11),
                                   decoration: BoxDecoration(
-                                      color: _myStoriesFullySeen ? Colors.grey.shade700 : AppColors.purple,
-                                      shape: BoxShape.circle),
-                                  child: const Icon(Icons.play_arrow_rounded,
-                                      color: Colors.white, size: 17),
+                                    color: AppColors.danger.withValues(alpha: 0.10),
+                                    borderRadius: BorderRadius.circular(16),
+                                    border: Border.all(color: AppColors.danger.withValues(alpha: 0.28)),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      const Icon(Icons.warning_amber_rounded, color: AppColors.danger),
+                                      const SizedBox(width: 9),
+                                      Expanded(child: Text('لديك $_activeWarnings تحذير من أصل 3. التحذير يختفي تلقائيًا بعد شهر بدون مخالفات.', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12.5))),
+                                    ],
+                                  ),
                                 ),
+                              ],
+                              const SizedBox(height: 11),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  if (_locationCtrl.text.trim().isNotEmpty) _InfoChip(icon: Icons.location_on_outlined, text: _locationCtrl.text.trim()),
+                                  if (_websiteCtrl.text.trim().isNotEmpty) _InfoChip(icon: Icons.link_rounded, text: _websiteCtrl.text.trim()),
+                                  _InfoChip(icon: Icons.calendar_month_rounded, text: 'انضممت إلى Respect'),
+                                ],
                               ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 66),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Flexible(
-                            child: Text(
-                              _nameCtrl.text.trim().isEmpty ? 'Nawaf RP' : _nameCtrl.text.trim(),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w900, letterSpacing: -.4),
-                            ),
-                          ),
-                          if (_isRespectAiUsername(_usernameCtrl.text) || _profileVerified) const _RespectAiVerifiedBadge(),
-                        ],
-                      ),
-                      const SizedBox(height: 2),
-                      Text(_cleanUsername(_usernameCtrl.text),
-                          style: TextStyle(
-                              color: isDark ? AppColors.darkMuted : AppColors.lightMuted,
-                              fontWeight: FontWeight.w700)),
-                      const SizedBox(height: 10),
-                      Text(
-                          _bioCtrl.text.trim().isEmpty
-                              ? 'أضف نبذة شخصية ليظهر حسابك بشكل أجمل'
-                              : _bioCtrl.text.trim(),
-                          style: const TextStyle(height: 1.45)),
-                      if (_activeWarnings > 0) ...[
-                        const SizedBox(height: 10),
-                        Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: AppColors.danger.withValues(alpha: 0.10),
-                            borderRadius: BorderRadius.circular(16),
-                            border: Border.all(color: AppColors.danger.withValues(alpha: 0.35)),
-                          ),
-                          child: Row(
-                            children: [
-                              const Icon(Icons.warning_amber_rounded, color: AppColors.danger),
-                              const SizedBox(width: 10),
-                              Expanded(child: Text('لديك $_activeWarnings تحذير من أصل 3. التحذير يختفي تلقائيًا بعد شهر بدون مخالفات.', style: const TextStyle(fontWeight: FontWeight.w900))),
+                              const SizedBox(height: 10),
+                              Wrap(
+                                spacing: 15,
+                                runSpacing: 4,
+                                crossAxisAlignment: WrapCrossAlignment.center,
+                                children: [
+                                  inlineStat(value: '$_postsCount', label: 'منشور'),
+                                  inlineStat(value: '${_followingUsers.length}', label: 'يتابع', onTap: () => _showUsersSheet('يتابع', _followingUsers)),
+                                  inlineStat(value: '${_followersUsers.length}', label: 'متابع', onTap: () => _showUsersSheet('المتابعون', _followersUsers)),
+                                ],
+                              ),
+                              const SizedBox(height: 12),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  actionPill(
+                                    icon: _profileVerified ? Icons.verified_rounded : Icons.workspace_premium_rounded,
+                                    text: _activatingVerification
+                                        ? 'جاري التفعيل...'
+                                        : (_profileVerified ? 'موثق حتى ${_formatVerifiedUntil(_verifiedUntil)}' : 'توثيق الحساب'),
+                                    onTap: _activatingVerification ? null : _openVerificationSheet,
+                                    filled: !_profileVerified,
+                                  ),
+                                  actionPill(
+                                    icon: !_profileVerified ? Icons.lock_rounded : (_myStories.isEmpty ? Icons.add_circle_outline_rounded : Icons.auto_stories_rounded),
+                                    text: _loadingStory
+                                        ? 'جاري النشر...'
+                                        : (!_profileVerified ? 'الستوري للموثقين' : (_myStories.isEmpty ? 'إضافة ستوري' : 'عرض الستوري')),
+                                    onTap: _loadingStory ? null : (_profileVerified ? (_myStories.isEmpty ? _pickStory : _openMyStory) : _openVerificationSheet),
+                                    filled: _profileVerified && _myStories.isNotEmpty,
+                                  ),
+                                ],
+                              ),
+                              if (_profileSubscriptionTier != 'free') ...[
+                                const SizedBox(height: 10),
+                                Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: AppColors.purple.withValues(alpha: isDark ? .12 : .07),
+                                    borderRadius: BorderRadius.circular(18),
+                                    border: Border.all(color: AppColors.purple.withValues(alpha: .14)),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      _RespectAiVerifiedBadge(tier: _profileSubscriptionTier, large: true),
+                                      const SizedBox(width: 9),
+                                      Expanded(
+                                        child: Text(
+                                          SupabaseService.tierPowerDescription(_profileSubscriptionTier),
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(fontWeight: FontWeight.w900, height: 1.35, fontSize: 12.5),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
                             ],
                           ),
                         ),
                       ],
-                      const SizedBox(height: 12),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
+                    ),
+                  ),
+                  if (_editing) ...[
+                    Container(
+                      width: double.infinity,
+                      color: cardBg,
+                      padding: const EdgeInsets.fromLTRB(14, 10, 14, 14),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          if (_locationCtrl.text.trim().isNotEmpty)
-                            _InfoChip(
-                                icon: Icons.location_on_outlined,
-                                text: _locationCtrl.text.trim()),
-                          if (_websiteCtrl.text.trim().isNotEmpty)
-                            _InfoChip(
-                                icon: Icons.link_rounded, text: _websiteCtrl.text.trim()),
-                          if (_streamerNameCtrl.text.trim().isNotEmpty)
-                            _InfoChip(
-                                icon: Icons.live_tv_rounded,
-                                text: _streamerNameCtrl.text.trim()),
-                          if (_streamUrlCtrl.text.trim().isNotEmpty)
-                            _InfoChip(
-                                icon: _streamIsLive
-                                    ? Icons.radio_button_checked
-                                    : Icons.tv_off_rounded,
-                                text: _streamIsLive ? 'يبث الآن' : 'قناة محفوظة'),
+                          const _SectionTitle('تعديل بيانات الحساب'),
+                          const SizedBox(height: 10),
+                          _ProfileField(controller: _nameCtrl, icon: Icons.badge_rounded, hint: 'اسم البروفايل'),
+                          const SizedBox(height: 10),
+                          _ProfileField(controller: _usernameCtrl, icon: Icons.alternate_email_rounded, hint: 'اسم المستخدم'),
+                          const SizedBox(height: 10),
+                          _ProfileField(controller: _bioCtrl, icon: Icons.short_text_rounded, hint: 'نبذة شخصية', maxLines: 3),
+                          const SizedBox(height: 10),
+                          _ProfileField(controller: _locationCtrl, icon: Icons.location_on_outlined, hint: 'الموقع'),
+                          const SizedBox(height: 10),
+                          _ProfileField(controller: _websiteCtrl, icon: Icons.link_rounded, hint: 'رابط شخصي'),
+                          if (_pendingProfileImagePath != null || _pendingCoverPath != null) ...[
+                            const SizedBox(height: 10),
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: AppColors.purple.withValues(alpha: .10),
+                                borderRadius: BorderRadius.circular(18),
+                                border: Border.all(color: AppColors.purple.withValues(alpha: .20)),
+                              ),
+                              child: const Row(
+                                children: [
+                                  Icon(Icons.info_rounded, color: AppColors.purple),
+                                  SizedBox(width: 8),
+                                  Expanded(child: Text('في صور مختارة تنتظر الحفظ. اضغط حفظ لتطبيق كل التعديلات.', style: TextStyle(fontWeight: FontWeight.w900))),
+                                ],
+                              ),
+                            ),
+                          ],
                         ],
                       ),
-                      const SizedBox(height: 14),
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(22),
-                          gradient: LinearGradient(
-                            colors: [
-                              AppColors.purple.withValues(alpha: isDark ? .18 : .10),
-                              Colors.white.withValues(alpha: isDark ? .04 : .55),
-                            ],
-                          ),
-                          border: Border.all(color: AppColors.purple.withValues(alpha: .12)),
-                        ),
-                        child: Row(children: [
-                          _StatBox(label: 'منشورات', value: '$_postsCount'),
-                          const SizedBox(width: 10),
-                          _StatBox(
-                              label: 'متابعون',
-                              value: '${_followersUsers.length}',
-                              onTap: () => _showUsersSheet('المتابعون', _followersUsers)),
-                          const SizedBox(width: 10),
-                          _StatBox(
-                              label: 'يتابع',
-                              value: '${_followingUsers.length}',
-                              onTap: () => _showUsersSheet('يتابع', _followingUsers)),
-                        ]),
-                      ),
-                      const SizedBox(height: 12),
-                      SizedBox(
-                        width: double.infinity,
-                        child: FilledButton.icon(
-                          onPressed: _activatingVerification ? null : _openVerificationSheet,
-                          style: FilledButton.styleFrom(
-                            backgroundColor: _profileVerified ? AppColors.purple.withValues(alpha: .14) : AppColors.purple,
-                            foregroundColor: _profileVerified ? AppColors.purple : Colors.white,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
-                          ),
-                          icon: Icon(_profileVerified ? Icons.verified_rounded : Icons.workspace_premium_rounded, size: 18),
-                          label: Text(
-                            _activatingVerification
-                                ? 'جاري التفعيل...'
-                                : (_profileVerified ? 'الحساب موثق حتى ${_formatVerifiedUntil(_verifiedUntil)}' : 'توثيق الحساب'),
-                            style: const TextStyle(fontWeight: FontWeight.w900),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      SizedBox(
-                        width: double.infinity,
-                        child: FilledButton.icon(
-                          onPressed: _loadingStory ? null : (_profileVerified ? (_myStories.isEmpty ? _pickStory : _openMyStory) : _openVerificationSheet),
-                          style: FilledButton.styleFrom(
-                            backgroundColor: !_profileVerified
-                                ? Colors.grey.withValues(alpha: .16)
-                                : (_myStories.isEmpty ? AppColors.purple.withValues(alpha: .16) : AppColors.purple),
-                            foregroundColor: !_profileVerified
-                                ? (isDark ? AppColors.darkMuted : AppColors.lightMuted)
-                                : (_myStories.isEmpty ? AppColors.purple : Colors.white),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
-                          ),
-                          icon: Icon(!_profileVerified ? Icons.lock_rounded : (_myStories.isEmpty ? Icons.add_circle_outline_rounded : Icons.auto_stories_rounded), size: 18),
-                          label: Text(
-                            _loadingStory
-                                ? 'جاري النشر...'
-                                : (!_profileVerified ? 'الستوري للحسابات الموثقة فقط' : (_myStories.isEmpty ? 'إضافة ستوري' : 'عرض الستوري / إضافة جديد')),
-                            style: const TextStyle(fontWeight: FontWeight.w900),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ).animate().fadeIn(),
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              const Expanded(child: _SectionTitle('الملف الشخصي')),
-              FilledButton.icon(
-                onPressed: _saving ? null : () async {
-                  if (_editing) {
-                    await _saveProfile();
-                  } else {
-                    setState(() => _editing = true);
-                  }
-                },
-                style: FilledButton.styleFrom(
-                  backgroundColor: _editing ? AppColors.purple : AppColors.purple.withValues(alpha: 0.18),
-                  foregroundColor: _editing ? Colors.white : AppColors.purple,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
-                ),
-                icon: Icon(_editing ? Icons.save_rounded : Icons.edit_rounded, size: 18),
-                label: Text(_editing ? 'حفظ' : 'ابدأ التعديل', style: const TextStyle(fontWeight: FontWeight.w900)),
-              ),
-            ],
-          ),
-          if (_editing) ...[
-            const SizedBox(height: 10),
-            _ProfileField(controller: _nameCtrl, icon: Icons.badge_rounded, hint: 'اسم البروفايل'),
-            const SizedBox(height: 10),
-            _ProfileField(controller: _usernameCtrl, icon: Icons.alternate_email_rounded, hint: 'اسم المستخدم'),
-            const SizedBox(height: 10),
-            _ProfileField(controller: _bioCtrl, icon: Icons.short_text_rounded, hint: 'نبذة شخصية', maxLines: 3),
-            const SizedBox(height: 10),
-            _ProfileField(controller: _locationCtrl, icon: Icons.location_on_outlined, hint: 'الموقع'),
-            const SizedBox(height: 10),
-            _ProfileField(controller: _websiteCtrl, icon: Icons.link_rounded, hint: 'رابط شخصي'),
-            if (_pendingProfileImagePath != null || _pendingCoverPath != null) ...[
-              const SizedBox(height: 10),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: AppColors.purple.withValues(alpha: .10),
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: AppColors.purple.withValues(alpha: .20)),
-                ),
-                child: const Row(
-                  children: [
-                    Icon(Icons.info_rounded, color: AppColors.purple),
-                    SizedBox(width: 8),
-                    Expanded(child: Text('في صور مختارة تنتظر الحفظ. اضغط حفظ لتطبيق كل التعديلات.', style: TextStyle(fontWeight: FontWeight.w900))),
-                  ],
-                ),
-              ),
-            ],
-          ],
-          const SizedBox(height: 14),
-          _ProfileContentTabs(
-            loading: _loadingProfileContent,
-            posts: _profilePosts,
-            media: _profileMedia,
-            replies: _profileReplies,
-            isDark: isDark,
-            imageProvider: _fileImage,
-            displayName: _nameCtrl.text.trim().isEmpty ? _cleanUsername(_usernameCtrl.text) : _nameCtrl.text.trim(),
-            username: _cleanUsername(_usernameCtrl.text),
-            avatarPath: _profileImagePath,
-            verified: _profileVerified,
-            likedPostIds: _likedPostIds,
-            repostedPostIds: _repostedPostIds,
-            savedPostIds: _savedPostIds,
-            pendingActionIds: _pendingPostActionIds,
-            onLike: _toggleLikePost,
-            onRepost: _toggleRepostPost,
-            onSave: _toggleSavePost,
-            onOptions: _openPostOptions,
-            onRefresh: _refreshProfileTimeline,
-          ),
-          const SizedBox(height: 14),
-          const _SectionTitle('بيانات البث'),
-          const SizedBox(height: 10),
-          _ProfileField(
-              controller: _streamUrlCtrl,
-              icon: Icons.link,
-              hint: 'ضع رابط Twitch أو Kick فقط وسيتم جلب البيانات تلقائيًا'),
-          const SizedBox(height: 10),
-          GlassCard(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(
-                        _streamIsLive
-                            ? Icons.radio_button_checked
-                            : Icons.tv_off_rounded,
-                        color: _streamIsLive
-                            ? AppColors.success
-                            : (isDark ? AppColors.darkMuted : AppColors.lightMuted)),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        _checkingStream
-                            ? 'يتم فحص رابط البث...'
-                            : (_streamUrlCtrl.text.trim().isEmpty
-                            ? 'أضف رابط البث ثم اضغط حفظ'
-                            : (_streamIsLive
-                            ? 'البث مباشر الآن'
-                            : 'القناة محفوظة / غير مباشر')),
-                        style: const TextStyle(
-                            fontWeight: FontWeight.w900, fontSize: 16),
-                      ),
                     ),
-                    if (_checkingStream)
-                      const SizedBox(width: 18, height: 18,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: AppColors.purple)),
                   ],
-                ),
-                const SizedBox(height: 12),
-                _AutoStreamPreview(
-                  thumbnailUrl: streamThumbnail,
-                  title: _streamTitleCtrl.text.trim(),
-                  channelName: _streamerNameCtrl.text.trim(),
-                  viewers:
-                  int.tryParse(_streamViewersCtrl.text.trim().replaceAll(',', '')) ?? 0,
-                  isLive: _streamIsLive,
-                  isDark: isDark,
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  'ملاحظة: البيانات تُجلب تلقائيًا من صفحة الرابط. بعض المنصات قد لا تعرض عدد المشاهدين إلا عبر API رسمي، لذلك يظهر 0 إذا لم يكن الرقم متاحًا في الصفحة.',
-                  style: TextStyle(
-                      fontSize: 12,
-                      height: 1.45,
-                      color: isDark ? AppColors.darkMuted : AppColors.lightMuted),
-                ),
-              ],
+                  _ProfileContentTabs(
+                    loading: _loadingProfileContent,
+                    posts: _profilePosts,
+                    media: _profileMedia,
+                    replies: _profileReplies,
+                    isDark: isDark,
+                    imageProvider: _fileImage,
+                    displayName: displayName,
+                    username: username,
+                    avatarPath: _profileImagePath,
+                    verified: _profileVerified,
+                    subscriptionTier: _profileSubscriptionTier,
+                    likedPostIds: _likedPostIds,
+                    repostedPostIds: _repostedPostIds,
+                    savedPostIds: _savedPostIds,
+                    pendingActionIds: _pendingPostActionIds,
+                    selectedTab: _selectedProfileTab,
+                    onTabChanged: (index) {
+                      if (_selectedProfileTab == index) return;
+                      setState(() => _selectedProfileTab = index);
+                    },
+                    onLike: _toggleLikePost,
+                    onRepost: _toggleRepostPost,
+                    onSave: _toggleSavePost,
+                    onOptions: _openPostOptions,
+                    onRefresh: _refreshProfileTimeline,
+                  ),
+                  const SizedBox(height: 28),
+                ],
+              ),
             ),
-          ),
-          if (_editing) ...[
-            const SizedBox(height: 18),
-            PrimaryButton(
-                text: _saving ? 'جاري الحفظ...' : 'حفظ بيانات الحساب',
-                icon: Icons.save,
-                onPressed: _saveProfile)
-                .animate()
-                .fadeIn(delay: 200.ms),
-          ],
-        ],
-      ),
     );
   }
 }
+
 
 
 
@@ -2040,6 +2581,16 @@ class _ProfileStoryViewerState extends State<_ProfileStoryViewer> {
   }
 
   Widget _media(String url) {
+    if (url.trim().isEmpty) {
+      return const Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.lock_rounded, color: Colors.white70, size: 74),
+          SizedBox(height: 12),
+          Text('هذا الستوري مشفر وغير متاح لهذا الحساب', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w800)),
+        ],
+      );
+    }
     if (_isVideo) {
       if (_controller?.value.isInitialized != true) {
         return const Center(child: CircularProgressIndicator(color: AppColors.purple));
@@ -3060,10 +3611,13 @@ class _ProfileContentTabs extends StatelessWidget {
   final String username;
   final String? avatarPath;
   final bool verified;
+  final String subscriptionTier;
   final Set<String> likedPostIds;
   final Set<String> repostedPostIds;
   final Set<String> savedPostIds;
   final Set<String> pendingActionIds;
+  final int selectedTab;
+  final ValueChanged<int> onTabChanged;
   final ImageProvider? Function(String? path) imageProvider;
   final Future<void> Function(Map<String, dynamic> post) onLike;
   final Future<void> Function(Map<String, dynamic> post) onRepost;
@@ -3082,10 +3636,13 @@ class _ProfileContentTabs extends StatelessWidget {
     required this.username,
     required this.avatarPath,
     required this.verified,
+    required this.subscriptionTier,
     required this.likedPostIds,
     required this.repostedPostIds,
     required this.savedPostIds,
     required this.pendingActionIds,
+    required this.selectedTab,
+    required this.onTabChanged,
     required this.onLike,
     required this.onRepost,
     required this.onSave,
@@ -3093,84 +3650,252 @@ class _ProfileContentTabs extends StatelessWidget {
     required this.onRefresh,
   });
 
+  Widget _divider() => Divider(height: 1, color: AppColors.purple.withValues(alpha: .10));
+
+  Widget _postCard(Map<String, dynamic> p, {bool mediaOnly = false}) {
+    final id = (p['id'] ?? '').toString();
+    return _ProfileTweetCard(
+      post: p,
+      isDark: isDark,
+      mediaOnly: mediaOnly,
+      displayName: (p['name'] ?? p['user'] ?? displayName).toString(),
+      username: SupabaseService.displayUsername((p['username'] ?? username).toString()),
+      avatarPath: (p['avatar_url'] ?? p['avatarPath'] ?? avatarPath ?? '').toString(),
+      verified: verified || p['author_verified'] == true || p['author_verified']?.toString() == 'true',
+      subscriptionTier: (p['author_subscription_tier'] ?? p['subscriptionTier'] ?? p['subscription_tier'] ?? subscriptionTier).toString(),
+      liked: likedPostIds.contains(id) || p['isLiked'] == true || p['is_liked'] == true,
+      reposted: repostedPostIds.contains(id) || p['isReposted'] == true || p['is_reposted'] == true,
+      saved: savedPostIds.contains(id) || p['isSaved'] == true || p['is_saved'] == true,
+      busy: pendingActionIds.any((e) => e.endsWith('_$id')),
+      imageProvider: imageProvider,
+      onLike: () => onLike(p),
+      onRepost: () => onRepost(p),
+      onSave: () => onSave(p),
+      onOptions: () => onOptions(p),
+    );
+  }
+
+  List<Widget> _postItems(List<Map<String, dynamic>> items, String emptyText, {bool mediaOnly = false}) {
+    if (items.isEmpty) return [_ProfileInlineEmpty(text: emptyText, isDark: isDark)];
+    final widgets = <Widget>[];
+    for (var i = 0; i < items.length; i++) {
+      widgets.add(_postCard(items[i], mediaOnly: mediaOnly));
+      if (i != items.length - 1) widgets.add(_divider());
+    }
+    return widgets;
+  }
+
+  List<Widget> _replyItems() {
+    if (replies.isEmpty) return [_ProfileInlineEmpty(text: 'لا توجد ردود بعد', isDark: isDark)];
+    final widgets = <Widget>[];
+    for (var i = 0; i < replies.length; i++) {
+      widgets.add(_ProfileInlineReplyCard(reply: replies[i], isDark: isDark, imageProvider: imageProvider));
+      if (i != replies.length - 1) widgets.add(_divider());
+    }
+    return widgets;
+  }
+
   @override
   Widget build(BuildContext context) {
-    return GlassCard(
-      padding: EdgeInsets.zero,
-      child: DefaultTabController(
-        length: 3,
-        child: SizedBox(
-          height: 720,
-          child: Column(
-            children: [
-              Container(
-                decoration: BoxDecoration(
-                  border: Border(bottom: BorderSide(color: AppColors.purple.withValues(alpha: .12))),
-                ),
-                child: TabBar(
-                  labelColor: AppColors.purple,
-                  unselectedLabelColor: isDark ? AppColors.darkMuted : AppColors.lightMuted,
-                  indicatorColor: AppColors.purple,
-                  indicatorWeight: 4,
-                  labelStyle: const TextStyle(fontWeight: FontWeight.w900),
-                  tabs: const [
-                    Tab(text: 'التغريدات'),
-                    Tab(text: 'الوسائط'),
-                    Tab(text: 'الردود'),
-                  ],
+    final bg = isDark ? const Color(0xFF0D0D14) : Colors.white;
+    final border = isDark ? Colors.white.withValues(alpha: .10) : const Color(0xFFE6ECF0);
+    final muted = isDark ? AppColors.darkMuted : AppColors.lightMuted;
+
+    Widget tabLabel(int index, String title, int count) {
+      final selected = selectedTab == index;
+      return Expanded(
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: loading ? null : () => onTabChanged(index),
+          child: Container(
+            height: 50,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              border: Border(
+                bottom: BorderSide(
+                  color: selected ? AppColors.purple : Colors.transparent,
+                  width: selected ? 3 : 0,
                 ),
               ),
-              Expanded(
-                child: loading
-                    ? const Center(child: CircularProgressIndicator(color: AppColors.purple))
-                    : TabBarView(
-                  children: [
-                    _ProfilePostsList(
-                      items: posts,
-                      emptyText: 'ما عندك تغريدات بعد',
-                      isDark: isDark,
-                      imageProvider: imageProvider,
-                      displayName: displayName,
-                      username: username,
-                      avatarPath: avatarPath,
-                      verified: verified,
-                      likedPostIds: likedPostIds,
-                      repostedPostIds: repostedPostIds,
-                      savedPostIds: savedPostIds,
-                      pendingActionIds: pendingActionIds,
-                      onLike: onLike,
-                      onRepost: onRepost,
-                      onSave: onSave,
-                      onOptions: onOptions,
-                      onRefresh: onRefresh,
-                    ),
-                    _ProfilePostsList(
-                      items: media,
-                      emptyText: 'ما عندك وسائط بعد',
-                      isDark: isDark,
-                      imageProvider: imageProvider,
-                      mediaOnly: true,
-                      displayName: displayName,
-                      username: username,
-                      avatarPath: avatarPath,
-                      verified: verified,
-                      likedPostIds: likedPostIds,
-                      repostedPostIds: repostedPostIds,
-                      savedPostIds: savedPostIds,
-                      pendingActionIds: pendingActionIds,
-                      onLike: onLike,
-                      onRepost: onRepost,
-                      onSave: onSave,
-                      onOptions: onOptions,
-                      onRefresh: onRefresh,
-                    ),
-                    _ProfileRepliesList(items: replies, isDark: isDark, imageProvider: imageProvider),
-                  ],
-                ),
+            ),
+            child: Text(
+              count > 0 ? '$title  $count' : title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: selected ? (isDark ? Colors.white : Colors.black) : muted,
+                fontWeight: selected ? FontWeight.w900 : FontWeight.w800,
+                fontSize: 13,
               ),
-            ],
+            ),
           ),
         ),
+      );
+    }
+
+    return Container(
+      width: double.infinity,
+      color: bg,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            decoration: BoxDecoration(
+              color: bg,
+              border: Border(
+                top: BorderSide(color: border),
+                bottom: BorderSide(color: border),
+              ),
+            ),
+            child: Row(
+              children: [
+                tabLabel(0, 'المنشورات', posts.length),
+                tabLabel(1, 'الوسائط', media.length),
+                tabLabel(2, 'الردود', replies.length),
+                SizedBox(
+                  width: 46,
+                  child: IconButton(
+                    onPressed: loading ? null : onRefresh,
+                    tooltip: 'تحديث',
+                    icon: Icon(Icons.refresh_rounded, size: 20, color: loading ? muted : AppColors.purple),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (loading)
+            const SizedBox(
+              height: 230,
+              child: Center(child: CircularProgressIndicator(color: AppColors.purple)),
+            )
+          else if (selectedTab == 0)
+            ..._postItems(posts, 'ما عندك تغريدات بعد')
+          else if (selectedTab == 1)
+            ..._postItems(media, 'ما عندك وسائط بعد', mediaOnly: true)
+          else
+            ..._replyItems(),
+        ],
+      ),
+    );
+  }
+}
+
+
+class _ProfileInlineSectionHeader extends StatelessWidget {
+  final String title;
+  final int count;
+
+  const _ProfileInlineSectionHeader({required this.title, required this.count});
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final muted = isDark ? AppColors.darkMuted : AppColors.lightMuted;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 16, 14, 9),
+      decoration: BoxDecoration(
+        color: AppColors.purple.withValues(alpha: isDark ? .08 : .055),
+        border: Border(
+          top: BorderSide(color: AppColors.purple.withValues(alpha: .10)),
+          bottom: BorderSide(color: AppColors.purple.withValues(alpha: .07)),
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(child: Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900))),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+            decoration: BoxDecoration(
+              color: AppColors.purple.withValues(alpha: .12),
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Text('$count', style: TextStyle(color: count == 0 ? muted : AppColors.purple, fontWeight: FontWeight.w900, fontSize: 12)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ProfileInlineEmpty extends StatelessWidget {
+  final String text;
+  final bool isDark;
+
+  const _ProfileInlineEmpty({required this.text, required this.isDark});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 28),
+      child: Center(
+        child: Text(
+          text,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: isDark ? AppColors.darkMuted : AppColors.lightMuted,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ProfileInlineReplyCard extends StatelessWidget {
+  final Map<String, dynamic> reply;
+  final bool isDark;
+  final ImageProvider? Function(String? path) imageProvider;
+
+  const _ProfileInlineReplyCard({required this.reply, required this.isDark, required this.imageProvider});
+
+  @override
+  Widget build(BuildContext context) {
+    final text = (reply['text'] ?? '').toString();
+    final postText = (reply['postText'] ?? '').toString();
+    final postUser = (reply['postUser'] ?? '').toString();
+    final avatar = imageProvider((reply['avatarPath'] ?? reply['author_avatar_url'] ?? '').toString());
+    final muted = isDark ? AppColors.darkMuted : AppColors.lightMuted;
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          CircleAvatar(
+            radius: 22,
+            backgroundColor: AppColors.purple,
+            backgroundImage: avatar,
+            child: avatar == null ? const Icon(Icons.reply_rounded, color: Colors.white, size: 20) : null,
+          ),
+          const SizedBox(width: 11),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _LinkifiedText(text.isEmpty ? 'رد بدون نص' : text, style: const TextStyle(fontWeight: FontWeight.w800, height: 1.45, fontSize: 15)),
+                if (postText.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: AppColors.purple.withValues(alpha: 0.10),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: AppColors.purple.withValues(alpha: 0.16)),
+                    ),
+                    child: _LinkifiedText(
+                      'ردًا على ${postUser.isEmpty ? 'منشور' : postUser}: $postText',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: muted, fontSize: 12, height: 1.35, fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -3185,6 +3910,7 @@ class _ProfilePostsList extends StatelessWidget {
   final String username;
   final String? avatarPath;
   final bool verified;
+  final String subscriptionTier;
   final Set<String> likedPostIds;
   final Set<String> repostedPostIds;
   final Set<String> savedPostIds;
@@ -3205,6 +3931,7 @@ class _ProfilePostsList extends StatelessWidget {
     required this.username,
     required this.avatarPath,
     required this.verified,
+    required this.subscriptionTier,
     required this.likedPostIds,
     required this.repostedPostIds,
     required this.savedPostIds,
@@ -3249,6 +3976,7 @@ class _ProfilePostsList extends StatelessWidget {
             username: SupabaseService.displayUsername((p['username'] ?? username).toString()),
             avatarPath: (p['avatar_url'] ?? p['avatarPath'] ?? avatarPath ?? '').toString(),
             verified: verified || p['author_verified'] == true || p['author_verified']?.toString() == 'true',
+            subscriptionTier: (p['author_subscription_tier'] ?? p['subscriptionTier'] ?? p['subscription_tier'] ?? subscriptionTier).toString(),
             liked: likedPostIds.contains(id) || p['isLiked'] == true || p['is_liked'] == true,
             reposted: repostedPostIds.contains(id) || p['isReposted'] == true || p['is_reposted'] == true,
             saved: savedPostIds.contains(id) || p['isSaved'] == true || p['is_saved'] == true,
@@ -3273,6 +4001,7 @@ class _ProfileTweetCard extends StatelessWidget {
   final String username;
   final String? avatarPath;
   final bool verified;
+  final String subscriptionTier;
   final bool liked;
   final bool reposted;
   final bool saved;
@@ -3291,6 +4020,7 @@ class _ProfileTweetCard extends StatelessWidget {
     required this.username,
     required this.avatarPath,
     required this.verified,
+    required this.subscriptionTier,
     required this.liked,
     required this.reposted,
     required this.saved,
@@ -3359,7 +4089,7 @@ class _ProfileTweetCard extends StatelessWidget {
                     Flexible(
                       child: Text(displayName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15.5)),
                     ),
-                    if (verified) const _RespectAiVerifiedBadge(),
+                    if (verified || subscriptionTier != 'free') _RespectAiVerifiedBadge(tier: subscriptionTier == 'free' ? 'premium' : subscriptionTier),
                     const SizedBox(width: 4),
                     Flexible(child: Text('$username · ${_timeLabel()}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: muted, fontWeight: FontWeight.w600, fontSize: 12.2))),
                     IconButton(onPressed: onOptions, icon: Icon(Icons.more_horiz_rounded, color: muted), visualDensity: VisualDensity.compact, padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 34, minHeight: 34)),
@@ -3424,13 +4154,28 @@ class _LinkifiedText extends StatelessWidget {
         this.textAlign,
       });
 
-  static final RegExp _urlRegex = RegExp(
-    r'(https?:\/\/[^\s]+|www\.[^\s]+)',
+  // نفس منطق الفيد: روابط + هاشتاقات قابلة للضغط.
+  // الهاشتاق يدعم العربي والإنجليزي والأرقام والشرطة السفلية، مثل: #Respect أو #ريسبكت_لايف
+  static final RegExp _tokenRegex = RegExp(
+    r'(https?:\/\/[^\s]+|www\.[^\s]+|#[^\s#@]+)',
     caseSensitive: false,
   );
 
+  bool _isUrl(String value) {
+    final v = value.toLowerCase();
+    return v.startsWith('http://') || v.startsWith('https://') || v.startsWith('www.');
+  }
+
   String _stripTrailingUrlPunctuation(String value) {
     var v = value;
+    while (v.isNotEmpty && RegExp(r'[\.,،؛:!؟\)\]\}]$').hasMatch(v)) {
+      v = v.substring(0, v.length - 1);
+    }
+    return v;
+  }
+
+  String _stripTrailingHashtagPunctuation(String value) {
+    var v = value.trim();
     while (v.isNotEmpty && RegExp(r'[\.,،؛:!؟\)\]\}]$').hasMatch(v)) {
       v = v.substring(0, v.length - 1);
     }
@@ -3456,30 +4201,60 @@ class _LinkifiedText extends StatelessWidget {
     }
   }
 
+  Future<void> _openHashtag(BuildContext context, String rawHashtag) async {
+    final hashtag = _stripTrailingHashtagPunctuation(rawHashtag);
+    if (hashtag.length <= 1 || !hashtag.startsWith('#')) return;
+
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => HashtagPostsScreen(hashtag: hashtag),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final baseStyle = DefaultTextStyle.of(context).style.merge(style);
     final spans = <TextSpan>[];
     var index = 0;
 
-    for (final match in _urlRegex.allMatches(text)) {
+    for (final match in _tokenRegex.allMatches(text)) {
       if (match.start > index) {
         spans.add(TextSpan(text: text.substring(index, match.start)));
       }
+
       final original = match.group(0)!;
-      final clean = _stripTrailingUrlPunctuation(original);
-      final trailing = clean.length < original.length ? original.substring(clean.length) : '';
-      spans.add(TextSpan(
-        text: clean,
-        recognizer: TapGestureRecognizer()..onTap = () => _openUrl(clean),
-        style: const TextStyle(
-          color: Colors.blueAccent,
-          fontWeight: FontWeight.w800,
-          decoration: TextDecoration.underline,
-          decorationColor: Colors.blueAccent,
-        ),
-      ));
-      if (trailing.isNotEmpty) spans.add(TextSpan(text: trailing));
+      if (_isUrl(original)) {
+        final clean = _stripTrailingUrlPunctuation(original);
+        final trailing = clean.length < original.length ? original.substring(clean.length) : '';
+        spans.add(TextSpan(
+          text: clean,
+          recognizer: TapGestureRecognizer()..onTap = () => _openUrl(clean),
+          style: const TextStyle(
+            color: Colors.blueAccent,
+            fontWeight: FontWeight.w800,
+            decoration: TextDecoration.underline,
+            decorationColor: Colors.blueAccent,
+          ),
+        ));
+        if (trailing.isNotEmpty) spans.add(TextSpan(text: trailing));
+      } else if (original.startsWith('#')) {
+        final hashtag = _stripTrailingHashtagPunctuation(original);
+        final trailing = hashtag.length < original.length ? original.substring(hashtag.length) : '';
+        spans.add(TextSpan(
+          text: hashtag,
+          recognizer: TapGestureRecognizer()..onTap = () => _openHashtag(context, hashtag),
+          style: const TextStyle(
+            color: AppColors.purple,
+            fontWeight: FontWeight.w900,
+            decoration: TextDecoration.none,
+          ),
+        ));
+        if (trailing.isNotEmpty) spans.add(TextSpan(text: trailing));
+      } else {
+        spans.add(TextSpan(text: original));
+      }
+
       index = match.end;
     }
 
@@ -3599,24 +4374,180 @@ class _ProfileRepliesList extends StatelessWidget {
 }
 
 
-class _RespectAiVerifiedBadge extends StatelessWidget {
-  const _RespectAiVerifiedBadge();
+
+class _VerificationPowerCard extends StatelessWidget {
+  final String tier;
+  final String description;
+  final Map<String, int> analytics;
+
+  const _VerificationPowerCard({required this.tier, required this.description, required this.analytics});
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final title = SupabaseService.tierDisplayName(tier);
+    final pinLimit = tier == 'premium' ? 3 : tier == 'gold' ? 2 : 1;
+    final views = analytics['views'] ?? 0;
+    final engagement = analytics['engagement'] ?? 0;
+    final colors = tier == 'premium'
+        ? const [Color(0xFF5B21B6), Color(0xFFE879F9), Color(0xFF22D3EE)]
+        : tier == 'gold'
+            ? const [Color(0xFF92400E), Color(0xFFF59E0B), Color(0xFFFDE68A)]
+            : const [Color(0xFF475569), Color(0xFFCBD5E1), Color(0xFF94A3B8)];
     return Container(
-      margin: const EdgeInsetsDirectional.only(start: 5),
-      padding: const EdgeInsets.all(2.2),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(22),
+        gradient: LinearGradient(colors: colors.map((c) => c.withValues(alpha: isDark ? .22 : .16)).toList()),
+        border: Border.all(color: colors.first.withValues(alpha: .35)),
+        boxShadow: [BoxShadow(color: colors.first.withValues(alpha: .14), blurRadius: 22)],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            _RespectAiVerifiedBadge(tier: tier, large: true),
+            const SizedBox(width: 8),
+            Expanded(child: Text('قوة التوثيق $title', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15.5))),
+            Icon(tier == 'premium' ? Icons.diamond_rounded : tier == 'gold' ? Icons.workspace_premium_rounded : Icons.star_rounded, color: colors.first),
+          ]),
+          const SizedBox(height: 8),
+          Text(description, style: TextStyle(color: isDark ? Colors.white70 : const Color(0xFF4B4455), fontWeight: FontWeight.w800, height: 1.35, fontSize: 12.5)),
+          const SizedBox(height: 10),
+          Wrap(spacing: 7, runSpacing: 7, children: [
+            _PowerMiniPill(icon: Icons.push_pin_rounded, text: '$pinLimit تثبيت'),
+            _PowerMiniPill(icon: Icons.visibility_rounded, text: '$views مشاهدة'),
+            _PowerMiniPill(icon: Icons.bolt_rounded, text: '$engagement تفاعل'),
+            if (tier == 'gold' || tier == 'premium') const _PowerMiniPill(icon: Icons.analytics_rounded, text: 'إحصائيات'),
+            if (tier == 'premium') const _PowerMiniPill(icon: Icons.explore_rounded, text: 'قسم المميزين'),
+          ]),
+        ],
+      ),
+    );
+  }
+}
+
+class _PowerMiniPill extends StatelessWidget {
+  final IconData icon;
+  final String text;
+  const _PowerMiniPill({required this.icon, required this.text});
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+    decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: .12), borderRadius: BorderRadius.circular(999)),
+    child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(icon, color: AppColors.purple, size: 15), const SizedBox(width: 4), Text(text, style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w900, fontSize: 11.5))]),
+  );
+}
+
+class _RespectAiVerifiedBadge extends StatelessWidget {
+  final String tier;
+  final bool large;
+
+  const _RespectAiVerifiedBadge({
+    this.tier = 'premium',
+    this.large = false,
+  });
+
+  static String normalizeTier(String value) {
+    final v = value.trim().toLowerCase();
+    if (v == 'premium' || v == 'gold' || v == 'silver') return v;
+    return 'premium';
+  }
+
+  static List<Color> gradientForTier(String value) {
+    final v = normalizeTier(value);
+    if (v == 'premium') {
+      return const [Color(0xFF5B21B6), Color(0xFFE879F9), Color(0xFF22D3EE)];
+    }
+    if (v == 'gold') {
+      return const [Color(0xFF92400E), Color(0xFFF59E0B), Color(0xFFFDE68A)];
+    }
+    return const [Color(0xFF475569), Color(0xFFCBD5E1), Color(0xFF94A3B8)];
+  }
+
+  static Color accentForTier(String value) {
+    final v = normalizeTier(value);
+    if (v == 'premium') return const Color(0xFFC084FC);
+    if (v == 'gold') return const Color(0xFFF59E0B);
+    return const Color(0xFF94A3B8);
+  }
+
+  static IconData iconForTier(String value) {
+    final v = normalizeTier(value);
+    if (v == 'premium') return Icons.diamond_rounded;
+    if (v == 'gold') return Icons.workspace_premium_rounded;
+    return Icons.star_rounded;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final normalized = normalizeTier(tier);
+    final accent = accentForTier(normalized);
+    final size = large ? 18.0 : 12.0;
+    final padding = large ? 3.8 : 2.3;
+
+    return Container(
+      margin: EdgeInsetsDirectional.only(start: large ? 7 : 5),
+      padding: EdgeInsets.all(padding),
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        gradient: const LinearGradient(
-          colors: [Color(0xFF7C3AED), Color(0xFFC084FC)],
+        gradient: LinearGradient(
+          colors: gradientForTier(normalized),
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
-        boxShadow: [BoxShadow(color: AppColors.purple.withValues(alpha: 0.35), blurRadius: 8)],
+        border: Border.all(color: Colors.white.withValues(alpha: .72), width: large ? 1.2 : .8),
+        boxShadow: [
+          BoxShadow(
+            color: accent.withValues(alpha: normalized == 'premium' ? .52 : .42),
+            blurRadius: large ? 16 : 9,
+            spreadRadius: normalized == 'premium' ? 1.1 : .4,
+          ),
+        ],
       ),
-      child: const Icon(Icons.check_rounded, color: Colors.white, size: 12),
+      child: Icon(
+        normalized == 'silver' ? Icons.check_rounded : iconForTier(normalized),
+        color: Colors.white,
+        size: size,
+      ),
+    );
+  }
+}
+
+class _SubscriptionTierMiniBadge extends StatelessWidget {
+  final String tier;
+
+  const _SubscriptionTierMiniBadge({required this.tier});
+
+  String get _label {
+    final t = tier.trim().toLowerCase();
+    if (t == 'premium') return 'مميزة';
+    if (t == 'gold') return 'ذهبية';
+    if (t == 'silver') return 'فضية';
+    return '';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_label.isEmpty) return const SizedBox.shrink();
+    final normalized = _RespectAiVerifiedBadge.normalizeTier(tier);
+    final accent = _RespectAiVerifiedBadge.accentForTier(normalized);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: accent.withValues(alpha: isDark ? .20 : .12),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: accent.withValues(alpha: .38)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(_RespectAiVerifiedBadge.iconForTier(normalized), color: accent, size: 13),
+          const SizedBox(width: 4),
+          Text(_label, style: TextStyle(color: accent, fontWeight: FontWeight.w900, fontSize: 11)),
+        ],
+      ),
     );
   }
 }
@@ -3669,6 +4600,210 @@ class _StatBox extends StatelessWidget {
           onTap: onTap,
           borderRadius: BorderRadius.circular(16),
           child: card,
+        ),
+      ),
+    );
+  }
+}
+
+
+class _PaddleCheckoutWebViewScreen extends StatefulWidget {
+  final String checkoutUrl;
+  final String title;
+
+  const _PaddleCheckoutWebViewScreen({
+    required this.checkoutUrl,
+    this.title = 'الدفع',
+  });
+
+  @override
+  State<_PaddleCheckoutWebViewScreen> createState() => _PaddleCheckoutWebViewScreenState();
+}
+
+class _PaddleCheckoutWebViewScreenState extends State<_PaddleCheckoutWebViewScreen> {
+  late final WebViewController _controller;
+  bool _loading = true;
+  bool _paidSignalSeen = false;
+  String _currentUrl = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _currentUrl = widget.checkoutUrl;
+
+    _controller = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setBackgroundColor(Colors.transparent)
+      ..setNavigationDelegate(
+        NavigationDelegate(
+          onPageStarted: (url) {
+            if (!mounted) return;
+            setState(() {
+              _loading = true;
+              _currentUrl = url;
+            });
+            _handleCheckoutUrl(url);
+          },
+          onPageFinished: (url) {
+            if (!mounted) return;
+            setState(() {
+              _loading = false;
+              _currentUrl = url;
+            });
+            _handleCheckoutUrl(url);
+          },
+          onNavigationRequest: (request) {
+            final url = request.url.trim();
+            if (url.isEmpty) return NavigationDecision.prevent;
+
+            final lower = url.toLowerCase();
+
+            // روابط غير الويب مثل تطبيق بنك / محفظة / tel / mailto
+            // نفتحها خارج WebView فقط لأنها لا تعمل داخل WebView.
+            if (!lower.startsWith('http://') && !lower.startsWith('https://')) {
+              unawaited(_openExternalIfNeeded(url));
+              return NavigationDecision.prevent;
+            }
+
+            _handleCheckoutUrl(url);
+            return NavigationDecision.navigate;
+          },
+          onWebResourceError: (_) {
+            if (!mounted) return;
+            setState(() => _loading = false);
+          },
+        ),
+      )
+      ..loadRequest(Uri.parse(widget.checkoutUrl));
+  }
+
+  bool _looksLikePaymentSuccess(String url) {
+    final lower = url.toLowerCase();
+
+    return lower.contains('checkout=success') ||
+        lower.contains('payment=success') ||
+        lower.contains('status=success') ||
+        lower.contains('paddle_success') ||
+        lower.contains('/success') ||
+        lower.contains('success=true') ||
+        lower.contains('paid=true') ||
+        lower.contains('payment_success') ||
+        lower.contains('verification_success');
+  }
+
+  bool _looksLikePaymentCancel(String url) {
+    final lower = url.toLowerCase();
+
+    return lower.contains('checkout=cancel') ||
+        lower.contains('payment=cancel') ||
+        lower.contains('status=cancel') ||
+        lower.contains('/cancel') ||
+        lower.contains('cancel=true') ||
+        lower.contains('payment_cancel') ||
+        lower.contains('verification_cancel');
+  }
+
+  void _handleCheckoutUrl(String url) {
+    if (_paidSignalSeen || !mounted) return;
+
+    if (_looksLikePaymentSuccess(url)) {
+      _paidSignalSeen = true;
+      Navigator.of(context).pop(true);
+      return;
+    }
+
+    if (_looksLikePaymentCancel(url)) {
+      Navigator.of(context).pop(false);
+    }
+  }
+
+  Future<void> _openExternalIfNeeded(String url) async {
+    try {
+      final uri = Uri.parse(url);
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (_) {
+      _scannerSafeIgnore();
+    }
+  }
+
+  Future<bool> _confirmClose() async {
+    if (_paidSignalSeen) return true;
+
+    final close = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+        title: const Text('إغلاق صفحة الدفع؟', style: TextStyle(fontWeight: FontWeight.w900)),
+        content: const Text(
+          'إذا أغلقت الصفحة قبل إكمال الدفع لن يتم تفعيل الاشتراك. إذا أكملت الدفع فعلًا، سيقوم التطبيق بتحديث الحالة تلقائيًا.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('متابعة الدفع'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.purple),
+            child: const Text('إغلاق'),
+          ),
+        ],
+      ),
+    );
+
+    return close == true;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return WillPopScope(
+      onWillPop: () async {
+        final close = await _confirmClose();
+        if (close && mounted) Navigator.of(context).pop(_paidSignalSeen);
+        return false;
+      },
+      child: Scaffold(
+        backgroundColor: isDark ? AppColors.darkBg : AppColors.lightBg,
+        appBar: AppBar(
+          elevation: 0,
+          backgroundColor: isDark ? AppColors.darkBg : AppColors.lightBg,
+          foregroundColor: isDark ? Colors.white : const Color(0xFF201726),
+          title: Text(widget.title, style: const TextStyle(fontWeight: FontWeight.w900)),
+          centerTitle: true,
+          leading: IconButton(
+            icon: const Icon(Icons.close_rounded),
+            onPressed: () async {
+              final close = await _confirmClose();
+              if (close && mounted) Navigator.of(context).pop(_paidSignalSeen);
+            },
+          ),
+          actions: [
+            IconButton(
+              tooltip: 'تحديث',
+              icon: const Icon(Icons.refresh_rounded),
+              onPressed: () => _controller.reload(),
+            ),
+          ],
+        ),
+        body: SafeArea(
+          child: Stack(
+            children: [
+              WebViewWidget(controller: _controller),
+              if (_loading)
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  child: LinearProgressIndicator(
+                    minHeight: 3,
+                    color: AppColors.purple,
+                    backgroundColor: AppColors.purple.withValues(alpha: .12),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );

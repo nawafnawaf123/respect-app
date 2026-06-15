@@ -124,7 +124,7 @@ class FeedScreen extends StatefulWidget {
     try {
       final rows = await SupabaseService.client
           .from('posts')
-          .select('id,username,name,user,text,created_at,time,avatar_url,avatarPath,image_url,video_url,voice_url,voicePath,voice_seconds,voiceSeconds,likes,reposts,shares,views,replies')
+          .select('id,username,name,user,text,created_at,time,avatar_url,avatarPath,image_url,video_url,voice_url,voicePath,voice_seconds,voiceSeconds,likes,reposts,shares,views,replies,author_verified,author_subscription_tier,author_subscription_priority,author_subscription_boost_until,author_subscription_label')
           .order('created_at', ascending: false)
           .range(from, to)
           .timeout(const Duration(seconds: 10));
@@ -146,7 +146,7 @@ class FeedScreen extends StatefulWidget {
     try {
       final rows = await SupabaseService.client
           .from('posts')
-          .select('id,username,name,user,text,created_at,time,avatar_url,avatarPath,image_url,video_url,voice_url,voicePath,voice_seconds,voiceSeconds,likes,reposts,shares,views,replies')
+          .select('id,username,name,user,text,created_at,time,avatar_url,avatarPath,image_url,video_url,voice_url,voicePath,voice_seconds,voiceSeconds,likes,reposts,shares,views,replies,author_verified,author_subscription_tier,author_subscription_priority,author_subscription_boost_until,author_subscription_label')
           .inFilter('id', uniqueIds)
           .timeout(const Duration(seconds: 8));
       return List<Map<String, dynamic>>.from(rows.map((e) => _preloadSafeRow(e as Map)));
@@ -250,6 +250,7 @@ class _FeedScreenState extends State<FeedScreen> {
   String _profileBio = 'Respect App user';
   String? _profileImagePath;
   bool _profileVerified = false;
+  String _profileSubscriptionTier = 'free';
   int _profilePostMaxChars = SupabaseService.freePostMaxChars;
   final Map<String, List<Map<String, dynamic>>> _activeStoriesByUser = <String, List<Map<String, dynamic>>>{};
   Set<String> _seenStoryIds = <String>{};
@@ -357,10 +358,16 @@ class _FeedScreenState extends State<FeedScreen> {
         .toList();
     if (ids.isEmpty) return;
 
-    final likeCounts = await _readInteractionCountsForPage(table: 'post_likes', postIds: ids);
-    final repostCounts = await _readInteractionCountsForPage(table: 'post_reposts', postIds: ids);
-    final viewCounts = await _readInteractionCountsForPage(table: 'post_views', postIds: ids);
-    final replyCounts = await _readInteractionCountsForPage(table: 'post_replies', postIds: ids);
+    final counterResults = await Future.wait<Map<String, int>>([
+      _readInteractionCountsForPage(table: 'post_likes', postIds: ids),
+      _readInteractionCountsForPage(table: 'post_reposts', postIds: ids),
+      _readInteractionCountsForPage(table: 'post_views', postIds: ids),
+      _readInteractionCountsForPage(table: 'post_replies', postIds: ids),
+    ]);
+    final likeCounts = counterResults[0];
+    final repostCounts = counterResults[1];
+    final viewCounts = counterResults[2];
+    final replyCounts = counterResults[3];
 
     for (final post in posts) {
       final id = (post['id'] ?? '').toString();
@@ -381,7 +388,7 @@ class _FeedScreenState extends State<FeedScreen> {
     try {
       final rows = await SupabaseService.client
           .from('posts')
-          .select('id,username,name,user,text,created_at,time,avatar_url,avatarPath,image_url,video_url,voice_url,voicePath,voice_seconds,voiceSeconds,likes,reposts,shares,views,replies')
+          .select('id,username,name,user,text,created_at,time,avatar_url,avatarPath,image_url,video_url,voice_url,voicePath,voice_seconds,voiceSeconds,likes,reposts,shares,views,replies,author_verified,author_subscription_tier,author_subscription_priority,author_subscription_boost_until,author_subscription_label')
           .order('created_at', ascending: false)
           .range(from, to);
       final posts = List<Map<String, dynamic>>.from(
@@ -556,7 +563,7 @@ class _FeedScreenState extends State<FeedScreen> {
     try {
       final rows = await SupabaseService.client
           .from('posts')
-          .select('id,username,name,user,text,created_at,time,avatar_url,avatarPath,image_url,video_url,voice_url,voicePath,voice_seconds,voiceSeconds,likes,reposts,shares,views,replies')
+          .select('id,username,name,user,text,created_at,time,avatar_url,avatarPath,image_url,video_url,voice_url,voicePath,voice_seconds,voiceSeconds,likes,reposts,shares,views,replies,author_verified,author_subscription_tier,author_subscription_priority,author_subscription_boost_until,author_subscription_label')
           .inFilter('id', uniqueIds);
       final posts = List<Map<String, dynamic>>.from(
         rows.map((e) => _safePostRow(e as Map)),
@@ -629,6 +636,62 @@ class _FeedScreenState extends State<FeedScreen> {
     final parsed = DateTime.tryParse(post.time);
     if (parsed != null) return parsed.millisecondsSinceEpoch;
     return int.tryParse(post.id.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+  }
+
+  String _authorSubscriptionTierFromRow(Map<String, dynamic> row) {
+    final raw = (row['author_subscription_tier'] ??
+            row['subscription_tier'] ??
+            row['plan_tier'] ??
+            '')
+        .toString()
+        .trim()
+        .toLowerCase();
+    if (raw == 'premium' || raw == 'gold' || raw == 'silver') return raw;
+    if (SupabaseService.truthy(row['author_verified'] ?? row['is_verified'] ?? row['verified'])) return 'premium';
+    return 'free';
+  }
+
+  int _authorSubscriptionPriorityFromRow(Map<String, dynamic> row) {
+    final explicit = int.tryParse((row['author_subscription_priority'] ?? '').toString());
+    if (explicit != null) return explicit.clamp(0, 1200).toInt();
+    return SupabaseService.subscriptionPriorityWeightForTier(_authorSubscriptionTierFromRow(row));
+  }
+
+  bool _boostStillActive(String? rawUntil) {
+    final raw = rawUntil?.trim() ?? '';
+    if (raw.isEmpty) return true;
+    final parsed = DateTime.tryParse(raw)?.toUtc();
+    if (parsed == null) return true;
+    return parsed.isAfter(DateTime.now().toUtc());
+  }
+
+  int _subscriptionPriorityForPost(CityPost post) {
+    if (post.repostedByUsername != null && post.repostedByUsername!.trim().isNotEmpty) {
+      // لا نضاعف أولوية الريبوست؛ نعتمد على صاحب التغريدة الأصلي فقط حتى لا تستغل إعادة النشر.
+      return (post.authorSubscriptionPriority * 0.55).round();
+    }
+    if (!_boostStillActive(post.authorSubscriptionBoostUntil)) return 0;
+    return post.authorSubscriptionPriority;
+  }
+
+  int _timelineRankScore(CityPost post) {
+    final time = _timelineSortValue(post);
+    final priority = _subscriptionPriorityForPost(post);
+    // كل 100 نقطة تعطي تقريبًا دفعة 12 دقيقة فقط.
+    // الهدف أولوية واقعية بدون قتل حداثة الفيد.
+    return time + (priority * 12 * 60 * 1000 ~/ 100);
+  }
+
+  int _compareTimelinePosts(CityPost a, CityPost b) {
+    final rank = _timelineRankScore(b).compareTo(_timelineRankScore(a));
+    if (rank != 0) return rank;
+    return _timelineSortValue(b).compareTo(_timelineSortValue(a));
+  }
+
+  bool _postHasActiveSubscriptionBoost(CityPost post) => _subscriptionPriorityForPost(post) > 0;
+
+  bool _shouldShowSubscriptionBoostBadge(CityPost post) {
+    return _postHasActiveSubscriptionBoost(post) && post.subscriptionTier != 'free';
   }
 
   bool _publishingPost = false;
@@ -763,7 +826,7 @@ class _FeedScreenState extends State<FeedScreen> {
       ..._localQuotePosts.where((p) => !_deletedPostIds.contains(p.id)).map(_applyLocalState),
       ...repostTimelinePosts,
       ...loaded,
-    ]..sort((a, b) => _timelineSortValue(b).compareTo(_timelineSortValue(a)));
+    ]..sort(_compareTimelinePosts);
   }
 
   @override
@@ -780,16 +843,23 @@ class _FeedScreenState extends State<FeedScreen> {
   }
 
   Future<void> _loadInitialData() async {
-    await _loadProfile();
-    await _loadLocalPostState();
+    final prefs = await SharedPreferences.getInstance();
+
+    await Future.wait<void>([
+      _loadProfile(prefs),
+      _loadLocalPostState(prefs),
+    ]);
+
     // المتابعات لازم تنقرأ قبل الفيد حتى نقدر نظهر إعادة النشر من الأشخاص الذين أتابعهم مثل تويتر.
-    await _loadFollowing();
+    await _loadFollowing(prefs);
     await _loadPosts();
-    await _subscribeReplyNotifications();
     await _openInitialTargetPostIfAny();
-    await _loadPostNotificationTargets();
-    await _loadCommunities();
-    await _loadLocalModeration();
+
+    // مهام ثانوية لا نوقف فتح الفيد عليها.
+    unawaited(_subscribeReplyNotifications());
+    unawaited(_loadPostNotificationTargets());
+    unawaited(_loadCommunities(prefs));
+    unawaited(_loadLocalModeration(prefs));
     unawaited(_createRespectAiDailyPostSilently());
   }
 
@@ -925,8 +995,8 @@ class _FeedScreenState extends State<FeedScreen> {
     return <String>{};
   }
 
-  Future<void> _loadLocalPostState() async {
-    final prefs = await SharedPreferences.getInstance();
+  Future<void> _loadLocalPostState([SharedPreferences? cachedPrefs]) async {
+    final prefs = cachedPrefs ?? await SharedPreferences.getInstance();
     _repostedPostIds = await _readStringSet(prefs, _repostedPostsKey);
     _likedPostIds = await _readStringSet(prefs, _likedPostsKey);
     _viewedPostIds = await _readStringSet(prefs, _viewedPostsKey);
@@ -1172,6 +1242,10 @@ class _FeedScreenState extends State<FeedScreen> {
       isReposted: _repostedPostIds.contains(postId),
       timelineSortMillis: DateTime.tryParse((e['created_at'] ?? e['time'] ?? '').toString())?.toLocal().millisecondsSinceEpoch,
       authorVerified: SupabaseService.truthy(e['author_verified'] ?? e['authorVerified'] ?? e['is_verified'] ?? e['verified']),
+      subscriptionTier: _authorSubscriptionTierFromRow(e),
+      authorSubscriptionPriority: _authorSubscriptionPriorityFromRow(e),
+      authorSubscriptionBoostUntil: (e['author_subscription_boost_until'] ?? '').toString(),
+      authorSubscriptionLabel: (e['author_subscription_label'] ?? SupabaseService.subscriptionPriorityLabelForTier(_authorSubscriptionTierFromRow(e))).toString(),
     );
     return _applyLocalState(post);
   }
@@ -1248,7 +1322,7 @@ class _FeedScreenState extends State<FeedScreen> {
         ...replyRepostTimelinePosts,
         ...repostTimelinePosts,
         ...loaded,
-      ]..sort((a, b) => _timelineSortValue(b).compareTo(_timelineSortValue(a)));
+      ]..sort(_compareTimelinePosts);
 
       final storyUsers = allPosts.map((p) => SupabaseService.displayUsername(p.username)).toSet().toList();
       final storyRows = await SupabaseService.getActiveStories(usernames: storyUsers);
@@ -1324,6 +1398,7 @@ class _FeedScreenState extends State<FeedScreen> {
       if (!mounted) return;
       setState(() {
         _posts.addAll(newPosts);
+        _posts.sort(_compareTimelinePosts);
         _postsLoadedLimit += rows.length;
         _hasMorePosts = rows.length >= _feedPageSize;
         _loadingMorePosts = false;
@@ -1351,17 +1426,65 @@ class _FeedScreenState extends State<FeedScreen> {
     return out;
   }
 
+  List<Map<String, String>> _freshPostAvatarsAfterRefresh(Set<String> oldPostIds) {
+    final seenUsers = <String>{};
+    final out = <Map<String, String>>[];
+
+    for (final post in _posts) {
+      // لا نعرض كبسولة التحديث إلا للتغريدات التي ظهرت بعد التحديث فعلًا.
+      // بهذا لا تظهر كل مرة عند السحب للتحديث إذا لم توجد تغريدات جديدة.
+      if (oldPostIds.contains(post.id)) continue;
+
+      final username = SupabaseService.displayUsername(post.username);
+      if (seenUsers.contains(username)) continue;
+      seenUsers.add(username);
+
+      out.add({
+        'name': post.user,
+        'username': username,
+        'avatar': post.avatarPath ?? '',
+        'postId': post.id,
+      });
+      if (out.length >= 5) break;
+    }
+
+    return out;
+  }
+
   Future<void> _refreshFeed() async {
+    final oldPostIds = _posts.map((p) => p.id).where((id) => id.trim().isNotEmpty).toSet();
+
     _cachedAvatarMap = null;
     _cachedRepostActors.clear();
     await _loadInitialData();
     if (!mounted) return;
-    setState(() => _showRefreshAvatars = _refreshAvatars.isNotEmpty);
+
+    final freshItems = _freshPostAvatarsAfterRefresh(oldPostIds);
+
     _hideRefreshAvatarsTimer?.cancel();
-    _hideRefreshAvatarsTimer = Timer(const Duration(seconds: 5), () {
+    if (freshItems.isEmpty) {
+      setState(() {
+        _showRefreshAvatars = false;
+        _refreshAvatars.clear();
+      });
+      NotificationService.showTopNotification('الفيد محدث ولا توجد تغريدات جديدة');
+      return;
+    }
+
+    setState(() {
+      _refreshAvatars
+        ..clear()
+        ..addAll(freshItems);
+      _showRefreshAvatars = true;
+    });
+
+    _hideRefreshAvatarsTimer = Timer(const Duration(seconds: 7), () {
       if (mounted) setState(() => _showRefreshAvatars = false);
     });
-    NotificationService.showTopNotification('تم تحديث الفيد');
+
+    NotificationService.showTopSuccess(
+      freshItems.length == 1 ? 'تغريدة جديدة بالأعلى' : '${freshItems.length} تغريدات جديدة بالأعلى',
+    );
   }
 
   Future<void> _scrollToTop(ScrollController controller) async {
@@ -1371,6 +1494,12 @@ class _FeedScreenState extends State<FeedScreen> {
       duration: const Duration(milliseconds: 520),
       curve: Curves.easeOutCubic,
     );
+  }
+
+  Future<void> _revealFreshPosts(ScrollController controller) async {
+    _hideRefreshAvatarsTimer?.cancel();
+    if (mounted) setState(() => _showRefreshAvatars = false);
+    await _scrollToTop(controller);
   }
 
   void _openPostFromRefresh(String postId) {
@@ -1680,8 +1809,8 @@ class _FeedScreenState extends State<FeedScreen> {
   }
 
 
-  Future<void> _loadLocalModeration() async {
-    final prefs = await SharedPreferences.getInstance();
+  Future<void> _loadLocalModeration([SharedPreferences? cachedPrefs]) async {
+    final prefs = cachedPrefs ?? await SharedPreferences.getInstance();
     Set<String> readSet(String key) {
       final raw = prefs.getString(key);
       if (raw == null || raw.trim().isEmpty) return <String>{};
@@ -2229,6 +2358,8 @@ class _FeedScreenState extends State<FeedScreen> {
                   child: _RespectAuthorName(
                     name: post.user,
                     username: post.username,
+                    verified: post.authorVerified,
+                    subscriptionTier: post.subscriptionTier,
                     style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
                   ),
                 ),
@@ -2339,8 +2470,8 @@ class _FeedScreenState extends State<FeedScreen> {
 
 
 
-  Future<void> _loadFollowing() async {
-    final prefs = await SharedPreferences.getInstance();
+  Future<void> _loadFollowing([SharedPreferences? cachedPrefs]) async {
+    final prefs = cachedPrefs ?? await SharedPreferences.getInstance();
     final raw = prefs.getString(_followingKey);
     final data = <String, List<String>>{};
     if (raw != null && raw.trim().isNotEmpty) {
@@ -2458,18 +2589,31 @@ class _FeedScreenState extends State<FeedScreen> {
     }
   }
 
-  Future<void> _loadCommunities() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_communitiesKey);
+  Future<void> _loadCommunities([SharedPreferences? cachedPrefs]) async {
     final loaded = <CityCommunity>[];
-    if (raw != null && raw.trim().isNotEmpty) {
-      try {
-        final decoded = jsonDecode(raw);
-        if (decoded is List) {
-          loaded.addAll(decoded.whereType<Map>().map((e) => CityCommunity.fromJson(e.map((k, v) => MapEntry(k.toString(), v)))));
-        }
-      } catch (e, st) { _logIgnoredError(e, st); }
+
+    // المصدر الأساسي الآن هو Supabase حتى لا تختفي المجتمعات في نسخة release أو عند جهاز آخر.
+    try {
+      final remoteRows = await SupabaseService.getCommunities(includePosts: true);
+      loaded.addAll(remoteRows.map((e) => CityCommunity.fromJson(e)));
+    } catch (e, st) {
+      _logIgnoredError(e, st);
     }
+
+    // احتياط فقط للبيانات القديمة الموجودة محليًا قبل نقل المجتمعات إلى Supabase.
+    if (loaded.isEmpty) {
+      final prefs = cachedPrefs ?? await SharedPreferences.getInstance();
+      final raw = prefs.getString(_communitiesKey);
+      if (raw != null && raw.trim().isNotEmpty) {
+        try {
+          final decoded = jsonDecode(raw);
+          if (decoded is List) {
+            loaded.addAll(decoded.whereType<Map>().map((e) => CityCommunity.fromJson(e.map((k, v) => MapEntry(k.toString(), v)))));
+          }
+        } catch (e, st) { _logIgnoredError(e, st); }
+      }
+    }
+
     if (!mounted) return;
     setState(() {
       _communities
@@ -2479,8 +2623,17 @@ class _FeedScreenState extends State<FeedScreen> {
   }
 
   Future<void> _saveCommunities() async {
+    final list = _communities.map((c) => c.toJson()).toList();
+
+    // حفظ محلي كنسخة احتياط، لكن الاعتماد الحقيقي صار على Supabase.
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_communitiesKey, jsonEncode(_communities.map((c) => c.toJson()).toList()));
+    await prefs.setString(_communitiesKey, jsonEncode(list));
+
+    try {
+      await SupabaseService.upsertCommunities(list, ownerUsername: _profileUsername);
+    } catch (e, st) {
+      _logIgnoredError(e, st);
+    }
   }
 
   Future<void> _createCommunity() async {
@@ -2495,7 +2648,17 @@ class _FeedScreenState extends State<FeedScreen> {
     );
 
     if (community == null || !mounted) return;
-    setState(() => _communities.insert(0, community));
+
+    CityCommunity finalCommunity = community;
+    try {
+      final saved = await SupabaseService.upsertCommunity(community.toJson(), ownerUsername: _profileUsername);
+      finalCommunity = CityCommunity.fromJson(saved);
+    } catch (e, st) {
+      _logIgnoredError(e, st);
+    }
+
+    if (!mounted) return;
+    setState(() => _communities.insert(0, finalCommunity));
     await _saveCommunities();
   }
 
@@ -2523,18 +2686,18 @@ class _FeedScreenState extends State<FeedScreen> {
       final author = SupabaseService.displayUsername(p.username);
       final reposter = p.repostedByUsername == null ? null : SupabaseService.displayUsername(p.repostedByUsername!);
       return author == me || list.contains(author) || reposter == me || (reposter != null && list.contains(reposter));
-    }).toList()..sort((a, b) => _timelineSortValue(b).compareTo(_timelineSortValue(a)));
+    }).toList()..sort(_compareTimelinePosts);
     return posts;
   }
 
-  Future<void> _loadProfile() async {
+  Future<void> _loadProfile([SharedPreferences? cachedPrefs]) async {
     Map<String, dynamic>? account;
 
     try {
       account = await SupabaseService.currentUser();
     } catch (e, st) { _logIgnoredError(e, st); }
 
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = cachedPrefs ?? await SharedPreferences.getInstance();
     final localAccount = _currentAccountFromPrefs(prefs);
     account ??= localAccount;
     final localImagePath = ((localAccount == null ? null : localAccount['avatar_url']) ?? (localAccount == null ? null : localAccount['imagePath']) ?? (localAccount == null ? null : localAccount['profileImagePath']))?.toString();
@@ -2550,6 +2713,7 @@ class _FeedScreenState extends State<FeedScreen> {
           : 'Respect App user';
       _profileImagePath = (localImagePath != null && localImagePath.trim().isNotEmpty) ? localImagePath : ((account == null ? null : account['avatar_url']) ?? (account == null ? null : account['imagePath']) ?? (account == null ? null : account['profileImagePath']))?.toString();
       _profileVerified = SupabaseService.isVerifiedUser(account);
+      _profileSubscriptionTier = SupabaseService.subscriptionTierForUser(account);
       _profilePostMaxChars = SupabaseService.postMaxCharsForUser(account);
     });
   }
@@ -2879,6 +3043,7 @@ class _FeedScreenState extends State<FeedScreen> {
           username: _profileUsername,
           profileImagePath: _profileImagePath,
           verified: _profileVerified,
+          subscriptionTier: _profileSubscriptionTier,
           maxChars: _profilePostMaxChars,
           availableCommunities: _communities,
           initialText: cleanInitialText.length > _profilePostMaxChars
@@ -2960,7 +3125,11 @@ class _FeedScreenState extends State<FeedScreen> {
             'username': _profileUsername,
             'name': _profileName,
             'avatar': _profileImagePath ?? '',
+            'postId': publishedPost.id,
           });
+          if (_refreshAvatars.length > 5) {
+            _refreshAvatars.removeRange(5, _refreshAvatars.length);
+          }
           _showRefreshAvatars = true;
         });
       }
@@ -3066,6 +3235,10 @@ class _FeedScreenState extends State<FeedScreen> {
     String bio = fallbackBio ?? (target == _profileUsername ? _profileBio : 'عضو في مجتمع Respect App');
     String? avatarPath = fallbackAvatarPath;
     String? coverPath;
+    bool verified = false;
+    String subscriptionTier = 'free';
+    String? location;
+    String? website;
 
     try {
       final user = await SupabaseService.getUserByUsername(target);
@@ -3074,6 +3247,10 @@ class _FeedScreenState extends State<FeedScreen> {
         bio = (user['bio'] ?? bio).toString();
         avatarPath = (user['avatar_url'] ?? user['imagePath'] ?? user['profileImagePath'] ?? avatarPath)?.toString();
         coverPath = (user['cover_url'] ?? user['coverPath'] ?? user['cover_path'])?.toString();
+        verified = SupabaseService.isVerifiedUser(user);
+        subscriptionTier = SupabaseService.subscriptionTierForUser(user);
+        location = (user['location'] ?? '').toString();
+        website = (user['website'] ?? '').toString();
       }
     } catch (e, st) { _logIgnoredError(e, st); }
 
@@ -3113,6 +3290,10 @@ class _FeedScreenState extends State<FeedScreen> {
       bio: bio,
       avatarPath: avatarPath,
       coverPath: coverPath,
+      verified: verified,
+      subscriptionTier: subscriptionTier,
+      location: location,
+      website: website,
       posts: userPosts,
       currentUsername: _profileUsername,
       following: _following,
@@ -3122,6 +3303,15 @@ class _FeedScreenState extends State<FeedScreen> {
       onEditPost: _editPostFromProfile,
       onDeletePost: _deletePostFromProfile,
       onMentionTap: (u) => _openUserProfileByUsername(u),
+      onLike: _toggleLike,
+      onFavorite: _toggleFavorite,
+      onRepost: _repostPost,
+      onShare: _sharePost,
+      onReplies: _openReplies,
+      onViewed: _markPostViewed,
+      onQuotedPostTap: _openReplies,
+      onMediaTap: _openMedia,
+      onMore: _showPostActions,
     )));
     if (mounted) {
       await _loadProfile();
@@ -3247,7 +3437,7 @@ class _FeedScreenState extends State<FeedScreen> {
         isDark: isDark,
         refreshAvatars: _showRefreshAvatars ? _refreshAvatars : const [],
         onRefresh: _refreshFeed,
-        onRefreshAvatarTap: (_) => _scrollToTop(_forYouScrollController),
+        onRefreshAvatarTap: (_) => _revealFreshPosts(_forYouScrollController),
         avatarProviderForPath: _profileImageProvider,
         onLike: _toggleLike,
         onFavorite: _toggleFavorite,
@@ -3274,7 +3464,7 @@ class _FeedScreenState extends State<FeedScreen> {
         isDark: isDark,
         refreshAvatars: _showRefreshAvatars ? _refreshAvatars : const [],
         onRefresh: _refreshFeed,
-        onRefreshAvatarTap: (_) => _scrollToTop(_followingScrollController),
+        onRefreshAvatarTap: (_) => _revealFreshPosts(_followingScrollController),
         avatarProviderForPath: _profileImageProvider,
         onLike: _toggleLike,
         onFavorite: _toggleFavorite,
@@ -3533,18 +3723,35 @@ class _PostsList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     Widget overlay() {
-      if (refreshAvatars.isEmpty) return const SizedBox.shrink();
       return Positioned(
-        top: 10,
+        top: 12,
         left: 0,
         right: 0,
         child: IgnorePointer(
-          ignoring: false,
+          ignoring: refreshAvatars.isEmpty,
           child: Center(
-            child: _RefreshAvatarsStrip(
-              items: refreshAvatars,
-              avatarProviderForPath: avatarProviderForPath,
-              onAvatarTap: onRefreshAvatarTap,
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 260),
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeInCubic,
+              transitionBuilder: (child, animation) {
+                final slide = Tween<Offset>(
+                  begin: const Offset(0, -0.35),
+                  end: Offset.zero,
+                ).animate(animation);
+                return FadeTransition(
+                  opacity: animation,
+                  child: SlideTransition(position: slide, child: child),
+                );
+              },
+              child: refreshAvatars.isEmpty
+                  ? const SizedBox.shrink(key: ValueKey('no_new_posts_banner'))
+                  : _RefreshAvatarsStrip(
+                key: ValueKey('new_posts_banner_${refreshAvatars.map((e) => e['postId']).join('_')}'),
+                items: refreshAvatars,
+                avatarProviderForPath: avatarProviderForPath,
+                onAvatarTap: onRefreshAvatarTap,
+              ),
             ),
           ),
         ),
@@ -3639,6 +3846,8 @@ class _PostsList extends StatelessWidget {
                   .where((id) => id.isNotEmpty)
                   .toSet();
               final storiesSeen = storyIds.isNotEmpty && storyIds.every(seenStoryIds.contains);
+              final hasPrivateStory = (activeStories ?? const <Map<String, dynamic>>[]).any((s) =>
+                  SupabaseService.truthy(s['is_private']) || (s['privacy'] ?? '').toString().toLowerCase() == 'private');
               return _PostCard(
                 post: post,
                 avatarProvider: avatarProviderForPath(post.avatarPath),
@@ -3652,6 +3861,7 @@ class _PostsList extends StatelessWidget {
                 onMentionTap: onMentionTap,
                 activeStoriesForUser: activeStories,
                 storiesSeen: storiesSeen,
+                hasPrivateStory: hasPrivateStory,
                 onStoryTap: onStoryTap == null ? null : () => onStoryTap!(post.username),
                 onQuoteTap: post.quotedPost == null ? null : () async {
                   if (onQuotedPostTap != null) {
@@ -3679,108 +3889,140 @@ class _RefreshAvatarsStrip extends StatelessWidget {
   final ImageProvider? Function(String? path) avatarProviderForPath;
   final void Function(String postId)? onAvatarTap;
 
-  const _RefreshAvatarsStrip({required this.items, required this.avatarProviderForPath, this.onAvatarTap});
+  const _RefreshAvatarsStrip({
+    super.key,
+    required this.items,
+    required this.avatarProviderForPath,
+    this.onAvatarTap,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final shown = items.take(3).toList();
+    final shown = items.take(5).toList();
     final firstPostId = shown.isNotEmpty ? shown.first['postId'] : null;
+    final count = items.length;
+    final label = count <= 1 ? 'تغريدة جديدة' : '$count تغريدات جديدة';
 
     return Material(
       color: Colors.transparent,
       child: InkWell(
         borderRadius: BorderRadius.circular(999),
         onTap: () {
-          if (firstPostId != null && firstPostId.isNotEmpty) onAvatarTap?.call(firstPostId);
+          if (firstPostId != null && firstPostId.isNotEmpty) {
+            onAvatarTap?.call(firstPostId);
+          }
         },
-        child: Container(
-          padding: const EdgeInsetsDirectional.fromSTEB(18, 9, 12, 9),
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              begin: Alignment.topRight,
-              end: Alignment.bottomLeft,
-              colors: [
-                Color(0xFF7C3AED),
-                Color(0xFF4C1D95),
-                Color(0xFF24103F),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(999),
+          child: Container(
+            padding: const EdgeInsetsDirectional.fromSTEB(13, 8, 11, 8),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topRight,
+                end: Alignment.bottomLeft,
+                colors: [
+                  AppColors.purple.withValues(alpha: 0.96),
+                  AppColors.purpleLight.withValues(alpha: 0.90),
+                  const Color(0xFF231038).withValues(alpha: 0.96),
+                ],
+              ),
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.18), width: 1.1),
+              boxShadow: [
+                BoxShadow(
+                  color: AppColors.purple.withValues(alpha: 0.30),
+                  blurRadius: 24,
+                  spreadRadius: 1,
+                  offset: const Offset(0, 10),
+                ),
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.26),
+                  blurRadius: 18,
+                  offset: const Offset(0, 10),
+                ),
               ],
             ),
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: AppColors.purple.withValues(alpha: 0.70), width: 1.2),
-            boxShadow: [
-              BoxShadow(
-                color: AppColors.purple.withValues(alpha: 0.42),
-                blurRadius: 22,
-                spreadRadius: 1,
-                offset: const Offset(0, 8),
-              ),
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.35),
-                blurRadius: 18,
-                offset: const Offset(0, 10),
-              ),
-            ],
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            textDirection: TextDirection.rtl,
-            children: [
-              const Text(
-                'تحديث جديد',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w900,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              textDirection: TextDirection.rtl,
+              children: [
+                Container(
+                  width: 31,
+                  height: 31,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.16),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+                  ),
+                  child: const Icon(Icons.keyboard_double_arrow_up_rounded, color: Colors.white, size: 21),
                 ),
-              ),
-              const SizedBox(width: 10),
-              SizedBox(
-                width: shown.length <= 1 ? 34 : (34 + ((shown.length - 1) * 24)).toDouble(),
-                height: 34,
-                child: Stack(
-                  clipBehavior: Clip.none,
+                const SizedBox(width: 9),
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
-                    for (int i = 0; i < shown.length; i++)
-                      PositionedDirectional(
-                        start: (i * 24).toDouble(),
-                        child: GestureDetector(
-                          onTap: () {
-                            final postId = shown[i]['postId'];
-                            if (postId != null && postId.isNotEmpty) onAvatarTap?.call(postId);
-                          },
-                          child: Container(
-                            width: 34,
-                            height: 34,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              border: Border.all(color: AppColors.purple.withValues(alpha: 0.95), width: 2),
-                            ),
-                            child: CircleAvatar(
-                              radius: 15,
-                              backgroundColor: AppColors.purple.withValues(alpha: 0.55),
-                              backgroundImage: avatarProviderForPath(shown[i]['avatar']),
-                              child: avatarProviderForPath(shown[i]['avatar']) == null
-                                  ? const Icon(Icons.person_rounded, size: 17, color: Colors.white)
-                                  : null,
+                    Text(
+                      label,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14.5,
+                        fontWeight: FontWeight.w900,
+                        height: 1.05,
+                      ),
+                    ),
+                    Text(
+                      'اضغط للانتقال للأعلى',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.78),
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w800,
+                        height: 1.15,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(width: 11),
+                SizedBox(
+                  width: shown.length <= 1 ? 34 : (34 + ((shown.length - 1) * 19)).toDouble(),
+                  height: 34,
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      for (int i = 0; i < shown.length; i++)
+                        PositionedDirectional(
+                          start: (i * 19).toDouble(),
+                          child: IgnorePointer(
+                            child: Container(
+                              width: 34,
+                              height: 34,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: const Color(0xFF1B102A),
+                                border: Border.all(color: Colors.white.withValues(alpha: 0.72), width: 1.6),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.22),
+                                    blurRadius: 8,
+                                    offset: const Offset(0, 4),
+                                  ),
+                                ],
+                              ),
+                              child: CircleAvatar(
+                                radius: 15,
+                                backgroundColor: AppColors.purple.withValues(alpha: 0.55),
+                                backgroundImage: avatarProviderForPath(shown[i]['avatar']),
+                                child: avatarProviderForPath(shown[i]['avatar']) == null
+                                    ? const Icon(Icons.person_rounded, size: 17, color: Colors.white)
+                                    : null,
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-              const SizedBox(width: 12),
-              Container(
-                width: 30,
-                height: 30,
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.14),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white.withValues(alpha: 0.22)),
-                ),
-                child: const Icon(Icons.keyboard_double_arrow_up_rounded, color: Colors.white, size: 21),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -4237,29 +4479,76 @@ bool _isRespectAiUserName(String username) {
 }
 
 class _RespectAiVerifiedBadge extends StatelessWidget {
-  const _RespectAiVerifiedBadge();
+  final String tier;
+  final bool large;
+
+  const _RespectAiVerifiedBadge({
+    this.tier = 'premium',
+    this.large = false,
+  });
+
+  static String normalizeTier(String value) {
+    final v = value.trim().toLowerCase();
+    if (v == 'premium' || v == 'gold' || v == 'silver') return v;
+    return 'premium';
+  }
+
+  static List<Color> gradientForTier(String value) {
+    final v = normalizeTier(value);
+    if (v == 'premium') {
+      return const [Color(0xFF5B21B6), Color(0xFFE879F9), Color(0xFF22D3EE)];
+    }
+    if (v == 'gold') {
+      return const [Color(0xFF92400E), Color(0xFFF59E0B), Color(0xFFFDE68A)];
+    }
+    return const [Color(0xFF475569), Color(0xFFCBD5E1), Color(0xFF94A3B8)];
+  }
+
+  static Color accentForTier(String value) {
+    final v = normalizeTier(value);
+    if (v == 'premium') return const Color(0xFFC084FC);
+    if (v == 'gold') return const Color(0xFFF59E0B);
+    return const Color(0xFF94A3B8);
+  }
+
+  static IconData iconForTier(String value) {
+    final v = normalizeTier(value);
+    if (v == 'premium') return Icons.diamond_rounded;
+    if (v == 'gold') return Icons.workspace_premium_rounded;
+    return Icons.star_rounded;
+  }
 
   @override
   Widget build(BuildContext context) {
+    final normalized = normalizeTier(tier);
+    final accent = accentForTier(normalized);
+    final size = large ? 18.0 : 12.0;
+    final padding = large ? 3.8 : 2.3;
+
     return Container(
-      margin: const EdgeInsetsDirectional.only(start: 4),
-      padding: const EdgeInsets.all(2.2),
+      margin: EdgeInsetsDirectional.only(start: large ? 7 : 4),
+      padding: EdgeInsets.all(padding),
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        gradient: const LinearGradient(
-          colors: [Color(0xFF7C3AED), Color(0xFFC084FC)],
+        gradient: LinearGradient(
+          colors: gradientForTier(normalized),
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
+        border: Border.all(color: Colors.white.withValues(alpha: .72), width: large ? 1.2 : .8),
         boxShadow: [
           BoxShadow(
-            color: AppColors.purple.withValues(alpha: 0.38),
-            blurRadius: 8,
-            spreadRadius: 0.5,
+            color: accent.withValues(alpha: normalized == 'premium' ? 0.52 : 0.42),
+            blurRadius: large ? 16 : 9,
+            spreadRadius: normalized == 'premium' ? 1.1 : .4,
           ),
         ],
       ),
-      child: const Icon(Icons.check_rounded, color: Colors.white, size: 12),
+      child: Icon(
+        normalized == 'silver' ? Icons.check_rounded : iconForTier(normalized),
+        color: Colors.white,
+        size: size,
+      ),
     );
   }
 }
@@ -4270,6 +4559,7 @@ class _RespectAuthorName extends StatelessWidget {
   final TextStyle? style;
   final int maxLines;
   final bool verified;
+  final String subscriptionTier;
 
   const _RespectAuthorName({
     required this.name,
@@ -4277,25 +4567,90 @@ class _RespectAuthorName extends StatelessWidget {
     this.style,
     this.maxLines = 1,
     this.verified = false,
+    this.subscriptionTier = 'free',
   });
 
   @override
   Widget build(BuildContext context) {
-    final isVerified = verified || _isRespectAiUserName(username);
+    final isRespectAi = _isRespectAiUserName(username);
+    final normalizedTier = SupabaseService.subscriptionTierForUser({
+      'username': username,
+      'subscription_tier': isRespectAi ? 'premium' : subscriptionTier,
+      'is_verified': verified || isRespectAi,
+    });
+    final isVerified = verified || isRespectAi || normalizedTier != 'free';
     return Text.rich(
       TextSpan(
         children: [
           TextSpan(text: name),
           if (isVerified)
-            const WidgetSpan(
+            WidgetSpan(
               alignment: PlaceholderAlignment.middle,
-              child: _RespectAiVerifiedBadge(),
+              child: _RespectAiVerifiedBadge(tier: normalizedTier == 'free' ? 'premium' : normalizedTier),
             ),
         ],
       ),
       maxLines: maxLines,
       overflow: TextOverflow.ellipsis,
       style: style ?? const TextStyle(fontWeight: FontWeight.w900),
+    );
+  }
+}
+
+class _SubscriptionBoostBadge extends StatelessWidget {
+  final String tier;
+  final String label;
+
+  const _SubscriptionBoostBadge({
+    required this.tier,
+    required this.label,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final normalized = tier.trim().toLowerCase();
+    final text = label.trim().isNotEmpty
+        ? label.trim()
+        : SupabaseService.subscriptionPriorityLabelForTier(normalized);
+    if (text.isEmpty) return const SizedBox.shrink();
+
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final Color accent = normalized == 'premium'
+        ? AppColors.purple
+        : normalized == 'gold'
+            ? const Color(0xFFD9A441)
+            : const Color(0xFF9CA3AF);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: accent.withValues(alpha: isDark ? 0.20 : 0.12),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: accent.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            normalized == 'premium'
+                ? Icons.diamond_rounded
+                : normalized == 'gold'
+                    ? Icons.workspace_premium_rounded
+                    : Icons.star_rounded,
+            size: 12,
+            color: accent,
+          ),
+          const SizedBox(width: 3),
+          Text(
+            text,
+            style: TextStyle(
+              color: accent,
+              fontSize: 10.5,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -5655,6 +6010,7 @@ class _PostDetailsHeader extends StatelessWidget {
                       name: post.user,
                       username: post.username,
                       verified: post.authorVerified,
+                      subscriptionTier: post.subscriptionTier,
                       style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
                     ),
                     Text(post.username, style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted)),
@@ -5757,6 +6113,14 @@ class _MentionText extends StatelessWidget {
     return original.substring(clean.length);
   }
 
+  String _stripTrailingHashtagPunctuation(String value) {
+    var v = value.trim();
+    while (v.isNotEmpty && RegExp(r'[\.,،؛:!؟\)\]\}]$').hasMatch(v)) {
+      v = v.substring(0, v.length - 1);
+    }
+    return v;
+  }
+
   Future<void> _openUrl(String rawUrl) async {
     final clean = _stripTrailingUrlPunctuation(rawUrl.trim());
     if (clean.isEmpty) return;
@@ -5803,7 +6167,8 @@ class _MentionText extends StatelessWidget {
         ));
         if (trailing.isNotEmpty) spans.add(TextSpan(text: trailing));
       } else if (token.startsWith('#')) {
-        final hashtag = token;
+        final hashtag = _stripTrailingHashtagPunctuation(token);
+        final trailing = _trailingPart(token, hashtag);
         spans.add(TextSpan(
           text: hashtag,
           recognizer: TapGestureRecognizer()
@@ -5814,10 +6179,7 @@ class _MentionText extends StatelessWidget {
               }
               await Navigator.of(context).push(
                 MaterialPageRoute(
-                  builder: (_) => SearchScreen(
-                    initialQuery: hashtag,
-                    initialTimeFilter: 'all',
-                  ),
+                  builder: (_) => HashtagPostsScreen(hashtag: hashtag),
                 ),
               );
             },
@@ -5827,6 +6189,7 @@ class _MentionText extends StatelessWidget {
             decoration: TextDecoration.none,
           ),
         ));
+        if (trailing.isNotEmpty) spans.add(TextSpan(text: trailing));
       } else {
         final mention = token;
         spans.add(TextSpan(
@@ -5977,8 +6340,14 @@ class _PostCharacterLimitCircle extends StatelessWidget {
   final int used;
   final int max;
   final bool verified;
+  final String subscriptionTier;
 
-  const _PostCharacterLimitCircle({required this.used, required this.max, required this.verified});
+  const _PostCharacterLimitCircle({
+    required this.used,
+    required this.max,
+    required this.verified,
+    this.subscriptionTier = 'free',
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -5988,8 +6357,8 @@ class _PostCharacterLimitCircle extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (verified) ...[
-          const Icon(Icons.verified_rounded, color: AppColors.purple, size: 17),
+        if (verified || subscriptionTier != 'free') ...[
+          _RespectAiVerifiedBadge(tier: subscriptionTier == 'free' ? 'premium' : subscriptionTier),
           const SizedBox(width: 5),
         ],
         Text('$remaining', style: TextStyle(fontWeight: FontWeight.w900, color: danger ? AppColors.danger : AppColors.purple)),
@@ -6022,6 +6391,7 @@ class ComposePostScreen extends StatefulWidget {
   final String initialText;
   final bool editMode;
   final bool verified;
+  final String subscriptionTier;
   final int maxChars;
   final List<CityCommunity> availableCommunities;
   final String initialAudience;
@@ -6036,6 +6406,7 @@ class ComposePostScreen extends StatefulWidget {
     this.initialText = '',
     this.editMode = false,
     this.verified = false,
+    this.subscriptionTier = 'free',
     this.maxChars = SupabaseService.freePostMaxChars,
     this.availableCommunities = const <CityCommunity>[],
     this.initialAudience = 'public',
@@ -6447,6 +6818,33 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
     return 'عام';
   }
 
+  Future<bool> _validateSelectedVideoPowerLimit() async {
+    if (_selectedMedia == null || _selectedMediaType != CityMediaType.video) return true;
+    final maxSeconds = widget.subscriptionTier == 'premium'
+        ? 420
+        : widget.subscriptionTier == 'gold'
+            ? 240
+            : widget.subscriptionTier == 'silver'
+                ? 120
+                : 60;
+    VideoPlayerController? controller;
+    try {
+      controller = VideoPlayerController.file(File(_selectedMedia!.path));
+      await controller.initialize();
+      final seconds = controller.value.duration.inSeconds;
+      if (seconds > maxSeconds) {
+        NotificationService.showTopError('حد الفيديو لهذه الباقة $maxSeconds ثانية. مدة الفيديو الحالية $seconds ثانية.');
+        return false;
+      }
+    } catch (_) {
+      // إذا تعذر قراءة المدة لا نوقف النشر، لكن السيرفر/الضغط يعالج الباقي.
+      return true;
+    } finally {
+      await controller?.dispose();
+    }
+    return true;
+  }
+
   Future<void> _publish() async {
     final text = _ctrl.text.trim();
     if (_isRecording) {
@@ -6458,6 +6856,7 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
       NotificationService.showTopError('تجاوزت حد ${widget.maxChars} حرف');
       return;
     }
+    if (!await _validateSelectedVideoPowerLimit()) return;
 
     Navigator.pop(
       context,
@@ -6808,6 +7207,7 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
                                   used: _ctrl.text.runes.length,
                                   max: widget.maxChars,
                                   verified: widget.verified,
+                                  subscriptionTier: widget.subscriptionTier,
                                 ),
                               ],
                             ),
@@ -7017,6 +7417,10 @@ class UserProfileViewScreen extends StatefulWidget {
   final String bio;
   final String? avatarPath;
   final String? coverPath;
+  final bool verified;
+  final String subscriptionTier;
+  final String? location;
+  final String? website;
   final List<CityPost> posts;
   final String currentUsername;
   final Map<String, List<String>> following;
@@ -7026,8 +7430,18 @@ class UserProfileViewScreen extends StatefulWidget {
   final Future<void> Function(CityPost post, String newText)? onEditPost;
   final Future<void> Function(CityPost post)? onDeletePost;
   final Future<void> Function(String username)? onMentionTap;
+  final Future<void> Function(CityPost post)? onLike;
+  final Future<void> Function(CityPost post)? onFavorite;
+  final Future<void> Function(CityPost post)? onRepost;
+  final Future<void> Function(CityPost post)? onShare;
+  final Future<void> Function(CityPost post)? onReplies;
+  final Future<void> Function(CityPost post)? onViewed;
+  final Future<void> Function(CityPost post)? onQuotedPostTap;
+  final void Function(CityPost post)? onMediaTap;
+  final Future<void> Function(CityPost post)? onMore;
   final List<Map<String, dynamic>>? activeStoriesForUser;
   final bool storiesSeen;
+  final bool hasPrivateStory;
   final VoidCallback? onStoryTap;
 
   const UserProfileViewScreen({
@@ -7037,6 +7451,10 @@ class UserProfileViewScreen extends StatefulWidget {
     required this.bio,
     required this.avatarPath,
     this.coverPath,
+    this.verified = false,
+    this.subscriptionTier = 'free',
+    this.location,
+    this.website,
     required this.posts,
     required this.currentUsername,
     required this.following,
@@ -7046,8 +7464,18 @@ class UserProfileViewScreen extends StatefulWidget {
     this.onEditPost,
     this.onDeletePost,
     this.onMentionTap,
+    this.onLike,
+    this.onFavorite,
+    this.onRepost,
+    this.onShare,
+    this.onReplies,
+    this.onViewed,
+    this.onQuotedPostTap,
+    this.onMediaTap,
+    this.onMore,
     this.activeStoriesForUser,
     this.storiesSeen = false,
+    this.hasPrivateStory = false,
     this.onStoryTap,
   });
 
@@ -7244,6 +7672,83 @@ class _UserProfileViewScreenState extends State<UserProfileViewScreen> with Sing
     }
   }
 
+
+  CityPost? _localPostById(String id) {
+    for (final post in _posts) {
+      if (post.id == id) return post;
+    }
+    return null;
+  }
+
+  void _refreshOnePost(CityPost post) {
+    if (!mounted) return;
+    setState(() {
+      final index = _posts.indexWhere((p) => p.id == post.id);
+      if (index >= 0) _posts[index] = post;
+    });
+  }
+
+  Future<void> _handleProfileLike(CityPost post) async {
+    final wasLiked = post.isLiked;
+    final oldLikes = post.likes;
+    await widget.onLike?.call(post);
+    if (!mounted) return;
+    setState(() {
+      final local = _localPostById(post.id) ?? post;
+      // إذا كان المنشور جاء من السيرفر وليس نفس كائن الفيد، نحدّثه محليًا حتى تظهر اللايكات داخل البروفايل فورًا.
+      if (local.isLiked == wasLiked && local.likes == oldLikes) {
+        local.isLiked = !wasLiked;
+        local.likes = (oldLikes + (local.isLiked ? 1 : -1)).clamp(0, 1 << 30).toInt();
+      }
+    });
+  }
+
+  Future<void> _handleProfileFavorite(CityPost post) async {
+    final wasSaved = post.isFavorite;
+    await widget.onFavorite?.call(post);
+    if (!mounted) return;
+    setState(() {
+      final local = _localPostById(post.id) ?? post;
+      if (local.isFavorite == wasSaved) local.isFavorite = !wasSaved;
+    });
+  }
+
+  Future<void> _handleProfileRepost(CityPost post) async {
+    await widget.onRepost?.call(post);
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _handleProfileShare(CityPost post) async {
+    await widget.onShare?.call(post);
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _handleProfileReplies(CityPost post) async {
+    await widget.onViewed?.call(post);
+    await widget.onReplies?.call(post);
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _handleProfileQuoteTap(CityPost post) async {
+    if (widget.onQuotedPostTap != null) {
+      await widget.onQuotedPostTap!(post);
+    } else {
+      await widget.onReplies?.call(post);
+    }
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _handleProfileMore(CityPost post) async {
+    if (widget.onMore != null) {
+      await widget.onMore!(post);
+      if (mounted) setState(() {});
+      return;
+    }
+    if (_isMe) {
+      await _editPost(post);
+    }
+  }
+
   void _showUsersSheet({required String title, required List<Map<String, dynamic>> users}) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     showModalBottomSheet<void>(
@@ -7303,126 +7808,350 @@ class _UserProfileViewScreenState extends State<UserProfileViewScreen> with Sing
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final avatar = _avatar();
     final cover = _coverImage();
+    final bg = isDark ? const Color(0xFF080810) : Colors.white;
+    final cardBg = isDark ? const Color(0xFF0D0D14) : Colors.white;
+    final border = isDark ? Colors.white.withValues(alpha: .10) : const Color(0xFFE6ECF0);
+    final muted = isDark ? AppColors.darkMuted : AppColors.lightMuted;
+    final displayName = widget.user.trim().isEmpty ? SupabaseService.displayUsername(widget.username) : widget.user.trim();
+    final username = SupabaseService.displayUsername(widget.username);
+    final normalizedTier = SupabaseService.subscriptionTierForUser({
+      'username': widget.username,
+      'subscription_tier': _isRespectAiUserName(widget.username) ? 'premium' : widget.subscriptionTier,
+      'is_verified': widget.verified || _isRespectAiUserName(widget.username),
+    });
+    final isVerified = widget.verified || _isRespectAiUserName(widget.username) || normalizedTier != 'free';
+    final tierFrameColors = normalizedTier == 'premium'
+        ? const [Color(0xFF5B21B6), Color(0xFFE879F9), Color(0xFF22D3EE)]
+        : normalizedTier == 'gold'
+            ? const [Color(0xFF92400E), Color(0xFFF59E0B), Color(0xFFFDE68A)]
+            : normalizedTier == 'silver'
+                ? const [Color(0xFF475569), Color(0xFFCBD5E1), Color(0xFF94A3B8)]
+                : const <Color>[];
+    final activeStories = widget.activeStoriesForUser ?? const <Map<String, dynamic>>[];
+    final hasStories = activeStories.isNotEmpty;
+    final location = (widget.location ?? '').trim();
+    final website = (widget.website ?? '').trim();
+
+    Widget inlineStat({required String value, required String label, VoidCallback? onTap}) {
+      final child = Text.rich(
+        TextSpan(
+          children: [
+            TextSpan(text: value, style: TextStyle(color: isDark ? Colors.white : Colors.black, fontWeight: FontWeight.w900)),
+            TextSpan(text: ' $label', style: TextStyle(color: muted, fontWeight: FontWeight.w700)),
+          ],
+        ),
+      );
+      if (onTap == null) return child;
+      return InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: Padding(padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 4), child: child),
+      );
+    }
+
+    Widget infoChip({required IconData icon, required String text}) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        decoration: BoxDecoration(
+          color: AppColors.purple.withValues(alpha: isDark ? .10 : .06),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: AppColors.purple.withValues(alpha: .15)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 15, color: muted),
+            const SizedBox(width: 5),
+            Text(text, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: muted, fontSize: 12.5, fontWeight: FontWeight.w800)),
+          ],
+        ),
+      );
+    }
+
+    Widget actionPill({required IconData icon, required String text, required VoidCallback? onTap, bool filled = false}) {
+      return OutlinedButton.icon(
+        onPressed: onTap,
+        style: OutlinedButton.styleFrom(
+          backgroundColor: filled ? AppColors.purple : AppColors.purple.withValues(alpha: isDark ? .10 : .07),
+          foregroundColor: filled ? Colors.white : AppColors.purple,
+          side: BorderSide(color: filled ? AppColors.purple : AppColors.purple.withValues(alpha: .24)),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+          visualDensity: VisualDensity.compact,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+        ),
+        icon: Icon(icon, size: 17),
+        label: Text(text, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12.5)),
+      );
+    }
+
+    Widget topCircleButton({required IconData icon, required VoidCallback onTap}) {
+      return Material(
+        color: Colors.black.withValues(alpha: .38),
+        shape: const CircleBorder(),
+        child: InkWell(
+          onTap: onTap,
+          customBorder: const CircleBorder(),
+          child: SizedBox(width: 42, height: 42, child: Icon(icon, color: Colors.white, size: 22)),
+        ),
+      );
+    }
+
+    Widget avatarFrame() {
+      return InkWell(
+        onTap: hasStories ? widget.onStoryTap : null,
+        borderRadius: BorderRadius.circular(999),
+        child: Stack(
+          children: [
+            Container(
+              padding: EdgeInsets.all(hasStories || tierFrameColors.isNotEmpty ? 3.5 : 0),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: hasStories
+                    ? (widget.storiesSeen
+                        ? const LinearGradient(colors: [Color(0xFF7A7A7A), Color(0xFF4B5563)])
+                        : (widget.hasPrivateStory
+                            ? const LinearGradient(colors: [Color(0xFF00C853), Color(0xFF00E676), Color(0xFF1B5E20)])
+                            : const LinearGradient(colors: [Color(0xFFFFD166), AppColors.purple, Color(0xFF06D6A0)])))
+                    : (tierFrameColors.isEmpty ? null : LinearGradient(colors: tierFrameColors)),
+                boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: .20), blurRadius: 18, offset: const Offset(0, 8))],
+              ),
+              child: CircleAvatar(
+                radius: 54,
+                backgroundColor: cardBg,
+                child: CircleAvatar(
+                  radius: 49,
+                  backgroundColor: AppColors.purple,
+                  backgroundImage: avatar,
+                  child: avatar == null ? const Icon(Icons.person, color: Colors.white, size: 44) : null,
+                ),
+              ),
+            ),
+            if (hasStories)
+              PositionedDirectional(
+                end: 2,
+                bottom: 2,
+                child: Container(
+                  padding: const EdgeInsets.all(7),
+                  decoration: BoxDecoration(
+                    color: widget.storiesSeen ? Colors.grey.shade700 : AppColors.purple,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: cardBg, width: 2),
+                  ),
+                  child: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 17),
+                ),
+              ),
+          ],
+        ),
+      );
+    }
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.user, style: const TextStyle(fontWeight: FontWeight.w900)),
-        actions: [
-          PopupMenuButton<String>(
-            onSelected: (value) {
-              if (value == 'mute') {
-                setState(() => _muted = !_muted);
-                _showAction(_muted ? 'تم كتم الحساب' : 'تم إلغاء الكتم');
-              } else if (value == 'block') {
-                setState(() => _blocked = !_blocked);
-                _showAction(_blocked ? 'تم حظر الحساب' : 'تم إلغاء الحظر');
-              }
-            },
-            itemBuilder: (_) => [
-              PopupMenuItem(value: 'mute', child: Text(_muted ? 'إلغاء الكتم' : 'كتم')),
-              PopupMenuItem(value: 'block', child: Text(_blocked ? 'إلغاء الحظر' : 'حظر')),
-            ],
-          ),
-        ],
-      ),
+      appBar: null,
+      backgroundColor: bg,
       body: NestedScrollView(
         headerSliverBuilder: (context, innerBoxIsScrolled) => [
           SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
-              child: GlassCard(
-                padding: EdgeInsets.zero,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      height: 128,
-                      decoration: BoxDecoration(
-                        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-                        gradient: const LinearGradient(colors: [Color(0xFF24103F), AppColors.purple, Color(0xFF7C3AED)]),
-                        image: cover == null ? null : DecorationImage(image: cover, fit: BoxFit.cover),
-                        boxShadow: [BoxShadow(color: AppColors.purple.withValues(alpha: 0.22), blurRadius: 28, offset: const Offset(0, 10))],
-                      ),
-                      child: cover == null ? null : Container(
+            child: Container(
+              color: cardBg,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      Container(
+                        height: 168,
+                        width: double.infinity,
                         decoration: BoxDecoration(
-                          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-                          gradient: LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                            colors: [Colors.black.withValues(alpha: 0.06), Colors.black.withValues(alpha: 0.42)],
+                          gradient: const LinearGradient(
+                            begin: Alignment.topRight,
+                            end: Alignment.bottomLeft,
+                            colors: [Color(0xFF14051F), AppColors.purple, Color(0xFF040308)],
+                          ),
+                          image: cover == null ? null : DecorationImage(image: cover, fit: BoxFit.cover),
+                        ),
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [Colors.black.withValues(alpha: .06), Colors.black.withValues(alpha: .35)],
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Transform.translate(
-                            offset: const Offset(0, -38),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  crossAxisAlignment: CrossAxisAlignment.end,
-                                  children: [
-                                    _ProfileAvatar(radius: 48, imageProvider: avatar),
-                                    const Spacer(),
-                                  ],
-                                ),
-                                if (!_isMe) ...[
-                                  const SizedBox(height: 12),
-                                  SizedBox(
-                                    width: double.infinity,
-                                    child: _ProfileActionButtons(
-                                      isDark: isDark,
-                                      isFollowing: _isFollowing,
-                                      notificationsEnabled: _postNotificationsEnabled,
-                                      blocked: _blocked,
-                                      onChat: _openChat,
-                                      onFollow: _toggleFollow,
-                                      onNotify: _togglePostNotifications,
-                                    ),
-                                  ),
-                                ],
-                              ],
+                      PositionedDirectional(
+                        top: MediaQuery.of(context).padding.top + 8,
+                        start: 12,
+                        child: topCircleButton(icon: Icons.arrow_back_rounded, onTap: () => Navigator.pop(context)),
+                      ),
+                      PositionedDirectional(
+                        top: MediaQuery.of(context).padding.top + 8,
+                        end: 12,
+                        child: PopupMenuButton<String>(
+                          color: isDark ? AppColors.darkCard : AppColors.lightCard,
+                          offset: const Offset(0, 46),
+                          onSelected: (value) {
+                            if (value == 'mute') {
+                              setState(() => _muted = !_muted);
+                              _showAction(_muted ? 'تم كتم الحساب' : 'تم إلغاء الكتم');
+                            } else if (value == 'block') {
+                              setState(() => _blocked = !_blocked);
+                              _showAction(_blocked ? 'تم حظر الحساب' : 'تم إلغاء الحظر');
+                            }
+                          },
+                          itemBuilder: (_) => [
+                            PopupMenuItem(value: 'mute', child: Text(_muted ? 'إلغاء الكتم' : 'كتم')),
+                            PopupMenuItem(value: 'block', child: Text(_blocked ? 'إلغاء الحظر' : 'حظر')),
+                          ],
+                          child: Material(
+                            color: Colors.black.withValues(alpha: .38),
+                            shape: const CircleBorder(),
+                            child: const SizedBox(
+                              width: 42,
+                              height: 42,
+                              child: Icon(Icons.more_horiz_rounded, color: Colors.white, size: 22),
                             ),
                           ),
-                          Transform.translate(
-                            offset: Offset(0, _isMe ? -22 : -14),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                        ),
+                      ),
+                      PositionedDirectional(
+                        start: 14,
+                        bottom: -48,
+                        child: avatarFrame(),
+                      ),
+                      if (!_isMe)
+                        PositionedDirectional(
+                          end: 14,
+                          bottom: -40,
+                          child: OutlinedButton.icon(
+                            onPressed: _blocked ? null : _toggleFollow,
+                            style: OutlinedButton.styleFrom(
+                              backgroundColor: _isFollowing ? cardBg : AppColors.purple,
+                              foregroundColor: _isFollowing ? (isDark ? Colors.white : Colors.black) : Colors.white,
+                              side: BorderSide(color: _isFollowing ? border : AppColors.purple, width: 1.2),
+                              padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 9),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+                            ),
+                            icon: Icon(_isFollowing ? Icons.person_remove_alt_1_rounded : Icons.person_add_alt_1_rounded, size: 17),
+                            label: Text(_isFollowing ? 'إلغاء المتابعة' : 'متابعة', style: const TextStyle(fontWeight: FontWeight.w900)),
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 56),
+                  Padding(
+                    padding: const EdgeInsetsDirectional.fromSTEB(14, 0, 14, 14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Flexible(
+                                    child: Text(
+                                      displayName,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900, letterSpacing: -.4),
+                                    ),
+                                  ),
+                                  if (isVerified)
+                                    _RespectAiVerifiedBadge(tier: normalizedTier == 'free' ? 'premium' : normalizedTier, large: true),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 2),
+                        Row(
+                          children: [
+                            Text(username, style: TextStyle(color: muted, fontWeight: FontWeight.w700)),
+                            if (normalizedTier != 'free') ...[
+                              const SizedBox(width: 8),
+                              _MiniChip(text: normalizedTier == 'premium' ? 'Premium' : normalizedTier == 'gold' ? 'Gold' : 'Silver', color: _RespectAiVerifiedBadge.accentForTier(normalizedTier)),
+                            ],
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          widget.bio.trim().isEmpty ? 'لا توجد نبذة شخصية' : widget.bio.trim(),
+                          style: const TextStyle(height: 1.42, fontSize: 14.5, fontWeight: FontWeight.w600),
+                        ),
+                        const SizedBox(height: 11),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            if (location.isNotEmpty) infoChip(icon: Icons.location_on_outlined, text: location),
+                            if (website.isNotEmpty) infoChip(icon: Icons.link_rounded, text: website),
+                            infoChip(icon: Icons.calendar_month_rounded, text: 'انضم إلى Respect'),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        Wrap(
+                          spacing: 15,
+                          runSpacing: 4,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            inlineStat(value: '${_posts.length}', label: 'منشور'),
+                            inlineStat(value: '$_followingCount', label: 'يتابع', onTap: () => _showUsersSheet(title: 'يتابع', users: _followingUsers)),
+                            inlineStat(value: '$_followersCount', label: 'متابع', onTap: () => _showUsersSheet(title: 'المتابعون', users: _followers)),
+                          ],
+                        ),
+                        if (!_isMe) ...[
+                          const SizedBox(height: 12),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              actionPill(icon: Icons.chat_bubble_rounded, text: 'دردشة', onTap: _blocked ? null : _openChat),
+                              actionPill(
+                                icon: _postNotificationsEnabled ? Icons.notifications_active_rounded : Icons.notifications_none_rounded,
+                                text: _postNotificationsEnabled ? 'الإشعارات مفعلة' : 'تنبيه المنشورات',
+                                onTap: _blocked ? null : _togglePostNotifications,
+                                filled: _postNotificationsEnabled,
+                              ),
+                              actionPill(icon: _blocked ? Icons.lock_open_rounded : Icons.block_rounded, text: _blocked ? 'إلغاء الحظر' : 'حظر', onTap: () {
+                                setState(() => _blocked = !_blocked);
+                                _showAction(_blocked ? 'تم حظر الحساب' : 'تم إلغاء الحظر');
+                              }),
+                            ],
+                          ),
+                        ],
+                        if (normalizedTier != 'free') ...[
+                          const SizedBox(height: 10),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: AppColors.purple.withValues(alpha: isDark ? .12 : .07),
+                              borderRadius: BorderRadius.circular(18),
+                              border: Border.all(color: AppColors.purple.withValues(alpha: .14)),
+                            ),
+                            child: Row(
                               children: [
-                                _RespectAuthorName(
-                                  name: widget.user,
-                                  username: widget.username,
-                                  style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(SupabaseService.displayUsername(widget.username), style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, fontWeight: FontWeight.w700)),
-                                const SizedBox(height: 10),
-                                Text(widget.bio.trim().isEmpty ? 'لا توجد نبذة شخصية' : widget.bio, style: const TextStyle(height: 1.45)),
-                                const SizedBox(height: 14),
-                                Wrap(
-                                  spacing: 16,
-                                  runSpacing: 8,
-                                  children: [
-                                    _MiniStat(value: '${_posts.length}', label: 'منشورات'),
-                                    _MiniStat(value: '${_replies.length}', label: 'ردود'),
-                                    _MiniStat(value: '${_mediaPosts.length}', label: 'وسائط'),
-                                    InkWell(onTap: () => _showUsersSheet(title: 'المتابعون', users: _followers), child: _MiniStat(value: '$_followersCount', label: 'متابعون')),
-                                    InkWell(onTap: () => _showUsersSheet(title: 'يتابع', users: _followingUsers), child: _MiniStat(value: '$_followingCount', label: 'يتابع')),
-                                  ],
+                                _RespectAiVerifiedBadge(tier: normalizedTier, large: true),
+                                const SizedBox(width: 9),
+                                Expanded(
+                                  child: Text(
+                                    SupabaseService.tierPowerDescription(normalizedTier),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(fontWeight: FontWeight.w900, height: 1.35, fontSize: 12.5),
+                                  ),
                                 ),
                               ],
                             ),
                           ),
                         ],
-                      ),
+                      ],
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -7432,8 +8161,9 @@ class _UserProfileViewScreenState extends State<UserProfileViewScreen> with Sing
               TabBar(
                 controller: _tabController,
                 labelColor: AppColors.purple,
-                unselectedLabelColor: isDark ? AppColors.darkMuted : AppColors.lightMuted,
+                unselectedLabelColor: muted,
                 indicatorColor: AppColors.purple,
+                indicatorWeight: 3,
                 tabs: const [Tab(text: 'المنشورات'), Tab(text: 'الردود'), Tab(text: 'الوسائط')],
               ),
               isDark: isDark,
@@ -7443,9 +8173,47 @@ class _UserProfileViewScreenState extends State<UserProfileViewScreen> with Sing
         body: TabBarView(
           controller: _tabController,
           children: [
-            _ProfilePostsList(posts: _posts, empty: 'لا توجد منشورات', isMe: _isMe, onEdit: _editPost, onDelete: _deletePost, onMentionTap: widget.onMentionTap),
+            _ProfilePostsList(
+              posts: _posts,
+              empty: 'لا توجد منشورات',
+              avatarProviderForPath: _avatar,
+              activeStoriesForUser: widget.activeStoriesForUser,
+              storiesSeen: widget.storiesSeen,
+              hasPrivateStory: widget.hasPrivateStory,
+              onStoryTap: widget.onStoryTap,
+              onLike: _handleProfileLike,
+              onFavorite: _handleProfileFavorite,
+              onRepost: _handleProfileRepost,
+              onShare: _handleProfileShare,
+              onMediaTap: (post) => widget.onMediaTap?.call(post),
+              onReplies: _handleProfileReplies,
+              onQuotedPostTap: _handleProfileQuoteTap,
+              onMentionTap: widget.onMentionTap,
+              onAuthorTap: (post) => widget.onMentionTap?.call(post.username),
+              onMore: _handleProfileMore,
+              onRefresh: _loadFollowLists,
+            ),
             _RepliesList(replies: _replies, avatarProvider: _avatar, onMentionTap: widget.onMentionTap),
-            _ProfilePostsList(posts: _mediaPosts, empty: 'لا توجد وسائط', isMe: _isMe, onEdit: _editPost, onDelete: _deletePost, onMentionTap: widget.onMentionTap),
+            _ProfilePostsList(
+              posts: _mediaPosts,
+              empty: 'لا توجد وسائط',
+              avatarProviderForPath: _avatar,
+              activeStoriesForUser: widget.activeStoriesForUser,
+              storiesSeen: widget.storiesSeen,
+              hasPrivateStory: widget.hasPrivateStory,
+              onStoryTap: widget.onStoryTap,
+              onLike: _handleProfileLike,
+              onFavorite: _handleProfileFavorite,
+              onRepost: _handleProfileRepost,
+              onShare: _handleProfileShare,
+              onMediaTap: (post) => widget.onMediaTap?.call(post),
+              onReplies: _handleProfileReplies,
+              onQuotedPostTap: _handleProfileQuoteTap,
+              onMentionTap: widget.onMentionTap,
+              onAuthorTap: (post) => widget.onMentionTap?.call(post.username),
+              onMore: _handleProfileMore,
+              onRefresh: _loadFollowLists,
+            ),
           ],
         ),
       ),
@@ -7509,94 +8277,118 @@ class _TabsHeaderDelegate extends SliverPersistentHeaderDelegate {
 class _ProfilePostsList extends StatelessWidget {
   final List<CityPost> posts;
   final String empty;
-  final bool isMe;
-  final Future<void> Function(CityPost post)? onEdit;
-  final Future<void> Function(CityPost post)? onDelete;
+  final ImageProvider? Function(String? path) avatarProviderForPath;
+  final List<Map<String, dynamic>>? activeStoriesForUser;
+  final bool storiesSeen;
+  final bool hasPrivateStory;
+  final VoidCallback? onStoryTap;
+  final Future<void> Function(CityPost post) onLike;
+  final Future<void> Function(CityPost post) onFavorite;
+  final Future<void> Function(CityPost post) onRepost;
+  final Future<void> Function(CityPost post) onShare;
+  final void Function(CityPost post) onMediaTap;
+  final Future<void> Function(CityPost post) onReplies;
+  final Future<void> Function(CityPost post)? onViewed;
+  final Future<void> Function(CityPost post)? onQuotedPostTap;
   final Future<void> Function(String username)? onMentionTap;
+  final void Function(CityPost post) onAuthorTap;
+  final Future<void> Function(CityPost post)? onMore;
+  final Future<void> Function() onRefresh;
 
-  const _ProfilePostsList({required this.posts, required this.empty, this.isMe = false, this.onEdit, this.onDelete, this.onMentionTap});
+  const _ProfilePostsList({
+    required this.posts,
+    required this.empty,
+    required this.avatarProviderForPath,
+    this.activeStoriesForUser,
+    this.storiesSeen = false,
+    this.hasPrivateStory = false,
+    this.onStoryTap,
+    required this.onLike,
+    required this.onFavorite,
+    required this.onRepost,
+    required this.onShare,
+    required this.onMediaTap,
+    required this.onReplies,
+    this.onViewed,
+    this.onQuotedPostTap,
+    this.onMentionTap,
+    required this.onAuthorTap,
+    this.onMore,
+    required this.onRefresh,
+  });
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    if (posts.isEmpty) return Center(child: Text(empty));
-    return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(0, 0, 0, 20),
-      itemCount: posts.length,
-      separatorBuilder: (_, __) => Divider(height: 1, thickness: 0.7, color: AppColors.purple.withValues(alpha: 0.32)),
-      itemBuilder: (context, i) {
-        final post = posts[i];
-        final avatar = FeedScreenStateHelper.profileImageProvider(post.avatarPath);
-        return InkWell(
-          onTap: () {},
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(14, 13, 14, 13),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                InkWell(
-                  borderRadius: BorderRadius.circular(99),
-                  onTap: () => onMentionTap?.call(post.username),
-                  child: CircleAvatar(
-                    radius: 23,
-                    backgroundColor: AppColors.purple.withValues(alpha: .35),
-                    backgroundImage: avatar,
-                    child: avatar == null ? const Icon(Icons.person_rounded, color: Colors.white) : null,
-                  ),
+    final muted = isDark ? AppColors.darkMuted : AppColors.lightMuted;
+
+    if (posts.isEmpty) {
+      return RefreshIndicator(
+        color: AppColors.purple,
+        onRefresh: onRefresh,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.zero,
+          children: [
+            SizedBox(
+              height: 230,
+              child: Center(
+                child: Text(
+                  empty,
+                  style: TextStyle(color: muted, fontWeight: FontWeight.w900),
                 ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: InkWell(
-                              onTap: () => onMentionTap?.call(post.username),
-                              child: Text(
-                                '${post.user}  ${post.username}',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15),
-                              ),
-                            ),
-                          ),
-                          Text(post.time, style: TextStyle(fontSize: 11, color: isDark ? AppColors.darkMuted : AppColors.lightMuted)),
-                          if (isMe)
-                            PopupMenuButton<String>(
-                              padding: EdgeInsets.zero,
-                              icon: Icon(Icons.more_horiz_rounded, color: isDark ? AppColors.darkMuted : AppColors.lightMuted),
-                              onSelected: (v) {
-                                if (v == 'edit') onEdit?.call(post);
-                                if (v == 'delete') onDelete?.call(post);
-                              },
-                              itemBuilder: (_) => const [
-                                PopupMenuItem(value: 'edit', child: Text('تعديل التغريدة')),
-                                PopupMenuItem(value: 'delete', child: Text('حذف التغريدة')),
-                              ],
-                            ),
-                        ],
-                      ),
-                      if (post.text.trim().isNotEmpty) ...[
-                        const SizedBox(height: 5),
-                        _MentionText(post.text, style: const TextStyle(height: 1.45, fontSize: 15), onMentionTap: onMentionTap),
-                      ],
-                      if ((post.mediaPath ?? '').trim().isNotEmpty && post.mediaType != null) ...[
-                        const SizedBox(height: 10),
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(18),
-                          child: SizedBox(height: 190, width: double.infinity, child: _PostMedia(path: post.mediaPath!, type: post.mediaType!)),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ],
+              ),
             ),
-          ),
-        );
-      },
+          ],
+        ),
+      );
+    }
+
+    return RefreshIndicator(
+      color: AppColors.purple,
+      onRefresh: onRefresh,
+      child: ListView.separated(
+        physics: const AlwaysScrollableScrollPhysics(),
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+        padding: EdgeInsets.zero,
+        itemCount: posts.length,
+        separatorBuilder: (_, __) => Divider(
+          height: 1,
+          thickness: 0.75,
+          color: AppColors.purple.withValues(alpha: isDark ? 0.14 : 0.10),
+        ),
+        itemBuilder: (context, i) {
+          final post = posts[i];
+          return _PostCard(
+            post: post,
+            avatarProvider: avatarProviderForPath(post.avatarPath),
+            onLike: () => onLike(post),
+            onFavorite: () => onFavorite(post),
+            onRepost: () => onRepost(post),
+            onShare: () => onShare(post),
+            onMediaTap: () => onMediaTap(post),
+            onReplies: () => onReplies(post),
+            onViewed: onViewed == null ? null : () => onViewed!(post),
+            onQuoteTap: post.quotedPost == null
+                ? null
+                : () async {
+                    if (onQuotedPostTap != null) {
+                      await onQuotedPostTap!(post.quotedPost!);
+                    } else {
+                      await onReplies(post.quotedPost!);
+                    }
+                  },
+            onMentionTap: onMentionTap,
+            activeStoriesForUser: activeStoriesForUser,
+            storiesSeen: storiesSeen,
+            hasPrivateStory: hasPrivateStory,
+            onStoryTap: onStoryTap,
+            onAuthorTap: () => onAuthorTap(post),
+            onMore: onMore == null ? null : () => onMore!(post),
+            disableCardTap: false,
+          );
+        },
+      ),
     );
   }
 }
@@ -7812,6 +8604,8 @@ class _QuotedPostPreview extends StatelessWidget {
                         child: _RespectAuthorName(
                           name: post.user,
                           username: post.username,
+                          verified: post.authorVerified,
+                          subscriptionTier: post.subscriptionTier,
                           style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13),
                         ),
                       ),
@@ -7863,6 +8657,7 @@ class _PostCard extends StatelessWidget {
   final Future<void> Function(String username)? onMentionTap;
   final List<Map<String, dynamic>>? activeStoriesForUser;
   final bool storiesSeen;
+  final bool hasPrivateStory;
   final VoidCallback? onStoryTap;
   final VoidCallback onAuthorTap;
   final VoidCallback? onMore;
@@ -7883,6 +8678,7 @@ class _PostCard extends StatelessWidget {
     this.onMentionTap,
     this.activeStoriesForUser,
     this.storiesSeen = false,
+    this.hasPrivateStory = false,
     this.onStoryTap,
     required this.onAuthorTap,
     this.onMore,
@@ -7994,7 +8790,9 @@ class _PostCard extends StatelessWidget {
                             imageProvider: avatarProvider,
                             hasStory: activeStoriesForUser?.isNotEmpty == true,
                             storySeen: storiesSeen,
+                            privateStory: hasPrivateStory,
                             onStoryTap: onStoryTap,
+                            avatarTapOpensStory: false,
                           ),
                         ),
                         const SizedBox(width: 10),
@@ -8018,6 +8816,7 @@ class _PostCard extends StatelessWidget {
                                             name: post.user,
                                             username: post.username,
                                             verified: post.authorVerified,
+                                            subscriptionTier: post.subscriptionTier,
                                             style: const TextStyle(fontWeight: FontWeight.w900),
                                           ),
                                         ),
@@ -8031,6 +8830,11 @@ class _PostCard extends StatelessWidget {
                                           ),
                                         ),
                                         Text('· ${post.time}', style: TextStyle(color: mutedColor, fontSize: 12)),
+                                        if (post.authorSubscriptionPriority > 0 && post.subscriptionTier != 'free')
+                                          _SubscriptionBoostBadge(
+                                            tier: post.subscriptionTier,
+                                            label: post.authorSubscriptionLabel,
+                                          ),
                                       ],
                                     );
                                   },
@@ -8640,9 +9444,19 @@ class _ProfileAvatar extends StatelessWidget {
   final ImageProvider? imageProvider;
   final bool hasStory;
   final bool storySeen;
+  final bool privateStory;
   final VoidCallback? onStoryTap;
+  final bool avatarTapOpensStory;
 
-  const _ProfileAvatar({required this.radius, required this.imageProvider, this.hasStory = false, this.storySeen = false, this.onStoryTap});
+  const _ProfileAvatar({
+    required this.radius,
+    required this.imageProvider,
+    this.hasStory = false,
+    this.storySeen = false,
+    this.privateStory = false,
+    this.onStoryTap,
+    this.avatarTapOpensStory = true,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -8653,24 +9467,28 @@ class _ProfileAvatar extends StatelessWidget {
       child: imageProvider == null ? Icon(Icons.person, color: Colors.white, size: radius) : null,
     );
     if (!hasStory) return avatar;
+    final decoratedAvatar = Container(
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: storySeen
+            ? const LinearGradient(colors: [Color(0xFF777777), Color(0xFF4B5563)])
+            : (privateStory
+                ? const LinearGradient(colors: [Color(0xFF00C853), Color(0xFF00E676), Color(0xFF1B5E20)])
+                : const LinearGradient(colors: [Color(0xFFFFD166), AppColors.purple, Color(0xFF06D6A0)])),
+        boxShadow: [BoxShadow(color: (storySeen ? Colors.grey : (privateStory ? const Color(0xFF00C853) : AppColors.purple)).withValues(alpha: .28), blurRadius: 14, spreadRadius: 1)],
+      ),
+      child: Container(
+        padding: const EdgeInsets.all(2),
+        decoration: BoxDecoration(shape: BoxShape.circle, color: Theme.of(context).brightness == Brightness.dark ? AppColors.darkBg : AppColors.lightBg),
+        child: avatar,
+      ),
+    );
+    if (!avatarTapOpensStory) return decoratedAvatar;
     return InkWell(
       onTap: onStoryTap,
       customBorder: const CircleBorder(),
-      child: Container(
-        padding: const EdgeInsets.all(3),
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          gradient: storySeen
-              ? const LinearGradient(colors: [Color(0xFF777777), Color(0xFF4B5563)])
-              : const LinearGradient(colors: [Color(0xFFFFD166), AppColors.purple, Color(0xFF06D6A0)]),
-          boxShadow: [BoxShadow(color: (storySeen ? Colors.grey : AppColors.purple).withValues(alpha: .28), blurRadius: 14, spreadRadius: 1)],
-        ),
-        child: Container(
-          padding: const EdgeInsets.all(2),
-          decoration: BoxDecoration(shape: BoxShape.circle, color: Theme.of(context).brightness == Brightness.dark ? AppColors.darkBg : AppColors.lightBg),
-          child: avatar,
-        ),
-      ),
+      child: decoratedAvatar,
     );
   }
 }
@@ -9035,6 +9853,16 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
   }
 
   Widget _media(String url) {
+    if (url.trim().isEmpty) {
+      return const Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.lock_rounded, color: Colors.white70, size: 74),
+          SizedBox(height: 12),
+          Text('هذا الستوري مشفر وغير متاح لهذا الحساب', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w800)),
+        ],
+      );
+    }
     if (_isVideo(_story)) {
       final controller = _videoController;
       if (controller == null || !controller.value.isInitialized) {
@@ -10572,6 +11400,10 @@ class CityPost {
   final String? repostedAt;
   final int? timelineSortMillis;
   final bool authorVerified;
+  final String subscriptionTier;
+  final int authorSubscriptionPriority;
+  final String? authorSubscriptionBoostUntil;
+  final String authorSubscriptionLabel;
   final String audience;
   final String communityId;
   final String communityName;
@@ -10605,6 +11437,10 @@ class CityPost {
     this.repostedAt,
     this.timelineSortMillis,
     this.authorVerified = false,
+    this.subscriptionTier = 'free',
+    this.authorSubscriptionPriority = 0,
+    this.authorSubscriptionBoostUntil,
+    this.authorSubscriptionLabel = '',
     this.audience = 'public',
     this.communityId = '',
     this.communityName = '',
@@ -10643,6 +11479,10 @@ class CityPost {
       repostedAt: json['repostedAt']?.toString(),
       timelineSortMillis: int.tryParse((json['timelineSortMillis'] ?? '').toString()),
       authorVerified: SupabaseService.truthy(json['author_verified'] ?? json['authorVerified'] ?? json['is_verified'] ?? json['verified']),
+      subscriptionTier: (json['subscriptionTier'] ?? json['author_subscription_tier'] ?? 'free').toString(),
+      authorSubscriptionPriority: int.tryParse((json['authorSubscriptionPriority'] ?? json['author_subscription_priority'] ?? 0).toString()) ?? 0,
+      authorSubscriptionBoostUntil: (json['authorSubscriptionBoostUntil'] ?? json['author_subscription_boost_until'])?.toString(),
+      authorSubscriptionLabel: (json['authorSubscriptionLabel'] ?? json['author_subscription_label'] ?? '').toString(),
       audience: (json['audience'] ?? 'public').toString(),
       communityId: (json['communityId'] ?? json['community_id'] ?? '').toString(),
       communityName: (json['communityName'] ?? json['community_name'] ?? '').toString(),
@@ -10674,6 +11514,10 @@ class CityPost {
     views: views,
     replyCount: replyCount,
     authorVerified: authorVerified,
+    subscriptionTier: subscriptionTier,
+    authorSubscriptionPriority: authorSubscriptionPriority,
+    authorSubscriptionBoostUntil: authorSubscriptionBoostUntil,
+    authorSubscriptionLabel: authorSubscriptionLabel,
     audience: audience,
     communityId: communityId,
     communityName: communityName,
@@ -10714,6 +11558,10 @@ class CityPost {
     repostedAt: repostedAt,
     timelineSortMillis: timelineSortMillis,
     authorVerified: authorVerified,
+    subscriptionTier: subscriptionTier,
+    authorSubscriptionPriority: authorSubscriptionPriority,
+    authorSubscriptionBoostUntil: authorSubscriptionBoostUntil,
+    authorSubscriptionLabel: authorSubscriptionLabel,
     audience: audience,
     communityId: communityId,
     communityName: communityName,
@@ -10747,6 +11595,10 @@ class CityPost {
     'repostedAt': repostedAt,
     'timelineSortMillis': timelineSortMillis,
     'authorVerified': authorVerified,
+    'subscriptionTier': subscriptionTier,
+    'authorSubscriptionPriority': authorSubscriptionPriority,
+    'authorSubscriptionBoostUntil': authorSubscriptionBoostUntil,
+    'authorSubscriptionLabel': authorSubscriptionLabel,
     'audience': audience,
     'communityId': communityId,
     'communityName': communityName,

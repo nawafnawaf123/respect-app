@@ -33,20 +33,53 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _profileName = 'Nawaf RP';
   String _profileUsername = '@nawaf_city';
 
+  final TextEditingController _phoneCountryCtrl = TextEditingController(text: '+961');
+  final TextEditingController _phoneCtrl = TextEditingController();
+  final TextEditingController _phoneCodeCtrl = TextEditingController();
+  String _phoneE164 = '';
+  bool _phoneVerified = false;
+  bool _smsSecurityEnabled = false;
+  bool _phoneCodeSent = false;
+  bool _savingPhoneSecurity = false;
+
   // ----- ميزات الخصوصية الجديدة -----
   bool _isScreenBlack = false;
   bool _privacyModeEnabled = false;
   bool _quickHideEnabled = false;
 
+  bool _messagesEnabled = true;
+  bool _verifiedOnlyMessages = false;
+  bool _callsEnabled = true;
+  bool _chatRequestsRequired = true;
+  bool _canUseVerifiedOnlyMessages = false;
+  bool _savingMessagingPrivacy = false;
+
   @override
   void initState() {
     super.initState();
-    _loadProfile();
-    _loadPrivacySettings();
+    _loadSettingsBootstrap();
   }
 
-  Future<void> _loadPrivacySettings() async {
+  @override
+  void dispose() {
+    _phoneCountryCtrl.dispose();
+    _phoneCtrl.dispose();
+    _phoneCodeCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadSettingsBootstrap() async {
     final prefs = await SharedPreferences.getInstance();
+    await _loadProfile(prefs);
+    await Future.wait<void>([
+      _loadPrivacySettings(prefs),
+      _loadMessagingPrivacySettings(),
+      _loadPhoneSecuritySettings(),
+    ]);
+  }
+
+  Future<void> _loadPrivacySettings([SharedPreferences? cachedPrefs]) async {
+    final prefs = cachedPrefs ?? await SharedPreferences.getInstance();
     final enabled = prefs.getBool('privacy_mode_enabled') ?? false;
     final quickHide = prefs.getBool('quick_hide_enabled') ?? false;
     if (mounted) {
@@ -82,6 +115,147 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await _saveQuickHide(value);
   }
 
+  Future<void> _loadPhoneSecuritySettings() async {
+    try {
+      final user = await SupabaseService.getUserByUsername(_profileUsername);
+      if (user == null || !mounted) return;
+      final phone = (user['phone_e164'] ?? '').toString();
+      setState(() {
+        _phoneE164 = phone;
+        _phoneVerified = SupabaseService.truthy(user['phone_verified']);
+        _smsSecurityEnabled = SupabaseService.truthy(user['sms_security_enabled']) || _phoneVerified;
+        if (phone.isNotEmpty) {
+          _phoneCtrl.text = phone;
+          _phoneCountryCtrl.text = '';
+        }
+      });
+    } catch (_) { _scannerSafeIgnore(); }
+  }
+
+  Future<void> _sendPhoneSecurityCode() async {
+    if (_savingPhoneSecurity) return;
+    FocusScope.of(context).unfocus();
+    setState(() => _savingPhoneSecurity = true);
+    try {
+      final res = await SupabaseService.requestPhoneSecurityCode(
+        username: _profileUsername,
+        countryCode: _phoneCountryCtrl.text,
+        phone: _phoneCtrl.text,
+      );
+      final phone = (res['phoneE164'] ?? '').toString();
+      if (!mounted) return;
+      setState(() {
+        _phoneE164 = phone;
+        _phoneCodeSent = true;
+        _phoneVerified = false;
+        _smsSecurityEnabled = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تم إرسال رمز SMS إلى $phone')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
+      );
+    } finally {
+      if (mounted) setState(() => _savingPhoneSecurity = false);
+    }
+  }
+
+  Future<void> _verifyPhoneSecurityCode() async {
+    if (_savingPhoneSecurity) return;
+    final code = _phoneCodeCtrl.text.trim();
+    if (code.length < 4) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('اكتب رمز SMS')));
+      return;
+    }
+    FocusScope.of(context).unfocus();
+    setState(() => _savingPhoneSecurity = true);
+    try {
+      final res = await SupabaseService.verifyPhoneSecurityCode(
+        username: _profileUsername,
+        phoneE164: _phoneE164,
+        code: code,
+      );
+      if (!mounted) return;
+      setState(() {
+        _phoneVerified = res['verified'] == true;
+        _smsSecurityEnabled = true;
+        _phoneCodeSent = false;
+        _phoneCodeCtrl.clear();
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تم تفعيل الأمان عبر الرقم بنجاح')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
+      );
+    } finally {
+      if (mounted) setState(() => _savingPhoneSecurity = false);
+    }
+  }
+
+  Future<void> _loadMessagingPrivacySettings() async {
+    final username = _profileUsername.trim().isEmpty ? '@user' : _profileUsername;
+    try {
+      final results = await Future.wait<dynamic>([
+        SupabaseService.getMessagingPrivacySettings(username),
+        SupabaseService.getUserByUsername(username),
+      ]);
+      final settings = Map<String, dynamic>.from(results[0] as Map);
+      final user = results[1] is Map ? Map<String, dynamic>.from(results[1] as Map) : null;
+      final canUse = SupabaseService.canUseVerifiedOnlyMessagesFeature(user);
+      if (!mounted) return;
+      setState(() {
+        _messagesEnabled = SupabaseService.truthy(settings['messages_enabled'] ?? true);
+        _verifiedOnlyMessages = canUse && SupabaseService.truthy(settings['verified_only_messages']);
+        _callsEnabled = SupabaseService.truthy(settings['calls_enabled'] ?? true);
+        _chatRequestsRequired = SupabaseService.truthy(settings['chat_requests_required'] ?? true);
+        _canUseVerifiedOnlyMessages = canUse;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _verifiedOnlyMessages = false;
+        _canUseVerifiedOnlyMessages = false;
+      });
+    }
+  }
+
+  Future<void> _saveMessagingPrivacySettings() async {
+    if (_savingMessagingPrivacy) return;
+    setState(() => _savingMessagingPrivacy = true);
+    try {
+      final next = await SupabaseService.updateMessagingPrivacySettings(
+        username: _profileUsername,
+        messagesEnabled: _messagesEnabled,
+        verifiedOnlyMessages: _verifiedOnlyMessages && _canUseVerifiedOnlyMessages,
+        callsEnabled: _callsEnabled,
+        chatRequestsRequired: _chatRequestsRequired,
+      );
+      if (!mounted) return;
+      setState(() {
+        _messagesEnabled = SupabaseService.truthy(next['messages_enabled'] ?? true);
+        _verifiedOnlyMessages = _canUseVerifiedOnlyMessages && SupabaseService.truthy(next['verified_only_messages']);
+        _callsEnabled = SupabaseService.truthy(next['calls_enabled'] ?? true);
+        _chatRequestsRequired = SupabaseService.truthy(next['chat_requests_required'] ?? true);
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تم حفظ خصوصية الرسائل')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تعذر حفظ خصوصية الرسائل: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _savingMessagingPrivacy = false);
+    }
+  }
+
   Future<List<Map<String, dynamic>>> _loadAccounts(SharedPreferences prefs) async {
     final raw = prefs.getString(_accountsKey);
     if (raw == null || raw.trim().isEmpty) return [];
@@ -103,8 +277,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return accounts.indexWhere((a) => (a['id'] ?? '').toString() == id);
   }
 
-  Future<void> _loadProfile() async {
-    final prefs = await SharedPreferences.getInstance();
+  Future<void> _loadProfile([SharedPreferences? cachedPrefs]) async {
+    final prefs = cachedPrefs ?? await SharedPreferences.getInstance();
     final id = prefs.getString(_currentUserKey) ?? prefs.getString('current_user_id');
     Map<String, dynamic> account = <String, dynamic>{};
 
@@ -260,6 +434,144 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       activeThumbColor: AppColors.purple,
                     ),
                   ).animate().fadeIn(delay: 200.ms),
+
+                  const SizedBox(height: 12),
+
+                  GlassCard(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: Icon(_phoneVerified ? Icons.verified_user_rounded : Icons.phone_iphone_rounded, color: AppColors.purple),
+                            title: const Text('الأمان عبر رقم الجوال', style: TextStyle(fontWeight: FontWeight.w900)),
+                            subtitle: Text(_phoneVerified
+                                ? 'مفعل على الرقم $_phoneE164 ويمكن استخدام SMS لاستعادة الدخول'
+                                : 'أضف رقمك واستقبل رمز SMS لتفعيل حماية إضافية للحساب'),
+                          ),
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              SizedBox(
+                                width: 95,
+                                child: TextField(
+                                  controller: _phoneCountryCtrl,
+                                  keyboardType: TextInputType.phone,
+                                  decoration: InputDecoration(
+                                    labelText: 'الدولة',
+                                    hintText: '+961',
+                                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: TextField(
+                                  controller: _phoneCtrl,
+                                  keyboardType: TextInputType.phone,
+                                  decoration: InputDecoration(
+                                    labelText: 'رقم الجوال',
+                                    hintText: '70123456',
+                                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          FilledButton.icon(
+                            onPressed: _savingPhoneSecurity ? null : _sendPhoneSecurityCode,
+                            icon: _savingPhoneSecurity
+                                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                                : const Icon(Icons.sms_rounded),
+                            label: Text(_phoneVerified ? 'تغيير الرقم وإرسال رمز جديد' : 'إرسال رمز التحقق SMS'),
+                          ),
+                          if (_phoneCodeSent) ...[
+                            const SizedBox(height: 12),
+                            TextField(
+                              controller: _phoneCodeCtrl,
+                              keyboardType: TextInputType.number,
+                              textAlign: TextAlign.center,
+                              decoration: InputDecoration(
+                                labelText: 'رمز SMS',
+                                hintText: '000000',
+                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            OutlinedButton.icon(
+                              onPressed: _savingPhoneSecurity ? null : _verifyPhoneSecurityCode,
+                              icon: const Icon(Icons.check_circle_rounded),
+                              label: const Text('تأكيد وتفعيل الأمان'),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ).animate().fadeIn(delay: 230.ms),
+
+                  const SizedBox(height: 12),
+
+                  GlassCard(
+                    child: Column(
+                      children: [
+                        ListTile(
+                          leading: const Icon(Icons.chat_bubble_outline_rounded, color: AppColors.purple),
+                          title: const Text('خصوصية الرسائل', style: TextStyle(fontWeight: FontWeight.w900)),
+                          subtitle: Text(_canUseVerifiedOnlyMessages
+                              ? 'يمكنك قفل الرسائل على الحسابات الموثقة فقط'
+                              : 'ميزة الموثقين فقط تحتاج الباقة الذهبية أو المميزة'),
+                        ),
+                        SwitchListTile(
+                          title: const Text('تفعيل الرسائل'),
+                          subtitle: const Text('عند الإيقاف لا أحد يستطيع إرسال رسالة جديدة لك'),
+                          value: _messagesEnabled,
+                          onChanged: (v) => setState(() => _messagesEnabled = v),
+                          activeThumbColor: AppColors.purple,
+                        ),
+                        SwitchListTile(
+                          title: const Text('استقبال الرسائل من الموثقين فقط'),
+                          subtitle: Text(_canUseVerifiedOnlyMessages
+                              ? 'غير الموثق سيُمنع من إرسال الرسالة'
+                              : 'مقفلة للحسابات الذهبية والمميزة فقط'),
+                          value: _verifiedOnlyMessages && _canUseVerifiedOnlyMessages,
+                          onChanged: _messagesEnabled && _canUseVerifiedOnlyMessages
+                              ? (v) => setState(() => _verifiedOnlyMessages = v)
+                              : null,
+                          activeThumbColor: AppColors.purple,
+                        ),
+                        SwitchListTile(
+                          title: const Text('طلب دردشة قبل أول رسالة'),
+                          subtitle: const Text('يفتح المحادثة بعد قبول الطلب'),
+                          value: _chatRequestsRequired,
+                          onChanged: _messagesEnabled ? (v) => setState(() => _chatRequestsRequired = v) : null,
+                          activeThumbColor: AppColors.purple,
+                        ),
+                        SwitchListTile(
+                          title: const Text('السماح بالمكالمات'),
+                          subtitle: const Text('عند الإيقاف لا أحد يستطيع الاتصال بك'),
+                          value: _callsEnabled,
+                          onChanged: (v) => setState(() => _callsEnabled = v),
+                          activeThumbColor: AppColors.purple,
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
+                          child: SizedBox(
+                            width: double.infinity,
+                            child: FilledButton.icon(
+                              onPressed: _savingMessagingPrivacy ? null : _saveMessagingPrivacySettings,
+                              icon: _savingMessagingPrivacy
+                                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                                  : const Icon(Icons.save_rounded),
+                              label: const Text('حفظ خصوصية الرسائل'),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ).animate().fadeIn(delay: 250.ms),
 
                   const SizedBox(height: 12),
 

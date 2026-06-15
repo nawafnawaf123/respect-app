@@ -32,6 +32,7 @@ class StreamersScreen extends StatefulWidget {
 }
 
 class _StreamersScreenState extends State<StreamersScreen> with SingleTickerProviderStateMixin {
+  static const String _streamersKey = 'respect_streamers_v1';
   static const String _accountsKey = 'respect_accounts_v1';
   static const String _usersKey = 'respect_users_map';
 
@@ -61,108 +62,255 @@ class _StreamersScreenState extends State<StreamersScreen> with SingleTickerProv
     if (_refreshing) return;
     _refreshing = true;
     if (!silent && mounted) setState(() => _loading = true);
-    final prefs = await SharedPreferences.getInstance();
-    final accounts = <Map<String, dynamic>>[];
 
-    final accountsRaw = prefs.getString(_accountsKey);
-    if (accountsRaw != null && accountsRaw.trim().isNotEmpty) {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      var channels = _readStreamerList(prefs.getString(_streamersKey));
+      final migratedLegacyChannels = await _migrateLegacyAdminStreamers(prefs);
+      if (migratedLegacyChannels.isNotEmpty) {
+        channels = [...channels, ...migratedLegacyChannels];
+      }
+
+      channels = _dedupeStreamerList(channels);
+
+      final refreshedChannels = <Map<String, dynamic>>[];
+      for (final channelData in channels) {
+        final url = (channelData['streamUrl'] ?? '').toString().trim();
+        if (url.isEmpty) continue;
+
+        final fallbackName = (channelData['streamName'] ?? channelData['streamerName'] ?? channelData['profileName'] ?? channelData['name'] ?? 'Streamer').toString();
+        final manualStreamer = channelData['manualStreamer'] == true || channelData['streamManualMode'] == true;
+        final oldTitle = (channelData['streamTitle'] ?? '').toString();
+        final oldViewers = int.tryParse((channelData['streamViewers'] ?? '0').toString().replaceAll(',', '')) ?? 0;
+        final oldThumbnail = (channelData['streamThumbnailPath'] ?? channelData['streamThumbnailUrl'] ?? '').toString();
+        final oldPlatform = (channelData['streamPlatform'] ?? '').toString();
+        final oldLive = channelData['streamIsLive'] == true || channelData['streamIsLive']?.toString() == 'true';
+
+        final meta = await _fetchStreamMetadata(url, fallbackName: fallbackName);
+        final cachedThumbnailPath = meta.thumbnailUrl.trim().isEmpty
+            ? ''
+            : await _cacheBestStreamThumbnail(meta.thumbnailUrl, platform: meta.platform, channel: _channelFromUrl(url));
+        final finalThumbnailPath = _safeStreamThumbnailValue(
+          cachedPath: cachedThumbnailPath,
+          remoteUrl: meta.thumbnailUrl,
+          previousValue: oldThumbnail,
+        );
+        final name = meta.channelName.isNotEmpty
+            ? meta.channelName
+            : (channelData['streamName'] ?? channelData['streamerName'] ?? fallbackName).toString();
+
+        refreshedChannels.add({
+          ...channelData,
+          'type': 'streamer_channel',
+          'isStandaloneStreamer': true,
+          'streamerOnly': true,
+          'streamManagedByAdmin': true,
+          'streamName': name,
+          'streamerName': name,
+          'name': name,
+          'profileName': name,
+          'streamTitle': manualStreamer && oldTitle.trim().isNotEmpty ? oldTitle : meta.title,
+          'streamIsLive': manualStreamer ? oldLive : meta.isLive,
+          'streamViewers': manualStreamer ? (oldViewers < 0 ? 0 : oldViewers) : meta.viewers,
+          'streamThumbnailUrl': meta.thumbnailUrl.trim().isNotEmpty ? meta.thumbnailUrl : oldThumbnail,
+          'streamThumbnailPath': finalThumbnailPath.trim().isNotEmpty ? finalThumbnailPath : oldThumbnail,
+          'streamPlatform': oldPlatform.trim().isNotEmpty ? oldPlatform : meta.platform,
+          'streamLastCheckedAt': DateTime.now().toIso8601String(),
+        });
+      }
+
+      refreshedChannels.sort((a, b) {
+        final liveA = a['streamIsLive'] == true || a['streamIsLive']?.toString() == 'true';
+        final liveB = b['streamIsLive'] == true || b['streamIsLive']?.toString() == 'true';
+        if (liveA != liveB) return liveA ? -1 : 1;
+        final viewersA = int.tryParse((a['streamViewers'] ?? '0').toString().replaceAll(',', '')) ?? 0;
+        final viewersB = int.tryParse((b['streamViewers'] ?? '0').toString().replaceAll(',', '')) ?? 0;
+        return viewersB.compareTo(viewersA);
+      });
+
+      await prefs.setString(_streamersKey, jsonEncode(_dedupeStreamerList(refreshedChannels)));
+
+      final loaded = refreshedChannels
+          .map(_StreamerVM.fromAccount)
+          .where((s) => s.url.trim().isNotEmpty)
+          .toList()
+        ..sort((a, b) {
+          if (a.isLive != b.isLive) return a.isLive ? -1 : 1;
+          return b.viewers.compareTo(a.viewers);
+        });
+
+      if (!mounted) return;
+      setState(() {
+        _streamers
+          ..clear()
+          ..addAll(loaded);
+        _loading = false;
+      });
+    } catch (e, st) {
+      _respectSafeLog(e, st);
+      if (mounted) {
+        setState(() => _loading = false);
+      }
+    } finally {
+      _refreshing = false;
+    }
+  }
+
+  List<Map<String, dynamic>> _readStreamerList(String? raw) {
+    if (raw == null || raw.trim().isEmpty) return <Map<String, dynamic>>[];
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is List) {
+        return decoded.whereType<Map>().map((e) => e.map((k, v) => MapEntry(k.toString(), v))).toList();
+      }
+    } catch (e, st) { _respectSafeLog(e, st); }
+    return <Map<String, dynamic>>[];
+  }
+
+  String _normalizedStreamerUrl(String url) {
+    final clean = _cleanStreamUrl(url).trim();
+    if (clean.isEmpty) return '';
+    return clean.replaceAll(RegExp(r'/+$'), '').toLowerCase();
+  }
+
+  String _streamerIdFromUrlAndName(String url, String name, String channelKey) {
+    final channelId = _cleanUsername(channelKey).replaceAll('@', '');
+    if (channelId.isNotEmpty && channelId != 'user') return channelId;
+    final nameId = _cleanUsername(name).replaceAll('@', '');
+    if (nameId.isNotEmpty && nameId != 'user') return nameId;
+    final encoded = base64Url.encode(utf8.encode(url)).replaceAll('=', '');
+    final short = encoded.length > 12 ? encoded.substring(0, 12) : encoded;
+    return 'streamer_$short';
+  }
+
+  Map<String, dynamic> _streamerChannelFromMap(Map<String, dynamic> raw) {
+    final streamUrl = _cleanStreamUrl((raw['streamUrl'] ?? '').toString());
+    final channelKey = _firstNonEmpty([
+      (raw['streamChannelKey'] ?? '').toString(),
+      _channelFromUrl(streamUrl),
+    ]);
+    final name = _firstNonEmpty([
+      (raw['streamName'] ?? '').toString(),
+      (raw['streamerName'] ?? '').toString(),
+      (raw['profileName'] ?? '').toString(),
+      (raw['name'] ?? '').toString(),
+      channelKey,
+      'Streamer',
+    ]);
+    final id = _firstNonEmpty([
+      (raw['id'] ?? '').toString(),
+      _streamerIdFromUrlAndName(streamUrl, name, channelKey),
+    ]);
+    final thumbnail = _firstNonEmpty([
+      (raw['streamThumbnailPath'] ?? '').toString(),
+      (raw['streamThumbnailUrl'] ?? '').toString(),
+      (raw['avatar_url'] ?? '').toString(),
+      (raw['imagePath'] ?? '').toString(),
+      (raw['profileImagePath'] ?? '').toString(),
+    ]);
+    final platform = _firstNonEmpty([
+      (raw['streamPlatform'] ?? '').toString(),
+      _platformFromUrl(streamUrl),
+    ]);
+
+    return <String, dynamic>{
+      ...raw,
+      'id': id.trim().isEmpty ? _streamerIdFromUrlAndName(streamUrl, name, channelKey) : id.trim().replaceAll('@', '').replaceAll(RegExp(r'\s+'), '_').toLowerCase(),
+      'type': 'streamer_channel',
+      'isStandaloneStreamer': true,
+      'streamerOnly': true,
+      'streamManagedByAdmin': true,
+      'username': _cleanUsername((raw['username'] ?? channelKey).toString()),
+      'name': name,
+      'profileName': name,
+      'streamUrl': streamUrl,
+      'streamName': name,
+      'streamerName': name,
+      'streamThumbnailUrl': thumbnail,
+      'streamThumbnailPath': thumbnail,
+      'streamPlatform': platform,
+      'streamChannelKey': channelKey,
+    };
+  }
+
+  String _streamerKeyForMap(Map<String, dynamic> map) {
+    final urlKey = _normalizedStreamerUrl((map['streamUrl'] ?? '').toString());
+    if (urlKey.isNotEmpty) return urlKey;
+    return (map['id'] ?? map['streamChannelKey'] ?? map['username'] ?? '').toString().trim().toLowerCase();
+  }
+
+  List<Map<String, dynamic>> _dedupeStreamerList(List<Map<String, dynamic>> streamers) {
+    final byKey = <String, Map<String, dynamic>>{};
+    for (final raw in streamers) {
+      final item = _streamerChannelFromMap(raw);
+      final key = _streamerKeyForMap(item);
+      if (key.isEmpty || (item['streamUrl'] ?? '').toString().trim().isEmpty) continue;
+      final existing = byKey[key];
+      byKey[key] = existing == null ? item : <String, dynamic>{...existing, ...item};
+    }
+    return byKey.values.map(_streamerChannelFromMap).toList();
+  }
+
+  bool _isLegacyAdminStreamerRecord(Map<String, dynamic> map) {
+    final url = (map['streamUrl'] ?? '').toString().trim();
+    if (url.isEmpty) return false;
+    final id = (map['id'] ?? map['username'] ?? '').toString().replaceAll('@', '').toLowerCase();
+    final role = (map['role'] ?? '').toString().trim().toLowerCase();
+    final email = (map['email'] ?? '').toString().trim();
+    final password = (map['password'] ?? '').toString().trim();
+    return map['streamManagedByAdmin'] == true ||
+        map['isStandaloneStreamer'] == true ||
+        map['streamerOnly'] == true ||
+        id.startsWith('streamer_') ||
+        (role == 'streamer' && email.isEmpty && password.isEmpty);
+  }
+
+  Future<List<Map<String, dynamic>>> _migrateLegacyAdminStreamers(SharedPreferences prefs) async {
+    final found = <Map<String, dynamic>>[];
+    var changed = false;
+
+    final accounts = _readStreamerList(prefs.getString(_accountsKey));
+    for (final account in accounts) {
+      if (_isLegacyAdminStreamerRecord(account)) found.add(_streamerChannelFromMap(account));
+    }
+    final cleanedAccounts = accounts.where((account) => !_isLegacyAdminStreamerRecord(account)).toList();
+    if (cleanedAccounts.length != accounts.length) {
+      changed = true;
+      await prefs.setString(_accountsKey, jsonEncode(cleanedAccounts));
+    }
+
+    final usersRaw = prefs.getString(_usersKey);
+    if (usersRaw != null && usersRaw.trim().isNotEmpty) {
       try {
-        final decoded = jsonDecode(accountsRaw);
-        if (decoded is List) {
-          accounts.addAll(decoded.whereType<Map>().map((e) => e.map((k, v) => MapEntry(k.toString(), v))));
+        final decoded = jsonDecode(usersRaw);
+        if (decoded is Map) {
+          final users = decoded.map((k, v) => MapEntry(k.toString(), v));
+          final toRemove = <String>[];
+          users.forEach((key, value) {
+            if (value is Map) {
+              final item = value.map((k, v) => MapEntry(k.toString(), v));
+              if (_isLegacyAdminStreamerRecord({...item, 'id': (item['id'] ?? key).toString()})) {
+                found.add(_streamerChannelFromMap({...item, 'id': (item['id'] ?? key).toString()}));
+                toRemove.add(key);
+              }
+            }
+          });
+          for (final key in toRemove) {
+            users.remove(key);
+          }
+          if (toRemove.isNotEmpty) {
+            changed = true;
+            await prefs.setString(_usersKey, jsonEncode(users));
+          }
         }
       } catch (e, st) { _respectSafeLog(e, st); }
     }
 
-    if (accounts.isEmpty) {
-      final usersRaw = prefs.getString(_usersKey);
-      if (usersRaw != null && usersRaw.trim().isNotEmpty) {
-        try {
-          final decoded = jsonDecode(usersRaw);
-          if (decoded is Map) {
-            decoded.forEach((key, value) {
-              if (value is Map) {
-                final item = value.map((k, v) => MapEntry(k.toString(), v));
-                accounts.add({...item, 'id': (item['id'] ?? key).toString()});
-              }
-            });
-          }
-        } catch (e, st) { _respectSafeLog(e, st); }
-      }
+    final migrated = _dedupeStreamerList(found);
+    if (migrated.isNotEmpty || changed) {
+      await prefs.setString(_streamersKey, jsonEncode(migrated));
     }
-
-    final refreshedAccounts = <Map<String, dynamic>>[];
-    for (final account in accounts) {
-      final url = (account['streamUrl'] ?? '').toString().trim();
-      if (url.isEmpty) {
-        refreshedAccounts.add(account);
-        continue;
-      }
-
-      final fallbackName = (account['profileName'] ?? account['name'] ?? account['streamName'] ?? 'Streamer').toString();
-      final meta = await _fetchStreamMetadata(url, fallbackName: fallbackName);
-      final cachedThumbnailPath = meta.thumbnailUrl.trim().isEmpty
-          ? ''
-          : await _cacheBestStreamThumbnail(meta.thumbnailUrl, platform: meta.platform, channel: _channelFromUrl(url));
-      final finalThumbnailPath = _safeStreamThumbnailValue(
-        cachedPath: cachedThumbnailPath,
-        remoteUrl: meta.thumbnailUrl,
-        previousValue: (account['streamThumbnailPath'] ?? '').toString(),
-      );
-      refreshedAccounts.add({
-        ...account,
-        'streamName': meta.channelName.isNotEmpty
-            ? meta.channelName
-            : (account['streamName'] ?? account['streamerName'] ?? fallbackName).toString(),
-        'streamTitle': meta.title,
-        'streamIsLive': meta.isLive,
-        'streamViewers': meta.viewers,
-        'streamThumbnailUrl': meta.thumbnailUrl,
-        'streamThumbnailPath': finalThumbnailPath,
-        'streamPlatform': meta.platform,
-        'streamLastCheckedAt': DateTime.now().toIso8601String(),
-      });
-    }
-
-    if (refreshedAccounts.isNotEmpty) {
-      await prefs.setString(_accountsKey, jsonEncode(refreshedAccounts));
-      final usersRaw = prefs.getString(_usersKey);
-      if (usersRaw != null && usersRaw.trim().isNotEmpty) {
-        try {
-          final decoded = jsonDecode(usersRaw);
-          if (decoded is Map) {
-            for (final account in refreshedAccounts) {
-              final id = (account['id'] ?? '').toString();
-              if (id.isNotEmpty && decoded[id] is Map) {
-                decoded[id] = {
-                  ...Map<String, dynamic>.from((decoded[id] as Map).map((k, v) => MapEntry(k.toString(), v))),
-                  ...account
-                };
-              }
-            }
-            await prefs.setString(_usersKey, jsonEncode(decoded));
-          }
-        } catch (e, st) { _respectSafeLog(e, st); }
-      }
-    }
-
-    final loaded = refreshedAccounts
-        .map(_StreamerVM.fromAccount)
-        .where((s) => s.url.trim().isNotEmpty)
-        .toList()
-      ..sort((a, b) {
-        if (a.isLive != b.isLive) return a.isLive ? -1 : 1;
-        return b.viewers.compareTo(a.viewers);
-      });
-
-    if (!mounted) return;
-    setState(() {
-      _streamers
-        ..clear()
-        ..addAll(loaded);
-      _loading = false;
-      _refreshing = false;
-    });
+    return migrated;
   }
 
   void _openStreamOptions(String url) {
@@ -402,7 +550,7 @@ class _StreamersScreenState extends State<StreamersScreen> with SingleTickerProv
                       _StreamersList(
                         streamers: all,
                         emptyTitle: 'لا توجد قنوات بعد',
-                        emptySubtitle: 'أضف رابط Twitch أو Kick أو YouTube من صفحة حسابك.',
+                        emptySubtitle: 'أضف القنوات من صفحة الأدمن لتظهر هنا تلقائيًا.',
                         isDark: isDark,
                         onOpen: _openStreamOptions,
                         liveLayout: false,
@@ -767,8 +915,9 @@ class _StreamerVM {
     final url = (account['streamUrl'] ?? '').toString().trim();
     final streamName = (account['streamName'] ?? account['streamerName'] ?? '').toString().trim();
     final profileName = (account['profileName'] ?? account['name'] ?? 'Streamer').toString().trim();
-    final username = _cleanUsername((account['username'] ?? account['id'] ?? '@user').toString());
-    final platform = _platformFromUrl(url);
+    final username = _cleanUsername((account['username'] ?? account['streamChannelKey'] ?? account['id'] ?? '@streamer').toString());
+    final manualPlatform = (account['streamPlatform'] ?? '').toString().trim();
+    final platform = manualPlatform.isNotEmpty ? manualPlatform : _platformFromUrl(url);
     final viewers = int.tryParse((account['streamViewers'] ?? '0').toString().replaceAll(',', '')) ?? 0;
 
     return _StreamerVM(
@@ -779,8 +928,8 @@ class _StreamerVM {
       title: (account['streamTitle'] ?? '').toString(),
       isLive: account['streamIsLive'] == true || account['streamIsLive']?.toString() == 'true',
       viewers: viewers < 0 ? 0 : viewers,
-      avatarPath: (account['imagePath'] ?? account['profileImagePath'])?.toString(),
-      coverPath: account['coverPath']?.toString(),
+      avatarPath: (account['avatar_url'] ?? account['imagePath'] ?? account['profileImagePath'] ?? account['streamThumbnailPath'] ?? account['streamThumbnailUrl'])?.toString(),
+      coverPath: (account['cover_url'] ?? account['coverPath'])?.toString(),
       thumbnailPath: (account['streamThumbnailPath'] ?? account['streamThumbnailUrl'])?.toString(),
     );
   }

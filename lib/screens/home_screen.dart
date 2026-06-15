@@ -1,9 +1,11 @@
 // ignore_for_file: deprecated_member_use, unused_element, unused_field, unused_import, unused_element_parameter, prefer_const_constructors, prefer_const_declarations, use_build_context_synchronously, unnecessary_this, unnecessary_brace_in_string_interps, curly_braces_in_flow_control_structures, prefer_final_fields, unnecessary_type_check, unnecessary_non_null_assertion
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../theme/app_theme.dart';
 import '../services/notification_service.dart';
 import '../services/realtime_notification_service.dart';
@@ -52,17 +54,34 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   int _unreadMessagesCount = 0;
   int _unreadNotificationsCount = 0;
 
+  RealtimeChannel? _adminUserChannel;
+  Timer? _adminStatusFallbackTimer;
+  String? _watchedAdminUserKey;
+  bool _adminWatcherStarting = false;
+  bool _profileRefreshBusy = false;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _refreshHeaderData();
     _bootNotifications();
+    _startAdminStatusWatcher();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _adminStatusFallbackTimer?.cancel();
+    final channel = _adminUserChannel;
+    _adminUserChannel = null;
+    if (channel != null) {
+      try {
+        channel.unsubscribe();
+      } catch (e, st) {
+        _scannerSafeIgnore(e, st);
+      }
+    }
     super.dispose();
   }
 
@@ -71,6 +90,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       _refreshHeaderData();
       _bootNotifications();
+      _startAdminStatusWatcher(force: true);
     }
   }
 
@@ -84,6 +104,127 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _loadProfile();
     _loadUnreadMessagesCount();
     _loadUnreadNotificationsCount();
+    _startAdminStatusWatcher();
+  }
+
+  Future<void> _startAdminStatusWatcher({bool force = false}) async {
+    if (_adminWatcherStarting) return;
+    _adminWatcherStarting = true;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final currentId = prefs.getString('respect_current_user_id') ?? prefs.getString('current_user_id');
+      if (currentId == null || currentId.trim().isEmpty) return;
+
+      final watchKey = _normalizeUserId(currentId);
+      if (!force && _watchedAdminUserKey == watchKey && _adminUserChannel != null) return;
+
+      final oldChannel = _adminUserChannel;
+      _adminUserChannel = null;
+      if (oldChannel != null) {
+        try {
+          await oldChannel.unsubscribe();
+        } catch (e, st) {
+          _scannerSafeIgnore(e, st);
+        }
+      }
+
+      _watchedAdminUserKey = watchKey;
+      _adminUserChannel = SupabaseService.client
+          .channel('home_admin_user_watch_${watchKey}_${DateTime.now().millisecondsSinceEpoch}')
+          .onPostgresChanges(
+        event: PostgresChangeEvent.insert,
+        schema: 'public',
+        table: 'users',
+        callback: (payload) async {
+          final row = Map<String, dynamic>.from(payload.newRecord);
+          if (_liveUserRowMatchesCurrent(row, currentId)) {
+            await _applyLiveUserRow(row, showToast: true);
+          }
+        },
+      )
+          .onPostgresChanges(
+        event: PostgresChangeEvent.update,
+        schema: 'public',
+        table: 'users',
+        callback: (payload) async {
+          final row = Map<String, dynamic>.from(payload.newRecord);
+          if (_liveUserRowMatchesCurrent(row, currentId)) {
+            await _applyLiveUserRow(row, showToast: true);
+          }
+        },
+      )
+          .subscribe();
+
+      // احتياط مهم: لو Realtime غير مفعّل على جدول users من Supabase،
+      // هذا التايمر يحدث حالة الأدمن تلقائيًا بدون تسجيل خروج/دخول.
+      _adminStatusFallbackTimer?.cancel();
+      _adminStatusFallbackTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+        if (mounted) _loadProfile(silent: true);
+      });
+    } catch (e, st) {
+      _scannerSafeIgnore(e, st);
+    } finally {
+      _adminWatcherStarting = false;
+    }
+  }
+
+  bool _liveUserRowMatchesCurrent(Map<String, dynamic> row, String currentId) {
+    final target = _normalizeUserId(currentId);
+    final profileTarget = _normalizeUserId(_profileUsername);
+    final candidates = <String>{
+      (row['id'] ?? '').toString(),
+      (row['username'] ?? '').toString(),
+      (row['email'] ?? '').toString(),
+      (row['user_id'] ?? '').toString(),
+    }.map(_normalizeUserId).where((e) => e.isNotEmpty).toSet();
+
+    return candidates.contains(target) ||
+        (profileTarget.isNotEmpty && candidates.contains(profileTarget));
+  }
+
+  Future<void> _applyLiveUserRow(Map<String, dynamic> row, {bool showToast = false}) async {
+    try {
+      await SupabaseService.saveCurrentUser(row);
+    } catch (e, st) {
+      _scannerSafeIgnore(e, st);
+    }
+
+    if (!mounted) return;
+
+    final wasAdmin = _isAdmin;
+    final prefs = await SharedPreferences.getInstance();
+    final currentId = prefs.getString('respect_current_user_id') ??
+        prefs.getString('current_user_id') ??
+        (row['username'] ?? row['id'] ?? '').toString();
+    final isAdmin = _accountIsAdmin(currentId, row);
+
+    final image = (row['avatar_url'] ?? row['profileImagePath'] ?? row['imagePath'])
+        ?.toString()
+        .trim();
+    final profileName = (row['profileName'] ?? row['name'] ?? _profileName).toString();
+    final rawUsername = (row['username'] ?? row['id'] ?? _profileUsername).toString();
+
+    setState(() {
+      _profileName = profileName;
+      _profileUsername = rawUsername.startsWith('@') ? rawUsername : '@$rawUsername';
+      _profileImagePath = image != null && image.isNotEmpty ? image : _profileImagePath;
+      _isAdmin = isAdmin;
+      if (!isAdmin && index == 6) index = 0;
+    });
+
+    if (showToast && !wasAdmin && isAdmin) {
+      NotificationService.showTopNotification(
+        'تم تفعيل صلاحية الأدمن لحسابك',
+        title: 'Respect Admin',
+        icon: Icons.admin_panel_settings_rounded,
+      );
+    } else if (showToast && wasAdmin && !isAdmin) {
+      NotificationService.showTopNotification(
+        'تم إلغاء صلاحية الأدمن من حسابك',
+        title: 'Respect Admin',
+        icon: Icons.lock_rounded,
+      );
+    }
   }
 
   String _normalizeUserId(String value) {
@@ -117,7 +258,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         role == 'super_admin';
   }
 
-  Future<void> _loadProfile() async {
+  Future<void> _loadProfile({bool silent = false}) async {
+    if (_profileRefreshBusy) return;
+    _profileRefreshBusy = true;
+    final previousAdminState = _isAdmin;
+    try {
     final prefs = await SharedPreferences.getInstance();
     final currentId = prefs.getString('respect_current_user_id') ?? prefs.getString('current_user_id');
     if (currentId == null || currentId.trim().isEmpty) return;
@@ -212,7 +357,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _profileUsername = rawUsername.startsWith('@') ? rawUsername : '@$rawUsername';
       _profileImagePath = image != null && image.isNotEmpty ? image : null;
       _isAdmin = isAdmin;
+      if (!isAdmin && index == 6) index = 0;
     });
+
+    if (silent && mounted && !previousAdminState && isAdmin) {
+      NotificationService.showTopNotification(
+        'تم تفعيل صلاحية الأدمن لحسابك',
+        title: 'Respect Admin',
+        icon: Icons.admin_panel_settings_rounded,
+      );
+    }
+    } finally {
+      _profileRefreshBusy = false;
+    }
   }
 
   String _cleanUsername(String value) {

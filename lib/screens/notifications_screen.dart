@@ -30,6 +30,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   static const String _messagesKey = 'respect_direct_messages_v1';
   static const String _threadsKey = 'respect_direct_threads_v1';
   static const String _mentionsKey = 'respect_mentions_v1';
+  static const String _generalNotificationsLocalKey = 'respect_general_notifications_local_v1';
 
   String _currentUsername = '@user';
   String _currentName = 'Respect App';
@@ -630,6 +631,50 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         }
       }
     } catch (_) { _scannerSafeIgnore(); }
+
+
+    // الإشعارات العامة من الإدارة: من السيرفر + نسخة محلية وصلت عبر FCM.
+    try {
+      final generalRows = await SupabaseService.getGeneralNotifications(limit: 80);
+      for (final item in generalRows) {
+        final createdAt = DateTime.tryParse((item['created_at'] ?? '').toString()) ?? DateTime.now();
+        final title = (item['title'] ?? 'Respect').toString();
+        final body = (item['body'] ?? item['text'] ?? '').toString();
+        notifications.add(_RespectNotification(
+          id: 'general_server_${item['id'] ?? createdAt.microsecondsSinceEpoch}',
+          title: title.trim().isEmpty ? 'Respect' : title,
+          body: body.trim().isEmpty ? 'لديك إشعار عام جديد' : body,
+          icon: Icons.campaign_rounded,
+          time: _relativeTime(createdAt),
+          createdAt: createdAt,
+          unread: true,
+        ));
+      }
+    } catch (_) { _scannerSafeIgnore(); }
+
+    final generalRaw = prefs.getString(_generalNotificationsLocalKey);
+    if (generalRaw != null && generalRaw.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(generalRaw);
+        if (decoded is List) {
+          for (final item in decoded) {
+            if (item is! Map) continue;
+            final createdAt = DateTime.tryParse((item['created_at'] ?? '').toString()) ?? DateTime.now();
+            final title = (item['title'] ?? 'Respect').toString();
+            final body = (item['body'] ?? item['text'] ?? '').toString();
+            notifications.add(_RespectNotification(
+              id: 'general_local_${item['id'] ?? createdAt.microsecondsSinceEpoch}',
+              title: title.trim().isEmpty ? 'Respect' : title,
+              body: body.trim().isEmpty ? 'لديك إشعار عام جديد' : body,
+              icon: Icons.campaign_rounded,
+              time: _relativeTime(createdAt),
+              createdAt: createdAt,
+              unread: true,
+            ));
+          }
+        }
+      } catch (_) { _scannerSafeIgnore(); }
+    }
 
     final threadNames = await _threadNames(prefs);
     final lastReadRaw = prefs.getString('respect_dm_last_read_$currentUsername');

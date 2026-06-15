@@ -24,12 +24,12 @@ import '../services/supabase_service.dart';
 import '../services/notification_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/glass_card.dart';
+import 'package:flutter/foundation.dart';
 
 void _logIgnoredError(Object error, StackTrace stackTrace) {
-  assert(() {
-    developer.log('Ignored recoverable error', error: error, stackTrace: stackTrace, name: 'respect.recoverable');
-    return true;
-  }());
+  if (kDebugMode) {
+    debugPrint('Ignored error: $error\n$stackTrace');
+  }
 }
 
 
@@ -77,6 +77,14 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   bool _activeGroupFounder = false;
   bool _activeGroupAdmin = false;
 
+  Map<String, dynamic> _privacySettings = <String, dynamic>{};
+  List<Map<String, dynamic>> _topStories = <Map<String, dynamic>>[];
+  Set<String> _seenStoryIds = <String>{};
+  List<Map<String, dynamic>> _incomingChatRequests = <Map<String, dynamic>>[];
+  final Map<String, bool> _likedMessageIds = <String, bool>{};
+  final Set<String> _likeBurstMessageIds = <String>{};
+  final Set<String> _pendingRequestPeers = <String>{};
+
   List<Map<String, dynamic>> _users = [];
   List<_ChatThread> _threads = [];
   List<_DirectMessage> _messages = [];
@@ -115,6 +123,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   Timer? _voiceTypingKeepAliveTimer;
   Timer? _liveRefreshTimer;
   bool _silentRefreshing = false;
+  DateTime? _lastActiveConversationFallbackRefresh;
 
   final Set<String> _selectedMessageIds = <String>{};
   final Set<String> _locallyDeletedMessageIds = <String>{};
@@ -154,6 +163,31 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
   void _syncConversationActiveState() {
     _notifyConversationActive(_hasActiveConversation);
+  }
+
+
+  void _handleConversationBack() {
+    final openedAsStandaloneConversation = widget.peerUsername != null || widget.groupId != null;
+
+    if (openedAsStandaloneConversation && Navigator.of(context).canPop()) {
+      _notifyConversationActive(false);
+      Navigator.of(context).pop();
+      return;
+    }
+
+    setState(() {
+      _activePeerUsername = null;
+      _activePeerName = null;
+      _activePeerAvatarPath = null;
+      _activeGroupId = null;
+      _activeGroupName = null;
+      _activeGroupAvatar = null;
+      _selectedMessageIds.clear();
+      _replyToMessage = null;
+      _editingMessage = null;
+    });
+    _notifyConversationActive(false);
+    _refreshThreadsOnly();
   }
 
   @override
@@ -220,9 +254,33 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         _currentAvatarPath = (current['avatar_url'] ?? current['imagePath'] ?? current['profileImagePath'])?.toString();
       }
 
-      final users = await SupabaseService.getUsers();
-      final directInbox = await SupabaseService.getInboxMessages(_currentUsername);
-      final groupInbox = await SupabaseService.getMyChatGroups(_currentUsername);
+      await _loadLocallyDeletedMessages();
+
+      // Local-first: لو المستخدم فتح محادثة مباشرة، اعرض الكاش فورًا قبل طلبات المستخدمين والإنبوكس.
+      List<_DirectMessage> bootCachedMessages = <_DirectMessage>[];
+      if (_activeGroupId != null) {
+        bootCachedMessages = await _loadMessagesCache(groupId: _activeGroupId);
+      } else if (_activePeerUsername != null) {
+        bootCachedMessages = await _loadMessagesCache(peer: _activePeerUsername);
+      }
+      if (bootCachedMessages.isNotEmpty && mounted) {
+        setState(() {
+          _messages = bootCachedMessages;
+          _loading = false;
+        });
+        WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+      }
+
+      final bootstrapResults = await Future.wait<dynamic>([
+        SupabaseService.getUsers(),
+        SupabaseService.getInboxMessages(_currentUsername),
+        SupabaseService.getMyChatGroups(_currentUsername),
+        _loadPrivacyAndStoryData(),
+        _loadMessageReactions(),
+      ]);
+      final users = List<Map<String, dynamic>>.from(bootstrapResults[0] as List);
+      final directInbox = List<Map<String, dynamic>>.from(bootstrapResults[1] as List);
+      final groupInbox = List<Map<String, dynamic>>.from(bootstrapResults[2] as List);
       final threads = <_ChatThread>[
         ..._buildThreadsFromMessages(directInbox, users),
         ...groupInbox.map(_ChatThread.fromGroup),
@@ -231,16 +289,36 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       _users = users;
       _threads = threads;
 
-      await _loadLocallyDeletedMessages();
-
       if (_activeGroupId != null) {
         await _openGroupById(_activeGroupId!, setLoading: false);
       } else if (_activePeerUsername != null) {
         final peer = _accountByUsername(users, _activePeerUsername!);
         _activePeerName ??= (peer?['name'] ?? peer?['profileName'] ?? _activePeerUsername).toString();
         _activePeerAvatarPath ??= (peer?['avatar_url'] ?? peer?['imagePath'] ?? peer?['profileImagePath'])?.toString();
-        final rows = await SupabaseService.getMessagesBetween(_currentUsername, _activePeerUsername!);
-        _messages = rows.map(_DirectMessage.fromSupabase).where((m) => !_locallyDeletedMessageIds.contains(m.id)).toList();
+
+        // Local-first: اعرض آخر نسخة محفوظة داخل ملفات التطبيق فورًا، ثم حدثها من السيرفر.
+        final cached = bootCachedMessages.isNotEmpty
+            ? bootCachedMessages
+            : await _loadMessagesCache(peer: _activePeerUsername);
+        if (cached.isNotEmpty) {
+          _messages = cached;
+          if (mounted) setState(() => _loading = false);
+          WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+        }
+
+        final latestLocalCreatedAt = _latestCreatedAt(cached);
+        final rows = await SupabaseService.getMessagesBetween(
+          _currentUsername,
+          _activePeerUsername!,
+          limit: cached.isEmpty ? 120 : 80,
+          afterCreatedAt: latestLocalCreatedAt,
+        );
+        final fresh = await _messagesWithDeviceMedia(
+          rows.map(_DirectMessage.fromSupabase).where((m) => !_locallyDeletedMessageIds.contains(m.id)).toList(),
+          eagerMediaDownload: cached.isEmpty,
+        );
+        _messages = _mergeMessages(cached, fresh);
+        await _saveMessagesCache(peer: _activePeerUsername, eagerMediaDownload: false);
         await _markVisibleMessagesRead();
       }
 
@@ -295,16 +373,21 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       })
       ..subscribe((status, error) {
         if (status == RealtimeSubscribeStatus.subscribed) {
-          _refreshActiveConversationSilently(scroll: false);
+          unawaited(_refreshActiveConversationSilently(scroll: false));
         }
       });
   }
 
   void _startLiveRefreshLoop() {
     _liveRefreshTimer?.cancel();
-    _liveRefreshTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+    // Realtime هو الأساسي. هذا fallback خفيف فقط حتى لا نعيد تحميل المحادثة كل ثانيتين.
+    _liveRefreshTimer = Timer.periodic(const Duration(seconds: 15), (_) {
       if (!mounted) return;
       if (_activePeerUsername == null && _activeGroupId == null) return;
+      final now = DateTime.now();
+      final last = _lastActiveConversationFallbackRefresh;
+      if (last != null && now.difference(last) < const Duration(seconds: 12)) return;
+      _lastActiveConversationFallbackRefresh = now;
       unawaited(_refreshActiveConversationSilently(scroll: false));
     });
   }
@@ -317,36 +400,58 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
     _silentRefreshing = true;
     try {
+      final currentActive = List<_DirectMessage>.from(_activeMessages);
+      final latestLocalCreatedAt = _latestCreatedAt(currentActive);
       List<_DirectMessage> freshMessages;
       if (activeGroup != null) {
-        final rows = await SupabaseService.getGroupMessages(activeGroup);
-        freshMessages = rows.map(_DirectMessage.fromGroupSupabase).where((m) => !_locallyDeletedMessageIds.contains(m.id)).toList();
+        final rows = await SupabaseService.getGroupMessages(
+          activeGroup,
+          limit: latestLocalCreatedAt == null ? 160 : 80,
+          afterCreatedAt: latestLocalCreatedAt,
+        );
+        freshMessages = await _messagesWithDeviceMedia(
+          rows.map(_DirectMessage.fromGroupSupabase).where((m) => !_locallyDeletedMessageIds.contains(m.id)).toList(),
+          eagerMediaDownload: false,
+        );
       } else {
-        final rows = await SupabaseService.getMessagesBetween(_currentUsername, activePeer!);
-        freshMessages = rows.map(_DirectMessage.fromSupabase).where((m) => !_locallyDeletedMessageIds.contains(m.id)).toList();
+        final rows = await SupabaseService.getMessagesBetween(
+          _currentUsername,
+          activePeer!,
+          limit: latestLocalCreatedAt == null ? 120 : 80,
+          afterCreatedAt: latestLocalCreatedAt,
+        );
+        freshMessages = await _messagesWithDeviceMedia(
+          rows.map(_DirectMessage.fromSupabase).where((m) => !_locallyDeletedMessageIds.contains(m.id)).toList(),
+          eagerMediaDownload: false,
+        );
       }
 
       if (!mounted) return;
-      final oldIds = _messages.map((m) => m.id).toSet();
+      final oldIds = currentActive.map((m) => m.id).toSet();
       final hasNew = freshMessages.any((m) => !oldIds.contains(m.id));
       final sameConversation = activeGroup == _activeGroupId && activePeer == _activePeerUsername;
       if (!sameConversation) return;
 
-      setState(() {
-        if (activeGroup != null) {
-          _messages = [
-            ..._messages.where((m) => m.groupId != activeGroup),
-            ...freshMessages,
-          ];
-        } else {
-          final me = SupabaseService.displayUsername(_currentUsername);
-          final peer = SupabaseService.displayUsername(activePeer!);
-          _messages = [
-            ..._messages.where((m) => !((m.senderUsername == me && m.receiverUsername == peer) || (m.senderUsername == peer && m.receiverUsername == me))),
-            ...freshMessages,
-          ];
-        }
-      });
+      if (freshMessages.isNotEmpty) {
+        setState(() {
+          if (activeGroup != null) {
+            final merged = _mergeMessages(currentActive, freshMessages);
+            _messages = [
+              ..._messages.where((m) => m.groupId != activeGroup),
+              ...merged,
+            ];
+          } else {
+            final me = SupabaseService.displayUsername(_currentUsername);
+            final peer = SupabaseService.displayUsername(activePeer!);
+            final merged = _mergeMessages(currentActive, freshMessages);
+            _messages = [
+              ..._messages.where((m) => !((m.senderUsername == me && m.receiverUsername == peer) || (m.senderUsername == peer && m.receiverUsername == me))),
+              ...merged,
+            ];
+          }
+        });
+        await _saveMessagesCache(peer: activePeer, groupId: activeGroup, eagerMediaDownload: false);
+      }
 
       if (hasNew || scroll) {
         await _markVisibleMessagesRead();
@@ -366,7 +471,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     final peer = _activePeerUsername == null ? null : SupabaseService.displayUsername(_activePeerUsername!);
     if (sender != me && receiver != me) return;
 
-    final msg = _DirectMessage.fromSupabase(row);
+    final msg = (await _messagesWithDeviceMedia([_DirectMessage.fromSupabase(row)])).first;
     final isOpen = !_isGroup && peer != null && ((sender == me && receiver == peer) || (sender == peer && receiver == me));
 
     if (sender != me) {
@@ -387,6 +492,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     if (!mounted) return;
     if (isOpen && !_messages.any((m) => m.id == msg.id)) {
       setState(() => _messages.add(msg.copyWith(status: sender == me ? msg.status : MessageStatus.read)));
+      await _saveMessagesCache(peer: peer);
       WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
     }
     await _refreshThreadsOnly();
@@ -395,7 +501,8 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   Future<void> _handleIncomingGroupMessage(Map<String, dynamic> row) async {
     final groupId = (row['group_id'] ?? '').toString();
     if (groupId.isEmpty) return;
-    final msg = _DirectMessage.fromGroupSupabase(row);
+    final decryptedRow = await SupabaseService.decryptGroupMessageRow(row, _currentUsername);
+    final msg = (await _messagesWithDeviceMedia([_DirectMessage.fromGroupSupabase(decryptedRow)])).first;
     final isOpen = _isGroup && _activeGroupId == groupId;
 
     if (msg.senderUsername != _currentUsername) {
@@ -406,19 +513,45 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     if (!mounted) return;
     if (isOpen && !_messages.any((m) => m.id == msg.id)) {
       setState(() => _messages.add(msg));
+      await _saveMessagesCache(groupId: groupId, eagerMediaDownload: false);
       WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
     }
     await _refreshThreadsOnly();
   }
 
   void _handleMessageStatus(Map<String, dynamic> payload) {
-    final id = payload['message_id']?.toString();
+    final id = payload['message_id']?.toString().trim();
     if (id == null || id.isEmpty) return;
+    final action = (payload['action'] ?? '').toString().toLowerCase().trim();
+    final statusText = (payload['status'] ?? '').toString().toLowerCase().trim();
+    final deleted = payload['deleted'] == true || action == 'delete' || action == 'deleted' || statusText == 'deleted';
+    if (deleted) {
+      unawaited(_handleDeletedMessageEverywhere(id));
+      return;
+    }
     final status = MessageStatusX.fromText(payload['status']?.toString());
     if (!mounted) return;
     setState(() {
       _messages = _messages.map((m) => m.id == id ? m.copyWith(status: status) : m).toList();
     });
+  }
+
+  Future<void> _handleDeletedMessageEverywhere(String messageId) async {
+    final id = messageId.trim();
+    if (id.isEmpty) return;
+    final existing = _messages.where((m) => m.id == id).toList();
+    for (final msg in existing) {
+      await _deleteLocalMediaForMessage(msg);
+    }
+    await _purgeMessagesFromDeviceFiles(<String>{id}, deleteMedia: true);
+    if (!mounted) return;
+    setState(() {
+      _messages.removeWhere((m) => m.id == id);
+      _selectedMessageIds.remove(id);
+      _locallyDeletedMessageIds.add(id);
+    });
+    await _saveLocallyDeletedMessages();
+    await _refreshThreadsOnly();
   }
 
   void _handleTyping(Map<String, dynamic> payload) {
@@ -446,6 +579,652 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         if (mounted) setState(() => _peerTyping = false);
       });
     }
+  }
+
+
+  Future<void> _loadPrivacyAndStoryData() async {
+    try {
+      final results = await Future.wait<dynamic>([
+        SupabaseService.getMessagingPrivacySettings(_currentUsername),
+        SupabaseService.getIncomingChatRequests(_currentUsername),
+        _loadStoriesForMessagesInbox(),
+        SupabaseService.getSeenStoryIds(),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _privacySettings = Map<String, dynamic>.from(results[0] as Map);
+        _incomingChatRequests = List<Map<String, dynamic>>.from(results[1] as List);
+        _topStories = List<Map<String, dynamic>>.from(results[2] as List);
+        _seenStoryIds = Set<String>.from(results[3] as Set);
+      });
+    } catch (e, st) { _logIgnoredError(e, st); }
+  }
+
+  Future<List<Map<String, dynamic>>> _loadStoriesForMessagesInbox() async {
+    final following = await SupabaseService.getFollowingUsernames(_currentUsername);
+    if (following.isEmpty) return <Map<String, dynamic>>[];
+    final stories = await SupabaseService.getActiveStories(usernames: following);
+    final byUser = <String, Map<String, dynamic>>{};
+    for (final story in stories) {
+      final user = SupabaseService.displayUsername((story['username'] ?? '').toString());
+      if (user == '@user') continue;
+      final target = byUser.putIfAbsent(user, () => Map<String, dynamic>.from(story));
+      final ids = List<String>.from(target['_story_ids'] as List? ?? const <String>[]);
+      final id = (story['id'] ?? '').toString().trim();
+      if (id.isNotEmpty && !ids.contains(id)) ids.add(id);
+      target['_story_ids'] = ids;
+      final private = SupabaseService.truthy(story['is_private']) ||
+          (story['privacy'] ?? '').toString().toLowerCase() == 'private';
+      target['_has_private_story'] = SupabaseService.truthy(target['_has_private_story']) || private;
+    }
+    return byUser.values.toList();
+  }
+
+  Future<void> _openPrivacySettings() async {
+    var messagesEnabled = SupabaseService.truthy(_privacySettings['messages_enabled'] ?? true);
+    var verifiedOnly = SupabaseService.truthy(_privacySettings['verified_only_messages']);
+    var callsEnabled = SupabaseService.truthy(_privacySettings['calls_enabled'] ?? true);
+    var requestsRequired = SupabaseService.truthy(_privacySettings['chat_requests_required'] ?? true);
+
+    Map<String, dynamic>? currentUser;
+    try { currentUser = await SupabaseService.getUserByUsername(_currentUsername); } catch (e, st) { _logIgnoredError(e, st); }
+    final canUseVerifiedOnlyMessages = SupabaseService.canUseVerifiedOnlyMessagesFeature(currentUser);
+    if (!canUseVerifiedOnlyMessages) verifiedOnly = false;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        final isDark = Theme.of(ctx).brightness == Brightness.dark;
+        return StatefulBuilder(
+          builder: (ctx, setSheet) => Container(
+            padding: const EdgeInsets.fromLTRB(18, 12, 18, 24),
+            decoration: BoxDecoration(
+              color: isDark ? AppColors.darkBg : AppColors.lightBg,
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+              border: Border.all(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
+            ),
+            child: SafeArea(
+              top: false,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(width: 46, height: 5, decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: .55), borderRadius: BorderRadius.circular(99))),
+                  const SizedBox(height: 16),
+                  Row(children: const [Icon(Icons.privacy_tip_rounded, color: AppColors.purple), SizedBox(width: 8), Expanded(child: Text('إعدادات خصوصية الرسائل', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 19)))]),
+                  const SizedBox(height: 10),
+                  SwitchListTile(
+                    value: messagesEnabled,
+                    onChanged: (v) => setSheet(() => messagesEnabled = v),
+                    title: const Text('تفعيل الرسائل', style: TextStyle(fontWeight: FontWeight.w900)),
+                    subtitle: const Text('عند الإيقاف لا أحد يستطيع إرسال رسالة جديدة لك'),
+                  ),
+                  SwitchListTile(
+                    value: verifiedOnly && canUseVerifiedOnlyMessages,
+                    onChanged: messagesEnabled && canUseVerifiedOnlyMessages
+                        ? (v) => setSheet(() => verifiedOnly = v)
+                        : null,
+                    title: const Text('استقبال الرسائل من الموثقين فقط', style: TextStyle(fontWeight: FontWeight.w900)),
+                    subtitle: Text(
+                      canUseVerifiedOnlyMessages
+                          ? 'أي حساب غير موثق سيظهر له أن الرسائل مقفلة'
+                          : 'هذه الميزة تعمل فقط مع الباقة الذهبية أو المميزة',
+                    ),
+                  ),
+                  SwitchListTile(
+                    value: requestsRequired,
+                    onChanged: messagesEnabled ? (v) => setSheet(() => requestsRequired = v) : null,
+                    title: const Text('طلب دردشة قبل أول رسالة', style: TextStyle(fontWeight: FontWeight.w900)),
+                    subtitle: const Text('المستخدم يرسل طلب، وبعد موافقتك تفتح الدردشة'),
+                  ),
+                  SwitchListTile(
+                    value: callsEnabled,
+                    onChanged: (v) => setSheet(() => callsEnabled = v),
+                    title: const Text('السماح بالمكالمات', style: TextStyle(fontWeight: FontWeight.w900)),
+                    subtitle: const Text('عند الإيقاف لا أحد يستطيع الاتصال بك'),
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: () async {
+                        final next = await SupabaseService.updateMessagingPrivacySettings(
+                          username: _currentUsername,
+                          messagesEnabled: messagesEnabled,
+                          verifiedOnlyMessages: verifiedOnly && canUseVerifiedOnlyMessages,
+                          callsEnabled: callsEnabled,
+                          chatRequestsRequired: requestsRequired,
+                        );
+                        if (!mounted) return;
+                        setState(() => _privacySettings = next);
+                        Navigator.pop(ctx);
+                        if (verifiedOnly && !canUseVerifiedOnlyMessages) {
+                          NotificationService.showTopNotification(
+                            'ميزة الموثقين فقط تحتاج الباقة الذهبية أو المميزة',
+                            title: 'ميزة غير متاحة',
+                            icon: Icons.workspace_premium_rounded,
+                            accentColor: AppColors.purple,
+                          );
+                        } else {
+                          NotificationService.showTopSuccess('تم حفظ إعدادات الخصوصية');
+                        }
+                      },
+                      icon: const Icon(Icons.save_rounded),
+                      label: const Text('حفظ الإعدادات'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+    unawaited(_loadPrivacyAndStoryData());
+  }
+
+  Future<void> _showIncomingChatRequests() async {
+    await _loadPrivacyAndStoryData();
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      backgroundColor: Theme.of(context).brightness == Brightness.dark ? AppColors.darkCard : AppColors.lightCard,
+      builder: (ctx) => SafeArea(
+        child: SizedBox(
+          height: MediaQuery.of(ctx).size.height * .70,
+          child: _incomingChatRequests.isEmpty
+              ? const Center(child: Text('لا توجد طلبات دردشة حالياً'))
+              : ListView.separated(
+                  padding: const EdgeInsets.all(14),
+                  itemCount: _incomingChatRequests.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 8),
+                  itemBuilder: (ctx, i) {
+                    final req = _incomingChatRequests[i];
+                    final sender = SupabaseService.displayUsername((req['sender_username'] ?? '').toString());
+                    final profile = _accountByUsername(_users, sender);
+                    final name = (profile?['name'] ?? profile?['profileName'] ?? sender).toString();
+                    final avatar = _fileImage((profile?['avatar_url'] ?? profile?['imagePath'] ?? profile?['profileImagePath'])?.toString());
+                    return GlassCard(
+                      child: Row(children: [
+                        CircleAvatar(backgroundImage: avatar, child: avatar == null ? const Icon(Icons.person_rounded) : null),
+                        const SizedBox(width: 10),
+                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(name, style: const TextStyle(fontWeight: FontWeight.w900)), Text(sender)])),
+                        IconButton(
+                          tooltip: 'رفض',
+                          onPressed: () async { await SupabaseService.respondChatRequest(requestId: (req['id'] ?? '').toString(), approve: false); if (ctx.mounted) Navigator.pop(ctx); await _loadPrivacyAndStoryData(); },
+                          icon: const Icon(Icons.close_rounded, color: AppColors.danger),
+                        ),
+                        IconButton(
+                          tooltip: 'قبول',
+                          onPressed: () async { await SupabaseService.respondChatRequest(requestId: (req['id'] ?? '').toString(), approve: true); if (ctx.mounted) Navigator.pop(ctx); await _loadPrivacyAndStoryData(); },
+                          icon: const Icon(Icons.check_rounded, color: AppColors.success),
+                        ),
+                      ]),
+                    );
+                  },
+                ),
+        ),
+      ),
+    );
+  }
+
+  Future<bool> _ensureDirectMessagingAllowed(String peer) async {
+    final p = SupabaseService.displayUsername(peer);
+    if (p == '@user') return false;
+    final result = await SupabaseService.canSendDirectMessage(sender: _currentUsername, receiver: p);
+    if (result['allowed'] == true) return true;
+    final reason = (result['reason'] ?? '').toString();
+    if (reason == 'request_required') {
+      if (_pendingRequestPeers.contains(p)) {
+        NotificationService.showTopNotification('طلب الدردشة مرسل مسبقًا، انتظر موافقة الطرف الآخر');
+        return false;
+      }
+      final sent = await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+          title: const Text('إرسال طلب دردشة؟', style: TextStyle(fontWeight: FontWeight.w900)),
+          content: Text('لا يمكنك مراسلة $p قبل أن يوافق على طلب الدردشة.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('إلغاء')),
+            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('إرسال الطلب')),
+          ],
+        ),
+      );
+      if (sent == true) {
+        await SupabaseService.createChatRequest(sender: _currentUsername, receiver: p);
+        _pendingRequestPeers.add(p);
+        NotificationService.showTopSuccess('تم إرسال طلب الدردشة');
+      }
+      return false;
+    }
+    if (reason == 'messages_disabled') NotificationService.showTopError('هذا المستخدم أوقف استقبال الرسائل');
+    else if (reason == 'verified_only') NotificationService.showTopError('هذا المستخدم يستقبل الرسائل من الحسابات الموثقة فقط');
+    else NotificationService.showTopError('لا يمكن إرسال الرسالة الآن');
+    return false;
+  }
+
+  Future<bool> _ensureCallAllowed(String peer) async {
+    final result = await SupabaseService.canCallUser(caller: _currentUsername, receiver: peer);
+    if (result['allowed'] == true) return true;
+    NotificationService.showTopError('هذا المستخدم أغلق استقبال الاتصالات');
+    return false;
+  }
+
+  Future<void> _loadMessageReactions() async {
+    try {
+      final map = await SupabaseService.getMyMessageReactions(_currentUsername);
+      if (mounted) setState(() { _likedMessageIds..clear()..addAll(map); });
+    } catch (e, st) { _logIgnoredError(e, st); }
+  }
+
+  bool _messageLiked(_DirectMessage msg) => _likedMessageIds[msg.id] == true;
+
+  Future<void> _likeMessageWithInstagramBurst(_DirectMessage msg) async {
+    if (msg.id.trim().isEmpty) return;
+    HapticFeedback.mediumImpact();
+    _playMessageLikeBurst(msg.id);
+    if (_messageLiked(msg)) return;
+    if (mounted) setState(() => _likedMessageIds[msg.id] = true);
+    try {
+      await SupabaseService.setMessageReaction(messageId: msg.id, username: _currentUsername, liked: true, group: _isGroup);
+      if (!_isGroup && msg.senderUsername != _currentUsername) {
+        await SupabaseService.sendUserBroadcast(username: msg.senderUsername, event: 'message_status', payload: {'message_id': msg.id, 'reaction': 'like'});
+      }
+    } catch (e, st) { _logIgnoredError(e, st); }
+  }
+
+  void _playMessageLikeBurst(String messageId) {
+    if (!mounted) return;
+    setState(() => _likeBurstMessageIds.add(messageId));
+    Future<void>.delayed(const Duration(milliseconds: 760), () {
+      if (!mounted) return;
+      setState(() => _likeBurstMessageIds.remove(messageId));
+    });
+  }
+
+  String _deviceThreadIdForDirect(String peer) => SupabaseService.threadId(_currentUsername, peer).replaceAll(RegExp(r'[^a-zA-Z0-9_\-]+'), '_');
+  String _deviceThreadIdForGroup(String groupId) => 'group_${groupId.replaceAll(RegExp(r'[^a-zA-Z0-9_\-]+'), '_')}';
+
+  Future<Directory> _messagesDeviceDirectory() async {
+    final root = await getApplicationDocumentsDirectory();
+    final dir = Directory('${root.path}/respect_device_messages_v1');
+    if (!await dir.exists()) await dir.create(recursive: true);
+    return dir;
+  }
+
+  Future<File> _messagesDeviceFile({String? peer, String? groupId}) async {
+    final dir = await _messagesDeviceDirectory();
+    final id = groupId != null ? _deviceThreadIdForGroup(groupId) : _deviceThreadIdForDirect(peer ?? _activePeerUsername ?? 'none');
+    return File('${dir.path}/$id.json');
+  }
+
+  bool _isRemoteUrl(String value) {
+    final v = value.trim().toLowerCase();
+    return v.startsWith('http://') || v.startsWith('https://');
+  }
+
+  String _stableLocalMediaName(String url, String mediaType) {
+    var hash = 0x811c9dc5;
+    for (final unit in url.codeUnits) {
+      hash ^= unit;
+      hash = (hash * 0x01000193) & 0xffffffff;
+    }
+    final cleanPath = url.split('?').first.toLowerCase();
+    var ext = cleanPath.contains('.') ? cleanPath.split('.').last : '';
+    ext = ext.replaceAll(RegExp(r'[^a-z0-9]+'), '');
+    if (ext.length < 2 || ext.length > 5) {
+      if (mediaType == 'video') ext = 'mp4';
+      else if (mediaType == 'voice') ext = 'm4a';
+      else ext = 'jpg';
+    }
+    return '${hash.toRadixString(16)}.$ext';
+  }
+
+  Future<String> _saveRemoteMediaPermanentlyOnDevice(String url, String mediaType) async {
+    final raw = url.trim();
+    if (raw.isEmpty || !_isRemoteUrl(raw)) return raw;
+    try {
+      final root = await getApplicationDocumentsDirectory();
+      final dir = Directory('${root.path}/respect_device_media_v1/$mediaType');
+      if (!await dir.exists()) await dir.create(recursive: true);
+      final file = File('${dir.path}/${_stableLocalMediaName(raw, mediaType)}');
+      if (await file.exists() && await file.length() > 0) return file.path;
+      final response = await http.get(Uri.parse(raw)).timeout(const Duration(seconds: 18));
+      if (response.statusCode >= 200 && response.statusCode < 300 && response.bodyBytes.isNotEmpty) {
+        await file.writeAsBytes(response.bodyBytes, flush: true);
+        return file.path;
+      }
+    } catch (e, st) { _logIgnoredError(e, st); }
+    return raw;
+  }
+
+  Future<String> _localMediaPathIfDownloaded(String url, String mediaType) async {
+    final raw = url.trim();
+    if (raw.isEmpty || !_isRemoteUrl(raw)) return raw;
+    final root = await getApplicationDocumentsDirectory();
+    final dir = Directory('${root.path}/respect_device_media_v1/$mediaType');
+    final file = File('${dir.path}/${_stableLocalMediaName(raw, mediaType)}');
+    if (await file.exists() && await file.length() > 0) return file.path;
+    return raw;
+  }
+
+  Future<String> _localizeSingleMediaUrl(String url, String mediaType, {required bool eagerMediaDownload}) async {
+    final raw = url.trim();
+    if (raw.isEmpty || !_isRemoteUrl(raw)) return raw;
+    if (eagerMediaDownload) return _saveRemoteMediaPermanentlyOnDevice(raw, mediaType);
+    final local = await _localMediaPathIfDownloaded(raw, mediaType);
+    if (local == raw) unawaited(_saveRemoteMediaPermanentlyOnDevice(raw, mediaType));
+    return local;
+  }
+
+  Future<String?> _localizeMessageMediaUrl(String? mediaType, String? mediaUrl, {bool eagerMediaDownload = true}) async {
+    final type = (mediaType ?? '').trim();
+    final raw = mediaUrl?.trim() ?? '';
+    if (raw.isEmpty) return mediaUrl;
+
+    if (type == 'gallery' || raw.startsWith('[')) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is List) {
+          final out = <Map<String, dynamic>>[];
+          for (final item in decoded.whereType<Map>()) {
+            final map = Map<String, dynamic>.from(item);
+            final itemType = (map['type'] ?? '').toString() == 'video' ? 'video' : 'image';
+            map['url'] = await _localizeSingleMediaUrl((map['url'] ?? '').toString(), itemType, eagerMediaDownload: eagerMediaDownload);
+            out.add(map);
+          }
+          return jsonEncode(out);
+        }
+      } catch (e, st) { _logIgnoredError(e, st); }
+      return mediaUrl;
+    }
+
+    if (type == 'image' || type == 'video' || type == 'voice') {
+      return _localizeSingleMediaUrl(raw, type, eagerMediaDownload: eagerMediaDownload);
+    }
+
+    if (type == 'story_reply' || type == 'story_like') {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map) {
+          final story = Map<String, dynamic>.from(decoded);
+          final storyType = (story['media_type'] ?? '').toString().toLowerCase().contains('video') ? 'video' : 'image';
+          story['media_url'] = await _localizeSingleMediaUrl((story['media_url'] ?? '').toString(), 'story_$storyType', eagerMediaDownload: eagerMediaDownload);
+          return jsonEncode(story);
+        }
+      } catch (e, st) { _logIgnoredError(e, st); }
+    }
+
+    return mediaUrl;
+  }
+
+  Future<List<_DirectMessage>> _messagesWithDeviceMedia(List<_DirectMessage> messages, {bool eagerMediaDownload = true}) async {
+    final out = <_DirectMessage>[];
+    for (final msg in messages) {
+      final localMediaUrl = await _localizeMessageMediaUrl(msg.mediaType, msg.mediaUrl, eagerMediaDownload: eagerMediaDownload);
+      out.add(msg.copyWith(mediaUrl: localMediaUrl));
+    }
+    return out;
+  }
+
+
+  Future<String> _respectDeviceMediaRootPath() async {
+    final root = await getApplicationDocumentsDirectory();
+    return Directory('${root.path}/respect_device_media_v1').path;
+  }
+
+  Future<bool> _deleteRespectLocalMediaPath(String? path) async {
+    final raw = path?.trim() ?? '';
+    if (raw.isEmpty || _isRemoteUrl(raw)) return false;
+    try {
+      final mediaRoot = await _respectDeviceMediaRootPath();
+      final file = File(raw);
+      final normalizedMediaRoot = mediaRoot.replaceAll('\\', '/');
+      final normalizedPath = file.path.replaceAll('\\', '/');
+      // حماية مهمة: نحذف فقط الملفات التي أنشأها التطبيق داخل مجلد الوسائط المحلي.
+      // لا نحذف صور/فيديوهات المعرض الأصلية أو أي مسار خارجي.
+      if (!normalizedPath.startsWith('$normalizedMediaRoot/')) return false;
+      if (await file.exists()) {
+        await file.delete();
+        return true;
+      }
+    } catch (e, st) { _logIgnoredError(e, st); }
+    return false;
+  }
+
+  Future<void> _deleteLocalMediaForMessage(_DirectMessage msg) async {
+    final mediaType = (msg.mediaType ?? '').trim();
+    final raw = msg.mediaUrl?.trim() ?? '';
+    if (raw.isEmpty) return;
+
+    if (msg.mediaItems.isNotEmpty) {
+      for (final item in msg.mediaItems) {
+        await _deleteRespectLocalMediaPath(item.url);
+      }
+      return;
+    }
+
+    if (mediaType == 'image' || mediaType == 'video' || mediaType == 'voice') {
+      await _deleteRespectLocalMediaPath(raw);
+      return;
+    }
+
+    if (mediaType == 'story_reply' || mediaType == 'story_like') {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map) {
+          await _deleteRespectLocalMediaPath((decoded['media_url'] ?? '').toString());
+        }
+      } catch (e, st) { _logIgnoredError(e, st); }
+    }
+  }
+
+  Future<void> _purgeMessagesFromDeviceFiles(Set<String> messageIds, {bool deleteMedia = true}) async {
+    final ids = messageIds.map((e) => e.trim()).where((e) => e.isNotEmpty).toSet();
+    if (ids.isEmpty) return;
+    try {
+      final dir = await _messagesDeviceDirectory();
+      if (!await dir.exists()) return;
+      await for (final entity in dir.list(followLinks: false)) {
+        if (entity is! File || !entity.path.toLowerCase().endsWith('.json')) continue;
+        try {
+          final raw = await entity.readAsString();
+          if (raw.trim().isEmpty) continue;
+          final decoded = jsonDecode(raw);
+          if (decoded is! List) continue;
+          final kept = <dynamic>[];
+          var changed = false;
+          for (final item in decoded) {
+            if (item is Map) {
+              final map = Map<String, dynamic>.from(item);
+              final id = (map['id'] ?? '').toString().trim();
+              if (ids.contains(id)) {
+                changed = true;
+                if (deleteMedia) await _deleteLocalMediaForMessage(_DirectMessage.fromCacheJson(map));
+                continue;
+              }
+            }
+            kept.add(item);
+          }
+          if (changed) await entity.writeAsString(jsonEncode(kept), flush: true);
+        } catch (e, st) { _logIgnoredError(e, st); }
+      }
+    } catch (e, st) { _logIgnoredError(e, st); }
+  }
+
+  Future<void> _saveMessagesCache({String? peer, String? groupId, bool eagerMediaDownload = false}) async {
+    try {
+      final file = await _messagesDeviceFile(peer: peer, groupId: groupId);
+      final rows = (await _messagesWithDeviceMedia(_activeMessages, eagerMediaDownload: eagerMediaDownload)).map((m) => m.toCacheJson()).toList();
+      await file.writeAsString(jsonEncode(rows), flush: true);
+    } catch (e, st) { _logIgnoredError(e, st); }
+  }
+
+  Future<List<_DirectMessage>> _loadMessagesCache({String? peer, String? groupId}) async {
+    try {
+      final file = await _messagesDeviceFile(peer: peer, groupId: groupId);
+      if (!await file.exists()) return <_DirectMessage>[];
+      final raw = await file.readAsString();
+      if (raw.trim().isEmpty) return <_DirectMessage>[];
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return <_DirectMessage>[];
+      return decoded.whereType<Map>().map((e) => _DirectMessage.fromCacheJson(Map<String, dynamic>.from(e))).where((m) => !_locallyDeletedMessageIds.contains(m.id)).toList();
+    } catch (_) { return <_DirectMessage>[]; }
+  }
+
+
+  String? _latestCreatedAt(List<_DirectMessage> messages) {
+    if (messages.isEmpty) return null;
+    final sorted = List<_DirectMessage>.from(messages)..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    return sorted.last.createdAt;
+  }
+
+  List<_DirectMessage> _mergeMessages(List<_DirectMessage> oldMessages, List<_DirectMessage> newMessages) {
+    final map = <String, _DirectMessage>{};
+    for (final msg in oldMessages) {
+      if (msg.id.trim().isNotEmpty) map[msg.id] = msg;
+    }
+    for (final msg in newMessages) {
+      if (msg.id.trim().isNotEmpty) map[msg.id] = msg;
+    }
+    final merged = map.values.where((m) => !_locallyDeletedMessageIds.contains(m.id)).toList()
+      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    return merged;
+  }
+
+  Widget _buildInboxStoriesBar() {
+    if (_topStories.isEmpty) return const SizedBox.shrink();
+
+    return SizedBox(
+      height: 106,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
+        itemCount: _topStories.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 10),
+        itemBuilder: (context, i) {
+          final s = _topStories[i];
+          final username = SupabaseService.displayUsername((s['username'] ?? '').toString());
+          final storyIds = List<String>.from(s['_story_ids'] as List? ?? <String>[(s['id'] ?? '').toString()])
+              .map((e) => e.trim())
+              .where((e) => e.isNotEmpty)
+              .toSet();
+          final storiesSeen = storyIds.isNotEmpty && storyIds.every(_seenStoryIds.contains);
+          final private = SupabaseService.truthy(s['_has_private_story']) ||
+              SupabaseService.truthy(s['is_private']) ||
+              (s['privacy'] ?? '').toString().toLowerCase() == 'private';
+          final avatar = _fileImage((s['avatar_url'] ?? '').toString());
+          final displayName = username.replaceFirst('@', '');
+          final ringGradient = storiesSeen
+              ? const LinearGradient(colors: [Color(0xFF777777), Color(0xFF4B5563)])
+              : (private
+                  ? const LinearGradient(colors: [Color(0xFF00C853), Color(0xFF00E676), Color(0xFF1B5E20)])
+                  : const LinearGradient(colors: [Color(0xFFFFD166), AppColors.purple, Color(0xFF06D6A0)]));
+          final glowColor = storiesSeen ? Colors.grey : (private ? const Color(0xFF00C853) : AppColors.purple);
+
+          return GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => _openInboxStory(username),
+            child: SizedBox(
+              width: 68,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(3),
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: ringGradient,
+                      boxShadow: [BoxShadow(color: glowColor.withValues(alpha: .28), blurRadius: 14, spreadRadius: 1)],
+                    ),
+                    child: Container(
+                      padding: const EdgeInsets.all(2),
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Theme.of(context).brightness == Brightness.dark ? AppColors.darkBg : AppColors.lightBg,
+                      ),
+                      child: CircleAvatar(
+                        radius: 25,
+                        backgroundColor: AppColors.purple,
+                        backgroundImage: avatar,
+                        child: avatar == null ? const Icon(Icons.person_rounded, color: Colors.white, size: 24) : null,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 5),
+                  Text(
+                    displayName,
+                    maxLines: 1,
+                    softWrap: false,
+                    textAlign: TextAlign.center,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 10.5, height: 1.0, fontWeight: FontWeight.w900),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+  Future<void> _openInboxStory(String ownerUsername) async {
+    final stories = (await SupabaseService.getActiveStories(usernames: [ownerUsername]));
+    if (stories.isEmpty || !mounted) return;
+    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => _MessageStoryViewerPage(
+      stories: stories,
+      currentUsername: _currentUsername,
+      onReply: (story, text) => _sendStoryReplyToDirect(story, text),
+      onLike: (story) => _sendStoryLikeToDirect(story),
+    )));
+    await SupabaseService.markStoriesSeen(stories);
+    final seen = await SupabaseService.getSeenStoryIds();
+    if (mounted) setState(() => _seenStoryIds = seen);
+    unawaited(_loadPrivacyAndStoryData());
+  }
+
+  Future<void> _openStoryFromMessageReference(_DirectMessage message) async {
+    final story = message.storyMeta;
+    if (story.isEmpty || !mounted) return;
+    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => _MessageStoryViewerPage(
+      stories: [story],
+      currentUsername: _currentUsername,
+      onReply: (s, text) => _sendStoryReplyToDirect(s, text),
+      onLike: (s) => _sendStoryLikeToDirect(s),
+    )));
+    await SupabaseService.markStoriesSeen([story]);
+    final seen = await SupabaseService.getSeenStoryIds();
+    if (mounted) setState(() => _seenStoryIds = seen);
+  }
+
+  Future<void> _sendStoryReplyToDirect(Map<String, dynamic> story, String text) async {
+    final owner = SupabaseService.displayUsername((story['username'] ?? '').toString());
+    if (owner == '@user' || owner == _currentUsername) return;
+    final body = text.trim();
+    if (body.isEmpty) return;
+    if (!await _ensureDirectMessagingAllowed(owner)) return;
+    final preview = 'رد على الستوري: $body';
+    final row = await SupabaseService.sendMessage(sender: _currentUsername, receiver: owner, text: body, mediaType: 'story_reply', mediaUrl: jsonEncode(story));
+    await SupabaseService.sendUserBroadcast(username: owner, event: 'new_message', payload: {'message': row});
+    unawaited(SupabaseService.sendMessagePush(receiverUsername: owner, senderUsername: _currentUsername, senderName: _currentName, messageId: (row['id'] ?? '').toString(), text: preview));
+    NotificationService.showTopSuccess('تم إرسال الرد في الخاص');
+    await _refreshThreadsOnly();
+  }
+
+  Future<void> _sendStoryLikeToDirect(Map<String, dynamic> story) async {
+    final owner = SupabaseService.displayUsername((story['username'] ?? '').toString());
+    if (owner == '@user' || owner == _currentUsername) return;
+    if (!await _ensureDirectMessagingAllowed(owner)) return;
+    await SupabaseService.toggleStoryLike(storyId: (story['id'] ?? '').toString(), ownerUsername: owner, actorUsername: _currentUsername);
+    final row = await SupabaseService.sendMessage(sender: _currentUsername, receiver: owner, text: '❤️ أعجبني الستوري', mediaType: 'story_like', mediaUrl: jsonEncode(story));
+    await SupabaseService.sendUserBroadcast(username: owner, event: 'new_message', payload: {'message': row});
+    unawaited(SupabaseService.sendMessagePush(receiverUsername: owner, senderUsername: _currentUsername, senderName: _currentName, messageId: (row['id'] ?? '').toString(), text: '❤️ أعجبني الستوري'));
+    NotificationService.showTopSuccess('تم إرسال الإعجاب في الخاص');
+    await _refreshThreadsOnly();
   }
 
   Future<void> _refreshThreadsOnly() async {
@@ -515,12 +1294,29 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       _loading = true;
     });
     _notifyConversationActive(true);
-    final rows = await SupabaseService.getMessagesBetween(_currentUsername, thread.peerUsername);
+    final cached = await _loadMessagesCache(peer: thread.peerUsername);
+    if (mounted && cached.isNotEmpty) {
+      setState(() {
+        _messages = cached;
+        _loading = false;
+      });
+    }
+    final rows = await SupabaseService.getMessagesBetween(
+      _currentUsername,
+      thread.peerUsername,
+      limit: cached.isEmpty ? 120 : 80,
+      afterCreatedAt: _latestCreatedAt(cached),
+    );
+    final deviceMessages = await _messagesWithDeviceMedia(
+      rows.map(_DirectMessage.fromSupabase).where((m) => !_locallyDeletedMessageIds.contains(m.id)).toList(),
+      eagerMediaDownload: cached.isEmpty,
+    );
     if (!mounted) return;
     setState(() {
-      _messages = rows.map(_DirectMessage.fromSupabase).where((m) => !_locallyDeletedMessageIds.contains(m.id)).toList();
+      _messages = _mergeMessages(cached, deviceMessages);
       _loading = false;
     });
+    await _saveMessagesCache(peer: thread.peerUsername, eagerMediaDownload: false);
     await _markVisibleMessagesRead();
     unawaited(_refreshActiveConversationSilently(scroll: true));
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
@@ -528,8 +1324,25 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
   Future<void> _openGroupById(String groupId, {required bool setLoading}) async {
     if (setLoading && mounted) setState(() => _loading = true);
+    final cached = await _loadMessagesCache(groupId: groupId);
+    if (mounted && cached.isNotEmpty) {
+      setState(() {
+        _activePeerUsername = null;
+        _activeGroupId = groupId;
+        _messages = cached;
+        _loading = false;
+      });
+    }
     final group = await SupabaseService.getChatGroup(groupId, _currentUsername);
-    final rows = await SupabaseService.getGroupMessages(groupId);
+    final rows = await SupabaseService.getGroupMessages(
+      groupId,
+      limit: cached.isEmpty ? 160 : 80,
+      afterCreatedAt: _latestCreatedAt(cached),
+    );
+    final deviceMessages = await _messagesWithDeviceMedia(
+      rows.map(_DirectMessage.fromGroupSupabase).where((m) => !_locallyDeletedMessageIds.contains(m.id)).toList(),
+      eagerMediaDownload: cached.isEmpty,
+    );
     if (!mounted) return;
     setState(() {
       _activePeerUsername = null;
@@ -541,9 +1354,10 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       _activeGroupLocked = group?['locked'] == true;
       _activeGroupFounder = SupabaseService.displayUsername((group?['founder_username'] ?? '').toString()) == _currentUsername;
       _activeGroupAdmin = group?['my_role'] == 'admin' || _activeGroupFounder;
-      _messages = rows.map(_DirectMessage.fromGroupSupabase).where((m) => !_locallyDeletedMessageIds.contains(m.id)).toList();
+      _messages = _mergeMessages(cached, deviceMessages);
       _loading = false;
     });
+    await _saveMessagesCache(groupId: groupId, eagerMediaDownload: false);
     _notifyConversationActive(true);
     await _markVisibleMessagesRead();
     unawaited(_refreshActiveConversationSilently(scroll: true));
@@ -687,8 +1501,14 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
     setState(() => _sending = true);
     try {
-      final table = _isGroup ? 'respect_group_messages' : 'messages';
-      await SupabaseService.client.from(table).update({'text': newText}).eq('id', editing.id);
+      await SupabaseService.updateChatMessageTextEncrypted(
+        messageId: editing.id,
+        group: _isGroup,
+        sender: _currentUsername,
+        receiver: editing.receiverUsername,
+        groupId: editing.groupId ?? _activeGroupId,
+        text: newText,
+      );
       if (!mounted) return true;
       setState(() {
         _messages = _messages.map((m) => m.id == editing.id ? m.copyWith(text: newText) : m).toList();
@@ -792,6 +1612,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     if (msg.isImage) return txt.isNotEmpty && txt != 'صورة' ? txt : 'صورة';
     if (msg.isVideo) return txt.isNotEmpty && txt != 'فيديو' ? txt : 'فيديو';
     if (msg.isVoice) return 'رسالة صوتية';
+    if (msg.isCallHistory) return msg.callHistoryTitle(isMine: msg.senderUsername == _currentUsername);
     return txt;
   }
 
@@ -866,12 +1687,14 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
   Future<void> _deleteSelectedForMe() async {
     if (_selectedMessageIds.isEmpty) return;
+    final selectedIds = Set<String>.from(_selectedMessageIds);
     setState(() {
-      _locallyDeletedMessageIds.addAll(_selectedMessageIds);
-      _messages.removeWhere((m) => _selectedMessageIds.contains(m.id));
+      _locallyDeletedMessageIds.addAll(selectedIds);
+      _messages.removeWhere((m) => selectedIds.contains(m.id));
       _selectedMessageIds.clear();
     });
     await _saveLocallyDeletedMessages();
+    await _purgeMessagesFromDeviceFiles(selectedIds, deleteMedia: false);
     await _refreshThreadsOnly();
     NotificationService.showTopSuccess('تم الحذف لديك فقط');
   }
@@ -884,16 +1707,23 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       NotificationService.showTopError('حذف عند الجميع متاح لرسائلك فقط');
       return;
     }
+    final selectedIds = selected.map((m) => m.id).where((id) => id.trim().isNotEmpty).toSet();
     for (final m in selected) {
       await SupabaseService.deleteChatMessage(messageId: m.id, group: _isGroup);
     }
+    for (final m in selected) {
+      await _deleteLocalMediaForMessage(m);
+    }
+    await _purgeMessagesFromDeviceFiles(selectedIds, deleteMedia: true);
     if (!mounted) return;
     setState(() {
-      _messages.removeWhere((m) => selected.any((x) => x.id == m.id));
+      _locallyDeletedMessageIds.addAll(selectedIds);
+      _messages.removeWhere((m) => selectedIds.contains(m.id));
       _selectedMessageIds.clear();
     });
+    await _saveLocallyDeletedMessages();
     await _refreshThreadsOnly();
-    NotificationService.showTopSuccess('تم الحذف عند الجميع');
+    NotificationService.showTopSuccess('تم الحذف عند الجميع وحذف الوسائط المحلية');
   }
 
   Future<void> _showDeleteSelectionSheet() async {
@@ -995,12 +1825,14 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     try {
       if (_isGroup) {
         final row = await SupabaseService.sendGroupMessage(groupId: _activeGroupId!, sender: _currentUsername, text: text, replyToId: reply?.id, replyText: reply == null ? null : _messagePreview(reply), replySender: reply?.senderUsername);
-        final msg = _DirectMessage.fromGroupSupabase(row).copyWith(status: MessageStatus.delivered);
+        final localRow = await SupabaseService.decryptGroupMessageRow(row, _currentUsername);
+        final msg = _DirectMessage.fromGroupSupabase(localRow).copyWith(status: MessageStatus.delivered);
         if (mounted && !_messages.any((m) => m.id == msg.id)) setState(() => _messages.add(msg));
         await SupabaseService.broadcastGroupMessage(groupId: _activeGroupId!, message: row, excludeUsername: _currentUsername);
       } else {
         final peer = _activePeerUsername;
         if (peer == null) return;
+        if (!await _ensureDirectMessagingAllowed(peer)) return;
         final localId = 'local_${DateTime.now().microsecondsSinceEpoch}';
         final local = _DirectMessage(
           id: localId,
@@ -1027,6 +1859,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         await SupabaseService.sendUserBroadcast(username: peer, event: 'new_message', payload: {'message': row});
         unawaited(SupabaseService.sendMessagePush(receiverUsername: peer, senderUsername: _currentUsername, senderName: _currentName, messageId: msg.id, text: text));
       }
+      await _saveMessagesCache(peer: _activePeerUsername, groupId: _activeGroupId);
       await _refreshThreadsOnly();
       WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
     } catch (e) {
@@ -1302,7 +2135,21 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     if (!_canSend || _sendingVoice) return;
     setState(() => _sendingVoice = true);
     try {
-      final voiceUrl = await SupabaseService.uploadChatVoice(username: _currentUsername, filePath: filePath);
+      final voiceUrl = (!_isGroup && _activePeerUsername != null)
+          ? await SupabaseService.uploadEncryptedChatMedia(
+              sender: _currentUsername,
+              receiver: _activePeerUsername!,
+              filePath: filePath,
+              mediaType: 'voice',
+            )
+          : (_isGroup && _activeGroupId != null)
+              ? await SupabaseService.uploadEncryptedGroupChatMedia(
+                  groupId: _activeGroupId!,
+                  sender: _currentUsername,
+                  filePath: filePath,
+                  mediaType: 'voice',
+                )
+              : await SupabaseService.uploadChatVoice(username: _currentUsername, filePath: filePath);
       if (voiceUrl.trim().isEmpty) return;
       final realWaveform = _compactWaveform(waveform);
       if (realWaveform.isNotEmpty) _voiceWaveformCache[voiceUrl] = realWaveform;
@@ -1316,12 +2163,14 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
           mediaUrl: voiceUrl,
           voiceSeconds: seconds,
         );
-        final msg = _DirectMessage.fromGroupSupabase(row).copyWith(status: MessageStatus.delivered);
+        final localRow = await SupabaseService.decryptGroupMessageRow(row, _currentUsername);
+        final msg = _DirectMessage.fromGroupSupabase(localRow).copyWith(status: MessageStatus.delivered);
         if (mounted && !_messages.any((m) => m.id == msg.id)) setState(() => _messages.add(msg));
         await SupabaseService.broadcastGroupMessage(groupId: _activeGroupId!, message: row, excludeUsername: _currentUsername);
       } else {
         final peer = _activePeerUsername;
         if (peer == null) return;
+        if (!await _ensureDirectMessagingAllowed(peer)) return;
         final row = await SupabaseService.sendMessage(
           sender: _currentUsername,
           receiver: peer,
@@ -1335,6 +2184,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         await SupabaseService.sendUserBroadcast(username: peer, event: 'new_message', payload: {'message': row});
         unawaited(SupabaseService.sendMessagePush(receiverUsername: peer, senderUsername: _currentUsername, senderName: _currentName, messageId: msg.id, text: 'رسالة صوتية'));
       }
+      await _saveMessagesCache(peer: _activePeerUsername, groupId: _activeGroupId);
       await _refreshThreadsOnly();
       WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
     } catch (e) {
@@ -1396,6 +2246,26 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     final sizeMb = await file.length() / (1024 * 1024);
     if (video && sizeMb > 120) throw Exception('الفيديو كبير جدًا، اختر فيديو أقل من 120MB');
     if (!video && sizeMb > 25) throw Exception('الصورة كبيرة جدًا، اختر صورة أقل من 25MB');
+
+    // تشفير End-to-End للوسائط قبل الرفع.
+    // الخاص: نسخة للطرف الآخر. المجموعة: نسخة مشفرة مستقلة لكل عضو.
+    if (!_isGroup && _activePeerUsername != null) {
+      return SupabaseService.uploadEncryptedChatMedia(
+        sender: _currentUsername,
+        receiver: _activePeerUsername!,
+        filePath: raw,
+        mediaType: video ? 'video' : 'image',
+      );
+    }
+    if (_isGroup && _activeGroupId != null) {
+      return SupabaseService.uploadEncryptedGroupChatMedia(
+        groupId: _activeGroupId!,
+        sender: _currentUsername,
+        filePath: raw,
+        mediaType: video ? 'video' : 'image',
+        maxViews: _pendingMediaMaxViews,
+      );
+    }
 
     final clean = SupabaseService.normalizeUsername(_currentUsername);
     final ext = _chatMediaExtFromPath(raw, video: video);
@@ -1644,7 +2514,8 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
           replyText: reply == null ? null : _messagePreview(reply),
           replySender: reply?.senderUsername,
         );
-        final msg = _DirectMessage.fromGroupSupabase(row).copyWith(status: MessageStatus.delivered);
+        final localRow = await SupabaseService.decryptGroupMessageRow(row, _currentUsername);
+        final msg = _DirectMessage.fromGroupSupabase(localRow).copyWith(status: MessageStatus.delivered);
         if (mounted && !_messages.any((m) => m.id == msg.id)) {
           setState(() => _messages.add(msg));
         }
@@ -1652,6 +2523,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       } else {
         final peer = _activePeerUsername;
         if (peer == null) return;
+        if (!await _ensureDirectMessagingAllowed(peer)) return;
         final row = await SupabaseService.sendMessage(
           sender: _currentUsername,
           receiver: peer,
@@ -1683,6 +2555,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
           _replyToMessage = null;
         });
       }
+      await _saveMessagesCache(peer: _activePeerUsername, groupId: _activeGroupId);
       await _refreshThreadsOnly();
       WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
     } catch (e) {
@@ -1773,6 +2646,51 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       fileOptions: FileOptions(contentType: contentType, upsert: true),
     );
     return SupabaseService.client.storage.from('avatars').getPublicUrl(storagePath);
+  }
+
+  Future<void> _leaveCurrentGroup() async {
+    final groupId = _activeGroupId;
+    if (groupId == null || groupId.trim().isEmpty) return;
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('الخروج من المجموعة'),
+        content: Text('هل تريد الخروج من "${_activeGroupName ?? 'المجموعة'}"؟'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('خروج'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+
+    try {
+      await SupabaseService.leaveChatGroup(groupId: groupId, username: _currentUsername);
+      if (!mounted) return;
+      setState(() {
+        _activeGroupId = null;
+        _activeGroupName = null;
+        _activeGroupAvatar = null;
+        _activeGroupLocked = false;
+        _activeGroupFounder = false;
+        _activeGroupAdmin = false;
+        _messages.clear();
+        _selectedMessageIds.clear();
+        _replyToMessage = null;
+        _editingMessage = null;
+      });
+      NotificationService.showTopSuccess('تم الخروج من المجموعة');
+      await _refreshThreadsOnly();
+      _syncConversationActiveState();
+    } catch (e) {
+      if (!mounted) return;
+      NotificationService.showTopError('تعذر الخروج من المجموعة: $e');
+    }
   }
 
   Future<void> _updateActiveGroupInfo({String? name, String? avatarUrl}) async {
@@ -2127,6 +3045,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     String roomPrefix = 'direct',
   }) async {
     final cleanPeer = SupabaseService.displayUsername(peerUsername);
+    if (!await _ensureCallAllowed(cleanPeer)) return;
     final safeMe = SupabaseService.normalizeUsername(_currentUsername);
     final safePeer = SupabaseService.normalizeUsername(cleanPeer);
     final safePrefix = roomPrefix.replaceAll(RegExp(r'[^a-zA-Z0-9_-]+'), '_');
@@ -2141,7 +3060,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     );
 
     if (!mounted) return;
-    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => CallScreen(
+    final result = await Navigator.of(context).push<String>(MaterialPageRoute(builder: (_) => CallScreen(
       callId: callId,
       peerName: peerName,
       peerAvatarPath: peerAvatarPath,
@@ -2152,6 +3071,47 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       callerUsername: _currentUsername,
       calleeUsername: cleanPeer,
     )));
+
+    await _saveDirectCallHistory(
+      peerUsername: cleanPeer,
+      callId: callId,
+      video: video,
+      result: result ?? 'missed',
+    );
+  }
+
+  Future<void> _saveDirectCallHistory({
+    required String peerUsername,
+    required String callId,
+    required bool video,
+    required String result,
+  }) async {
+    final peer = SupabaseService.displayUsername(peerUsername);
+    if (peer == '@user' || peer == SupabaseService.displayUsername(_currentUsername)) return;
+
+    final status = <String>{'answered', 'rejected', 'cancelled', 'missed'}.contains(result) ? result : 'missed';
+    try {
+      final row = await SupabaseService.sendCallHistoryMessage(
+        sender: _currentUsername,
+        receiver: peer,
+        callId: callId,
+        video: video,
+        status: status,
+      );
+      final msg = _DirectMessage.fromSupabase(row).copyWith(
+        status: MessageStatus.delivered,
+        senderName: _currentName,
+        senderAvatar: _currentAvatarPath,
+      );
+      if (mounted && !_messages.any((m) => m.id == msg.id)) {
+        setState(() => _messages.add(msg));
+      }
+      await SupabaseService.sendUserBroadcast(username: peer, event: 'new_message', payload: {'message': row});
+      await _refreshThreadsOnly();
+      WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+    } catch (e) {
+      if (mounted) NotificationService.showTopNotification('تم إنهاء المكالمة، لكن تعذر حفظ سجل المكالمة: $e');
+    }
   }
 
   Future<void> _sendCallInviteToUser({
@@ -2341,12 +3301,6 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     final stamp = DateTime.now().millisecondsSinceEpoch;
     final safeGroup = groupId.replaceAll(RegExp(r'[^a-zA-Z0-9_-]+'), '_');
     final safeMe = SupabaseService.normalizeUsername(_currentUsername);
-    final firstUsername = selectedUsernames.first;
-    final firstMember = members.firstWhere(
-          (m) => SupabaseService.displayUsername((m['username'] ?? '').toString()) == firstUsername,
-      orElse: () => {'username': firstUsername},
-    );
-
     for (final username in selectedUsernames) {
       final safePeer = SupabaseService.normalizeUsername(username);
       final callId = 'group_${safeGroup}_${safeMe}_${safePeer}_$stamp';
@@ -2362,23 +3316,28 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     if (!mounted) return;
     NotificationService.showTopNotification('تم إرسال دعوة المكالمة إلى ${selectedUsernames.length} عضو');
 
-    // ملاحظة مهمة: خدمة WebRTC الحالية في المشروع مبنية على اتصال طرفين فقط.
-    // لذلك يفتح التطبيق أول عضو الآن، وباقي الأعضاء تصلهم دعوة الاتصال.
-    // عند إضافة SFU/mesh لاحقاً يمكن جمع كل المشاركين داخل شاشة واحدة.
-    final firstCallId = 'group_${safeGroup}_${safeMe}_${SupabaseService.normalizeUsername(firstUsername)}_$stamp';
-    final firstName = (firstMember['name'] ?? firstMember['profileName'] ?? firstUsername).toString();
-    final firstAvatar = (firstMember['avatar_url'] ?? firstMember['imagePath'] ?? firstMember['profileImagePath'])?.toString();
+    final participants = <GroupCallParticipant>[];
+    for (final username in selectedUsernames) {
+      final member = members.firstWhere(
+        (m) => SupabaseService.displayUsername((m['username'] ?? '').toString()) == username,
+        orElse: () => {'username': username},
+      );
+      final safePeer = SupabaseService.normalizeUsername(username);
+      participants.add(GroupCallParticipant(
+        callId: 'group_${safeGroup}_${safeMe}_${safePeer}_$stamp',
+        username: username,
+        name: (member['name'] ?? member['profileName'] ?? username).toString(),
+        avatarPath: (member['avatar_url'] ?? member['imagePath'] ?? member['profileImagePath'])?.toString(),
+      ));
+    }
 
-    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => CallScreen(
-      callId: firstCallId,
-      peerName: selectedUsernames.length == 1 ? firstName : '${_activeGroupName ?? 'مجموعة'} • $firstName',
-      peerAvatarPath: firstAvatar,
+    await Navigator.of(context).push<String>(MaterialPageRoute(builder: (_) => GroupCallScreen(
+      groupName: _activeGroupName ?? 'مجموعة',
       video: video,
-      isCaller: true,
-      callService: CallService(),
-      callerName: _currentName,
-      callerUsername: _currentUsername,
-      calleeUsername: firstUsername,
+      currentUsername: _currentUsername,
+      currentName: _currentName,
+      currentAvatarPath: _currentAvatarPath,
+      participants: participants,
     )));
   }
 
@@ -2417,6 +3376,23 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                     style: TextStyle(fontWeight: FontWeight.w900, fontSize: 20),
                   ),
                   const Spacer(),
+                  if (_incomingChatRequests.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsetsDirectional.only(end: 8),
+                      child: Badge(
+                        label: Text('${_incomingChatRequests.length}'),
+                        child: IconButton(
+                          tooltip: 'طلبات الدردشة',
+                          onPressed: _showIncomingChatRequests,
+                          icon: const Icon(Icons.person_add_alt_1_rounded, color: AppColors.purple),
+                        ),
+                      ),
+                    ),
+                  IconButton(
+                    tooltip: 'إعدادات الخصوصية',
+                    onPressed: _openPrivacySettings,
+                    icon: const Icon(Icons.privacy_tip_rounded, color: AppColors.purple),
+                  ),
                   Tooltip(
                     message: 'إنشاء مجموعة',
                     child: InkWell(
@@ -2436,6 +3412,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                 ],
               ),
             ),
+            _buildInboxStoriesBar(),
             // قائمة المحادثات
             Expanded(
               child: _threads.isEmpty
@@ -2517,12 +3494,23 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
               : ListView.builder(
             controller: _scrollCtrl,
             padding: const EdgeInsets.fromLTRB(12, 14, 12, 10),
-            itemCount: messages.length + (_peerTyping ? 1 : 0),
+            itemCount: messages.length,
             itemBuilder: (context, i) {
-              if (_peerTyping && i == messages.length) return _TypingBubble(name: _typingName ?? 'مستخدم', mode: _peerTypingMode);
               return _buildMessageBubble(context, messages[i]);
             },
           ),
+        ),
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 180),
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.easeInCubic,
+          child: _peerTyping
+              ? Padding(
+            key: const ValueKey('fixed_typing_indicator'),
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+            child: _TypingBubble(name: _typingName ?? 'مستخدم', mode: _peerTypingMode),
+          )
+              : const SizedBox(key: ValueKey('no_typing_indicator'), height: 0),
         ),
         if (!_canSend)
           Container(width: double.infinity, padding: const EdgeInsets.all(12), color: AppColors.danger.withValues(alpha: .10), child: const Text('الدردشة مقفلة، الإرسال متاح للمشرفين فقط', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w800))),
@@ -2707,21 +3695,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
           children: [
             IconButton(
               tooltip: 'رجوع',
-              onPressed: () {
-                setState(() {
-                  _activePeerUsername = null;
-                  _activePeerName = null;
-                  _activePeerAvatarPath = null;
-                  _activeGroupId = null;
-                  _activeGroupName = null;
-                  _activeGroupAvatar = null;
-                  _selectedMessageIds.clear();
-                  _replyToMessage = null;
-                  _editingMessage = null;
-                });
-                _notifyConversationActive(false);
-                _refreshThreadsOnly();
-              },
+              onPressed: _handleConversationBack,
               icon: const Icon(Icons.arrow_back_rounded),
             ),
             CircleAvatar(
@@ -2785,6 +3759,20 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                 icon: Icons.videocam_rounded,
                 onTap: () => _startCall(video: true),
               ),
+              const SizedBox(width: 6),
+              PopupMenuButton<String>(
+                tooltip: 'خيارات المجموعة',
+                icon: const Icon(Icons.more_vert_rounded),
+                onSelected: (value) {
+                  if (value == 'leave') _leaveCurrentGroup();
+                  if (value == 'settings') _showGroupAdminSheet();
+                },
+                itemBuilder: (ctx) => [
+                  if (_activeGroupAdmin || _activeGroupFounder)
+                    const PopupMenuItem(value: 'settings', child: ListTile(leading: Icon(Icons.settings_rounded), title: Text('إعدادات المجموعة'))),
+                  const PopupMenuItem(value: 'leave', child: ListTile(leading: Icon(Icons.logout_rounded, color: AppColors.danger), title: Text('الخروج من المجموعة'))),
+                ],
+              ),
             ],
           ],
         ),
@@ -2817,6 +3805,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
               isMe: isMe,
               onReply: () => _startReplyTo(msg),
               child: GestureDetector(
+                onDoubleTap: () => _likeMessageWithInstagramBurst(msg),
                 onTap: () {
                   if (_selectionMode) {
                     _toggleMessageSelection(msg);
@@ -2825,7 +3814,10 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                   }
                 },
                 onLongPress: () => _toggleMessageSelection(msg),
-                child: AnimatedContainer(
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    AnimatedContainer(
                   duration: const Duration(milliseconds: 180),
                   padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 9),
                   constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.76),
@@ -2860,7 +3852,9 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                       _InlineReplyPreview(sender: msg.replySender ?? '', text: msg.replyText ?? '', isMe: isMe, onTap: () => _jumpToRepliedMessage(msg.replyToId)),
                     ],
                     const SizedBox(height: 3),
-                    if (msg.isVoice)
+                    if (msg.isCallHistory)
+                      _CallHistoryMessage(message: msg, isMe: isMe)
+                    else if (msg.isVoice)
                       _VoiceMessagePlayer(
                         isMe: isMe,
                         voiceSeconds: msg.voiceSeconds,
@@ -2874,19 +3868,21 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                         onSpeedTap: _changeVoiceSpeed,
                       )
                     else if (msg.isMediaGroup)
-                      _ChatMediaGalleryMessage(
-                        items: msg.mediaItems,
-                        caption: msg.text,
-                        isMe: isMe,
-                        limitedMaxViews: msg.limitedMediaMaxViews,
-                        onOpen: (index) => _openMediaViewer(msg, initialIndex: index),
-                      )
-                    else if (msg.isImage)
-                        _ChatImageMessage(url: msg.mediaUrl ?? '', caption: msg.text, isMe: isMe, onTap: () => _openMediaViewer(msg), limitedMaxViews: msg.limitedMediaMaxViews)
-                      else if (msg.isVideo)
-                          _ChatVideoMessage(url: msg.mediaUrl ?? '', caption: msg.text, isMe: isMe, onTap: () => _openMediaViewer(msg), limitedMaxViews: msg.limitedMediaMaxViews)
-                        else
-                          Text(msg.text, style: TextStyle(color: isMe ? Colors.white : null, height: 1.35)),
+                        _ChatMediaGalleryMessage(
+                          items: msg.mediaItems,
+                          caption: msg.text,
+                          isMe: isMe,
+                          limitedMaxViews: msg.limitedMediaMaxViews,
+                          onOpen: (index) => _openMediaViewer(msg, initialIndex: index),
+                        )
+                      else if (msg.isImage)
+                          _ChatImageMessage(url: msg.mediaUrl ?? '', caption: msg.text, isMe: isMe, onTap: () => _openMediaViewer(msg), limitedMaxViews: msg.limitedMediaMaxViews)
+                        else if (msg.isVideo)
+                            _ChatVideoMessage(url: msg.mediaUrl ?? '', caption: msg.text, isMe: isMe, onTap: () => _openMediaViewer(msg), limitedMaxViews: msg.limitedMediaMaxViews)
+                          else if (msg.isStoryReply || msg.isStoryLike)
+                            _StoryReferenceMessage(message: msg, isMe: isMe, onOpen: () => _openStoryFromMessageReference(msg))
+                          else
+                            Text(msg.text, style: TextStyle(color: isMe ? Colors.white : null, height: 1.35)),
                     const SizedBox(height: 4),
                     Row(mainAxisSize: MainAxisSize.min, children: [
                       Text(_formatTime(msg.createdAt), style: TextStyle(fontSize: 10.5, color: isMe ? Colors.white70 : (isDark ? AppColors.darkMuted : AppColors.lightMuted))),
@@ -2896,6 +3892,21 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                       ],
                     ]),
                   ]),
+                    ),
+                    if (_likeBurstMessageIds.contains(msg.id))
+                      const Positioned.fill(
+                        child: IgnorePointer(
+                          child: Center(child: _InstagramLikeBurst()),
+                        ),
+                      ),
+                    if (_messageLiked(msg))
+                      PositionedDirectional(
+                        bottom: -13,
+                        end: isMe ? 12 : null,
+                        start: isMe ? null : 12,
+                        child: const Text('❤️', style: TextStyle(fontSize: 15, shadows: [Shadow(color: Colors.black26, blurRadius: 7, offset: Offset(0, 2))])),
+                      ),
+                  ],
                 ),
               ),
             ),
@@ -2932,6 +3943,364 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 }
 
 
+
+
+class _MessageStoryViewerPage extends StatefulWidget {
+  final List<Map<String, dynamic>> stories;
+  final String currentUsername;
+  final Future<void> Function(Map<String, dynamic> story, String text) onReply;
+  final Future<void> Function(Map<String, dynamic> story) onLike;
+
+  const _MessageStoryViewerPage({required this.stories, required this.currentUsername, required this.onReply, required this.onLike});
+
+  @override
+  State<_MessageStoryViewerPage> createState() => _MessageStoryViewerPageState();
+}
+
+class _MessageStoryViewerPageState extends State<_MessageStoryViewerPage> {
+  final TextEditingController _replyCtrl = TextEditingController();
+  VideoPlayerController? _videoController;
+  int _index = 0;
+  bool _busy = false;
+  bool _muted = false;
+  bool _liked = false;
+
+  Map<String, dynamic> get _story => widget.stories[_index.clamp(0, widget.stories.length - 1)];
+
+  @override
+  void initState() {
+    super.initState();
+    _setupVideoIfNeeded();
+  }
+
+  @override
+  void dispose() {
+    _videoController?.dispose();
+    _replyCtrl.dispose();
+    super.dispose();
+  }
+
+  bool _isVideo(Map<String, dynamic> story) => (story['media_type'] ?? '').toString().toLowerCase().contains('video');
+
+  Future<void> _setupVideoIfNeeded() async {
+    await _videoController?.dispose();
+    _videoController = null;
+    final url = (_story['media_url'] ?? '').toString();
+    if (!_isVideo(_story) || url.trim().isEmpty) {
+      if (mounted) setState(() {});
+      return;
+    }
+    final controller = url.startsWith('http') ? VideoPlayerController.networkUrl(Uri.parse(url)) : VideoPlayerController.file(File(url));
+    _videoController = controller;
+    try {
+      await controller.initialize();
+      await controller.setLooping(true);
+      await controller.setVolume(_muted ? 0 : 1);
+      await controller.play();
+      if (mounted) setState(() {});
+    } catch (_) {
+      if (mounted) setState(() {});
+    }
+  }
+
+  void _next() {
+    if (_index >= widget.stories.length - 1) {
+      Navigator.of(context).pop();
+      return;
+    }
+    setState(() {
+      _index++;
+      _liked = false;
+    });
+    unawaited(_setupVideoIfNeeded());
+  }
+
+  void _previous() {
+    if (_index <= 0) return;
+    setState(() {
+      _index--;
+      _liked = false;
+    });
+    unawaited(_setupVideoIfNeeded());
+  }
+
+  Future<void> _toggleMute() async {
+    setState(() => _muted = !_muted);
+    await _videoController?.setVolume(_muted ? 0 : 1);
+  }
+
+  Future<void> _sendReply() async {
+    final text = _replyCtrl.text.trim();
+    if (text.isEmpty || _busy) return;
+    HapticFeedback.lightImpact();
+    setState(() => _busy = true);
+    try {
+      await widget.onReply(_story, text);
+      _replyCtrl.clear();
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _like() async {
+    if (_busy) return;
+    HapticFeedback.lightImpact();
+    setState(() {
+      _busy = true;
+      _liked = true;
+    });
+    try {
+      await widget.onLike(_story);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  ImageProvider? _imageProvider(String? path) {
+    final p = path?.trim();
+    if (p == null || p.isEmpty) return null;
+    if (p.startsWith('http://') || p.startsWith('https://')) return NetworkImage(p);
+    final f = File(p);
+    if (!f.existsSync()) return null;
+    return FileImage(f);
+  }
+
+  Widget _media(String url) {
+    if (url.trim().isEmpty) {
+      return const Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.lock_rounded, color: Colors.white70, size: 74),
+          SizedBox(height: 12),
+          Text('هذا الستوري مشفر وغير متاح لهذا الحساب', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w800)),
+        ],
+      );
+    }
+    if (_isVideo(_story)) {
+      final controller = _videoController;
+      if (controller == null || !controller.value.isInitialized) {
+        return const Center(child: CircularProgressIndicator(color: AppColors.purple));
+      }
+      return FittedBox(
+        fit: BoxFit.contain,
+        child: SizedBox(
+          width: controller.value.size.width,
+          height: controller.value.size.height,
+          child: VideoPlayer(controller),
+        ),
+      );
+    }
+    if (url.startsWith('http')) {
+      return Image.network(url, fit: BoxFit.contain, errorBuilder: (_, __, ___) => const Icon(Icons.broken_image_rounded, color: Colors.white54, size: 72));
+    }
+    final f = File(url);
+    return f.existsSync() ? Image.file(f, fit: BoxFit.contain) : const Icon(Icons.broken_image_rounded, color: Colors.white54, size: 72);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final story = _story;
+    final url = (story['media_url'] ?? '').toString();
+    final name = (story['name'] ?? story['username'] ?? 'Story').toString();
+    final username = SupabaseService.displayUsername((story['username'] ?? '').toString());
+    final avatarProvider = _imageProvider((story['avatar_url'] ?? '').toString());
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: DecoratedBox(
+        decoration: const BoxDecoration(
+          gradient: RadialGradient(
+            center: Alignment.topRight,
+            radius: 1.2,
+            colors: [Color(0xFF7C3AED), Color(0xFF160B2E), Colors.black],
+            stops: [0, .42, 1],
+          ),
+        ),
+        child: SafeArea(
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTapUp: (d) {
+                    final w = MediaQuery.of(context).size.width;
+                    if (d.localPosition.dx < w * .35) {
+                      _previous();
+                    } else if (d.localPosition.dx > w * .65) {
+                      _next();
+                    }
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(8, 72, 8, 118),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(28),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: .38),
+                          border: Border.all(color: Colors.white.withValues(alpha: .12)),
+                          boxShadow: [BoxShadow(color: AppColors.purple.withValues(alpha: .25), blurRadius: 42)],
+                        ),
+                        child: Center(child: _media(url)),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              PositionedDirectional(
+                top: 10,
+                start: 12,
+                end: 12,
+                child: Column(
+                  children: [
+                    Row(
+                      children: List.generate(widget.stories.length, (i) => Expanded(
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 220),
+                          height: 4,
+                          margin: const EdgeInsets.symmetric(horizontal: 2),
+                          decoration: BoxDecoration(
+                            gradient: i <= _index ? const LinearGradient(colors: [AppColors.purpleLight, Colors.white]) : null,
+                            color: i <= _index ? null : Colors.white24,
+                            borderRadius: BorderRadius.circular(99),
+                          ),
+                        ),
+                      )),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(2.2),
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            gradient: const LinearGradient(colors: [AppColors.purpleLight, AppColors.purple, Color(0xFFFF4FD8)]),
+                            boxShadow: [BoxShadow(color: AppColors.purple.withValues(alpha: .45), blurRadius: 18)],
+                          ),
+                          child: CircleAvatar(
+                            radius: 20,
+                            backgroundColor: AppColors.purple,
+                            backgroundImage: avatarProvider,
+                            child: avatarProvider == null ? const Icon(Icons.person_rounded, color: Colors.white) : null,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 15)),
+                              Text(username, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: Colors.white.withValues(alpha: .65), fontWeight: FontWeight.w700, fontSize: 12)),
+                            ],
+                          ),
+                        ),
+                        if (_isVideo(story)) _StoryRoundButton(icon: _muted ? Icons.volume_off_rounded : Icons.volume_up_rounded, onTap: _toggleMute),
+                        const SizedBox(width: 6),
+                        _StoryRoundButton(icon: Icons.close_rounded, onTap: () => Navigator.of(context).pop()),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              PositionedDirectional(
+                bottom: 12 + bottomInset,
+                start: 12,
+                end: 12,
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: .10),
+                          borderRadius: BorderRadius.circular(24),
+                          border: Border.all(color: Colors.white.withValues(alpha: .16)),
+                        ),
+                        child: TextField(
+                          controller: _replyCtrl,
+                          minLines: 1,
+                          maxLines: 3,
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                          decoration: InputDecoration(
+                            hintText: 'رد على الستوري...',
+                            hintStyle: TextStyle(color: Colors.white.withValues(alpha: .58)),
+                            border: InputBorder.none,
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                          ),
+                          onSubmitted: (_) => _sendReply(),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    _StoryRoundButton(icon: Icons.send_rounded, onTap: _sendReply, filled: true),
+                    const SizedBox(width: 8),
+                    _StoryRoundButton(icon: _liked ? Icons.favorite_rounded : Icons.favorite_border_rounded, onTap: _like, filled: _liked),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _StoryRoundButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+  final bool filled;
+  const _StoryRoundButton({required this.icon, required this.onTap, this.filled = false});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: filled ? AppColors.purple : Colors.white.withValues(alpha: .12),
+      shape: const CircleBorder(),
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: onTap,
+        child: Container(
+          width: 43,
+          height: 43,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white.withValues(alpha: .14)),
+            boxShadow: filled ? [BoxShadow(color: AppColors.purple.withValues(alpha: .38), blurRadius: 18)] : null,
+          ),
+          child: Icon(icon, color: Colors.white, size: 22),
+        ),
+      ),
+    );
+  }
+}
+
+class _SimpleStoryVideo extends StatefulWidget {
+  final String url;
+  const _SimpleStoryVideo({required this.url});
+  @override
+  State<_SimpleStoryVideo> createState() => _SimpleStoryVideoState();
+}
+
+class _SimpleStoryVideoState extends State<_SimpleStoryVideo> {
+  VideoPlayerController? _controller;
+  @override
+  void initState() {
+    super.initState();
+    final u = widget.url;
+    _controller = u.startsWith('http') ? VideoPlayerController.networkUrl(Uri.parse(u)) : VideoPlayerController.file(File(u));
+    _controller!.initialize().then((_) { if (mounted) setState(() {}); _controller?.play(); }).catchError((_) {});
+    _controller!.setLooping(true);
+  }
+  @override
+  void dispose() { _controller?.dispose(); super.dispose(); }
+  @override
+  Widget build(BuildContext context) {
+    final c = _controller;
+    if (c == null || !c.value.isInitialized) return const Center(child: CircularProgressIndicator(color: Colors.white));
+    return AspectRatio(aspectRatio: c.value.aspectRatio, child: VideoPlayer(c));
+  }
+}
 
 class _EditPreviewBar extends StatelessWidget {
   final String text;
@@ -3342,7 +4711,9 @@ class _MediaViewerPageState extends State<_MediaViewerPage> {
   Future<void> _initVideo(String url) async {
     try {
       _videoUrl = url;
-      final c = VideoPlayerController.networkUrl(Uri.parse(url));
+      final c = (url.startsWith('http://') || url.startsWith('https://'))
+          ? VideoPlayerController.networkUrl(Uri.parse(url))
+          : VideoPlayerController.file(File(url));
       _controller = c;
       c.addListener(_videoTick);
       await c.initialize();
@@ -3436,11 +4807,17 @@ class _MediaViewerPageState extends State<_MediaViewerPage> {
       minScale: 0.7,
       maxScale: 4,
       child: Center(
-        child: Image.network(
-          item.url,
-          fit: BoxFit.contain,
-          errorBuilder: (_, __, ___) => const Text('تعذر عرض الصورة', style: TextStyle(color: Colors.white)),
-        ),
+        child: (item.url.startsWith('http://') || item.url.startsWith('https://'))
+            ? Image.network(
+                item.url,
+                fit: BoxFit.contain,
+                errorBuilder: (_, __, ___) => const Text('تعذر عرض الصورة', style: TextStyle(color: Colors.white)),
+              )
+            : Image.file(
+                File(item.url),
+                fit: BoxFit.contain,
+                errorBuilder: (_, __, ___) => const Text('تعذر عرض الصورة', style: TextStyle(color: Colors.white)),
+              ),
       ),
     );
   }
@@ -3599,27 +4976,70 @@ class _TypingBubbleState extends State<_TypingBubble> with SingleTickerProviderS
   void dispose() { _c.dispose(); super.dispose(); }
   @override
   Widget build(BuildContext context) {
+    const accent = Color(0xFF1DA1F2);
     return Align(
       alignment: Alignment.centerLeft,
       child: FadeTransition(
-        opacity: Tween<double>(begin: .45, end: 1).animate(_c),
+        opacity: Tween<double>(begin: .72, end: 1).animate(_c),
         child: Container(
-          margin: const EdgeInsets.only(left: 8, bottom: 8),
+          margin: const EdgeInsets.only(left: 8),
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: .12), borderRadius: BorderRadius.circular(18)),
+          decoration: BoxDecoration(
+            color: accent.withValues(alpha: .10),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: accent.withValues(alpha: .20)),
+          ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(widget.mode == 'voice' ? Icons.mic_rounded : Icons.edit_rounded, size: 15, color: AppColors.purple),
+              Icon(widget.mode == 'voice' ? Icons.mic_rounded : Icons.edit_rounded, size: 15, color: accent),
               const SizedBox(width: 6),
               Text(
                 widget.mode == 'voice' ? '${widget.name} يسجل رسالة صوتية...' : '${widget.name} يكتب الآن...',
-                style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w800, fontSize: 12),
+                style: const TextStyle(color: accent, fontWeight: FontWeight.w800, fontSize: 12),
               ),
+              const SizedBox(width: 7),
+              _TypingDots(animation: _c, color: accent),
             ],
           ),
         ),
       ),
+    );
+  }
+}
+
+
+class _TypingDots extends StatelessWidget {
+  final Animation<double> animation;
+  final Color color;
+
+  const _TypingDots({required this.animation, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: animation,
+      builder: (context, _) {
+        final t = animation.value;
+        Widget dot(int index) {
+          final phase = ((t + (index * .22)) % 1.0);
+          final scale = .72 + (math.sin(phase * math.pi) * .38);
+          return Transform.scale(
+            scale: scale,
+            child: Container(
+              width: 4.8,
+              height: 4.8,
+              margin: const EdgeInsets.symmetric(horizontal: 1.6),
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: .45 + (scale - .72)),
+                shape: BoxShape.circle,
+              ),
+            ),
+          );
+        }
+
+        return Row(mainAxisSize: MainAxisSize.min, children: [dot(0), dot(1), dot(2)]);
+      },
     );
   }
 }
@@ -3635,13 +5055,8 @@ class _MessageStatusIcon extends StatelessWidget {
     if (status == MessageStatus.delivered) {
       return const Icon(Icons.done_all_rounded, size: 16, color: Colors.white);
     }
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(99),
-        boxShadow: [BoxShadow(color: const Color(0xFF4C1D95).withValues(alpha: .75), blurRadius: 9, spreadRadius: 1)],
-      ),
-      child: const Icon(Icons.done_all_rounded, size: 16, color: Color(0xFF4C1D95)),
-    );
+    const seenBlue = Color(0xFF1DA1F2);
+    return const Icon(Icons.done_all_rounded, size: 17, color: seenBlue);
   }
 }
 
@@ -3992,6 +5407,60 @@ class _DirectMessage {
   });
 
   bool get isVoice => mediaType == 'voice' && (mediaUrl?.trim().isNotEmpty ?? false);
+  bool get isCallHistory => mediaType == 'call' && (mediaUrl?.trim().isNotEmpty ?? false);
+  bool get isStoryReply => mediaType == 'story_reply' && (mediaUrl?.trim().isNotEmpty ?? false);
+  bool get isStoryLike => mediaType == 'story_like' && (mediaUrl?.trim().isNotEmpty ?? false);
+
+  Map<String, dynamic> get storyMeta {
+    final raw = mediaUrl?.trim() ?? '';
+    if (raw.isEmpty) return const <String, dynamic>{};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) return Map<String, dynamic>.from(decoded);
+    } catch (e, st) { _logIgnoredError(e, st); }
+    return const <String, dynamic>{};
+  }
+
+  Map<String, dynamic> get callMeta {
+    final raw = mediaUrl?.trim() ?? '';
+    if (raw.isEmpty) return const <String, dynamic>{};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) return Map<String, dynamic>.from(decoded);
+    } catch (e, st) { _logIgnoredError(e, st); }
+    return const <String, dynamic>{};
+  }
+
+  String callHistoryTitle({required bool isMine}) {
+    final meta = callMeta;
+    final video = meta['video'] == true || meta['video']?.toString() == 'true';
+    final status = (meta['status'] ?? '').toString();
+    final direction = isMine ? 'صادرة' : 'واردة';
+    final type = video ? 'فيديو' : 'صوتية';
+    switch (status) {
+      case 'answered':
+        return 'مكالمة $type $direction - تم الرد';
+      case 'rejected':
+        return 'مكالمة $type $direction - مرفوضة';
+      case 'cancelled':
+        return 'مكالمة $type $direction - ملغاة';
+      case 'missed':
+        return 'مكالمة $type $direction - لم يتم الرد';
+      default:
+        return 'مكالمة $type $direction';
+    }
+  }
+
+  IconData callHistoryIcon({required bool isMine}) {
+    final meta = callMeta;
+    final video = meta['video'] == true || meta['video']?.toString() == 'true';
+    final status = (meta['status'] ?? '').toString();
+    if (status == 'rejected' || status == 'missed' || status == 'cancelled') {
+      return video ? Icons.videocam_off_rounded : Icons.call_missed_rounded;
+    }
+    return video ? Icons.videocam_rounded : Icons.call_rounded;
+  }
+
   bool get isImage => mediaType == 'image' && (mediaUrl?.trim().isNotEmpty ?? false);
   bool get isVideo => mediaType == 'video' && (mediaUrl?.trim().isNotEmpty ?? false);
   bool get isMediaGroup => mediaItems.length > 1 || mediaType == 'gallery';
@@ -4025,7 +5494,30 @@ class _DirectMessage {
     return const <_ChatMediaItem>[];
   }
 
-  _DirectMessage copyWith({String? id, MessageStatus? status, String? senderName, String? senderAvatar, String? text}) => _DirectMessage(
+  Map<String, dynamic> toCacheJson() => <String, dynamic>{
+    'id': id,
+    'sender_username': senderUsername,
+    'receiver_username': receiverUsername,
+    'group_id': groupId,
+    'sender_name': senderName,
+    'sender_avatar': senderAvatar,
+    'text': text,
+    'created_at': createdAt,
+    'status': status.name,
+    'media_type': mediaType,
+    'media_url': mediaUrl,
+    'voice_seconds': voiceSeconds,
+    'reply_to_id': replyToId,
+    'reply_text': replyText,
+    'reply_sender': replySender,
+  };
+
+  factory _DirectMessage.fromCacheJson(Map<String, dynamic> json) {
+    if ((json['group_id'] ?? '').toString().trim().isNotEmpty) return _DirectMessage.fromGroupSupabase(json);
+    return _DirectMessage.fromSupabase(json);
+  }
+
+  _DirectMessage copyWith({String? id, MessageStatus? status, String? senderName, String? senderAvatar, String? text, String? mediaType, String? mediaUrl}) => _DirectMessage(
     id: id ?? this.id,
     senderUsername: senderUsername,
     receiverUsername: receiverUsername,
@@ -4035,8 +5527,8 @@ class _DirectMessage {
     text: text ?? this.text,
     createdAt: createdAt,
     status: status ?? this.status,
-    mediaType: mediaType,
-    mediaUrl: mediaUrl,
+    mediaType: mediaType ?? this.mediaType,
+    mediaUrl: mediaUrl ?? this.mediaUrl,
     voiceSeconds: voiceSeconds,
     replyToId: replyToId,
     replyText: replyText,
@@ -4080,6 +5572,200 @@ class _DirectMessage {
     replySender: json['reply_sender']?.toString(),
     status: MessageStatusX.fromText(json['status']?.toString() ?? 'delivered'),
   );
+}
+
+
+
+class _InstagramLikeBurst extends StatelessWidget {
+  const _InstagramLikeBurst();
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 680),
+      curve: Curves.easeOutBack,
+      builder: (context, value, child) {
+        final scale = value < .22 ? value / .22 : 1 + (.12 * (1 - value));
+        final opacity = value < .72 ? 1.0 : (1 - ((value - .72) / .28)).clamp(0.0, 1.0);
+        final rotate = (1 - value) * -0.18;
+        return Opacity(
+          opacity: opacity,
+          child: Transform.rotate(
+            angle: rotate,
+            child: Transform.scale(
+              scale: scale.clamp(0.0, 1.22),
+              child: const Text(
+                '❤️',
+                style: TextStyle(
+                  fontSize: 92,
+                  shadows: [Shadow(color: Colors.black38, blurRadius: 18, offset: Offset(0, 8))],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+
+class _StoryReferenceMessage extends StatelessWidget {
+  final _DirectMessage message;
+  final bool isMe;
+  final VoidCallback? onOpen;
+
+  const _StoryReferenceMessage({required this.message, required this.isMe, this.onOpen});
+
+  ImageProvider? _imageProvider(String? path) {
+    final p = path?.trim();
+    if (p == null || p.isEmpty) return null;
+    if (p.startsWith('http://') || p.startsWith('https://')) return NetworkImage(p);
+    final f = File(p);
+    if (!f.existsSync()) return null;
+    return FileImage(f);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final story = message.storyMeta;
+    final mediaUrl = (story['media_url'] ?? '').toString();
+    final type = (story['media_type'] ?? '').toString().toLowerCase();
+    final owner = SupabaseService.displayUsername((story['username'] ?? '').toString());
+    final avatar = _imageProvider((story['avatar_url'] ?? '').toString());
+    final isVideo = type.contains('video');
+    final replyText = message.isStoryLike ? '❤️ أعجبني الستوري' : message.text.trim();
+
+    Widget thumb;
+    if (mediaUrl.trim().isEmpty) {
+      thumb = const Icon(Icons.lock_rounded, color: Colors.white70, size: 22);
+    } else if (isVideo) {
+      thumb = Stack(
+        alignment: Alignment.center,
+        children: [
+          Container(color: Colors.black26),
+          const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 24),
+        ],
+      );
+    } else if (mediaUrl.startsWith('http')) {
+      thumb = Image.network(mediaUrl, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const Icon(Icons.broken_image_rounded, color: Colors.white70));
+    } else {
+      final f = File(mediaUrl);
+      thumb = f.existsSync() ? Image.file(f, fit: BoxFit.cover) : const Icon(Icons.broken_image_rounded, color: Colors.white70);
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: onOpen,
+          child: Container(
+          constraints: const BoxConstraints(maxWidth: 260),
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: isMe ? .16 : .06),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: (isMe ? Colors.white : AppColors.purple).withValues(alpha: .18)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: SizedBox(width: 46, height: 62, child: thumb),
+              ),
+              const SizedBox(width: 9),
+              Flexible(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        CircleAvatar(radius: 9, backgroundImage: avatar, child: avatar == null ? const Icon(Icons.person_rounded, size: 10) : null),
+                        const SizedBox(width: 5),
+                        Flexible(
+                          child: Text(
+                            owner,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(color: isMe ? Colors.white : AppColors.purple, fontSize: 11, fontWeight: FontWeight.w900),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      message.isStoryLike ? 'إعجاب على الستوري' : 'رد على الستوري',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: isMe ? Colors.white70 : null, fontSize: 12.3, fontWeight: FontWeight.w900),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        )),
+        if (replyText.isNotEmpty) ...[
+          const SizedBox(height: 7),
+          Text(replyText, style: TextStyle(color: isMe ? Colors.white : null, height: 1.35, fontWeight: FontWeight.w700)),
+        ],
+      ],
+    );
+  }
+}
+
+class _CallHistoryMessage extends StatelessWidget {
+  final _DirectMessage message;
+  final bool isMe;
+
+  const _CallHistoryMessage({required this.message, required this.isMe});
+
+  @override
+  Widget build(BuildContext context) {
+    final meta = message.callMeta;
+    final status = (meta['status'] ?? '').toString();
+    final failed = status == 'rejected' || status == 'missed' || status == 'cancelled';
+    final icon = message.callHistoryIcon(isMine: isMe);
+    final title = message.callHistoryTitle(isMine: isMe);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bg = isMe ? Colors.white.withValues(alpha: .14) : AppColors.purple.withValues(alpha: isDark ? .16 : .09);
+    final fg = isMe ? Colors.white : (failed ? AppColors.danger : AppColors.purple);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: fg.withValues(alpha: .25)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(color: fg.withValues(alpha: .16), shape: BoxShape.circle),
+            child: Icon(icon, color: fg, size: 19),
+          ),
+          const SizedBox(width: 9),
+          Flexible(
+            child: Text(
+              title,
+              style: TextStyle(
+                color: isMe ? Colors.white : (isDark ? Colors.white : Colors.black87),
+                fontWeight: FontWeight.w900,
+                height: 1.25,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _AttachmentActionButton extends StatelessWidget {
@@ -4439,18 +6125,45 @@ class _ChatImageMessage extends StatelessWidget {
             borderRadius: BorderRadius.circular(16),
             child: Stack(
               children: [
-                Image.network(
-                  url,
-                  width: 230,
-                  height: 260,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => Container(
+                if (limitedMaxViews > 0)
+                  Container(
                     width: 230,
-                    height: 180,
-                    color: Colors.black26,
-                    child: const Center(child: Icon(Icons.broken_image_rounded, color: Colors.white70)),
-                  ),
-                ),
+                    height: 260,
+                    color: Colors.black87,
+                    child: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+                      const Icon(Icons.visibility_off_rounded, color: Colors.white, size: 48),
+                      const SizedBox(height: 8),
+                      Text(limitedMaxViews == 1 ? 'صورة للعرض مرة واحدة' : 'صورة للعرض مرتين', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
+                      const SizedBox(height: 4),
+                      const Text('اضغط للفتح', style: TextStyle(color: Colors.white70)),
+                    ])),
+                  )
+                else
+                (url.startsWith('http://') || url.startsWith('https://'))
+                    ? Image.network(
+                        url,
+                        width: 230,
+                        height: 260,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => Container(
+                          width: 230,
+                          height: 180,
+                          color: Colors.black26,
+                          child: const Center(child: Icon(Icons.broken_image_rounded, color: Colors.white70)),
+                        ),
+                      )
+                    : Image.file(
+                        File(url),
+                        width: 230,
+                        height: 260,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => Container(
+                          width: 230,
+                          height: 180,
+                          color: Colors.black26,
+                          child: const Center(child: Icon(Icons.broken_image_rounded, color: Colors.white70)),
+                        ),
+                      ),
                 if (limitedMaxViews > 0)
                   Positioned(
                     top: 8,
@@ -4506,8 +6219,10 @@ class _ChatVideoMessage extends StatelessWidget {
             child: Stack(
               alignment: Alignment.center,
               children: [
-                Icon(Icons.videocam_rounded, color: Colors.white.withValues(alpha: 0.28), size: 72),
-                const Icon(Icons.play_circle_fill_rounded, color: Colors.white, size: 62),
+                Icon(limitedMaxViews > 0 ? Icons.visibility_off_rounded : Icons.videocam_rounded, color: Colors.white.withValues(alpha: 0.28), size: 72),
+                Icon(limitedMaxViews > 0 ? Icons.lock_open_rounded : Icons.play_circle_fill_rounded, color: Colors.white, size: 62),
+                if (limitedMaxViews > 0)
+                  const Positioned(bottom: 52, child: Text('اضغط للفتح', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900))),
                 if (limitedMaxViews > 0)
                   Positioned(
                     top: 8,
@@ -4574,7 +6289,9 @@ class _ChatMediaGalleryMessage extends StatelessWidget {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            if (item.isVideo)
+            if (limitedMaxViews > 0)
+              Container(color: Colors.black87, child: const Center(child: Icon(Icons.visibility_off_rounded, color: Colors.white, size: 34)))
+            else if (item.isVideo)
               Container(
                 color: Colors.black,
                 child: Stack(
@@ -4586,21 +6303,30 @@ class _ChatMediaGalleryMessage extends StatelessWidget {
                 ),
               )
             else
-              Image.network(
-                item.url,
-                fit: BoxFit.cover,
-                loadingBuilder: (context, child, progress) {
-                  if (progress == null) return child;
-                  return Container(
-                    color: Colors.black12,
-                    child: const Center(child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))),
-                  );
-                },
-                errorBuilder: (_, __, ___) => Container(
-                  color: Colors.black26,
-                  child: const Center(child: Icon(Icons.broken_image_rounded, color: Colors.white70, size: 30)),
-                ),
-              ),
+              (item.url.startsWith('http://') || item.url.startsWith('https://'))
+                  ? Image.network(
+                      item.url,
+                      fit: BoxFit.cover,
+                      loadingBuilder: (context, child, progress) {
+                        if (progress == null) return child;
+                        return Container(
+                          color: Colors.black12,
+                          child: const Center(child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))),
+                        );
+                      },
+                      errorBuilder: (_, __, ___) => Container(
+                        color: Colors.black26,
+                        child: const Center(child: Icon(Icons.broken_image_rounded, color: Colors.white70, size: 30)),
+                      ),
+                    )
+                  : Image.file(
+                      File(item.url),
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => Container(
+                        color: Colors.black26,
+                        child: const Center(child: Icon(Icons.broken_image_rounded, color: Colors.white70, size: 30)),
+                      ),
+                    ),
             if (limitedMaxViews > 0 && hidden <= 0)
               const Positioned(
                 top: 7,

@@ -7,6 +7,9 @@ import 'package:http/http.dart' as http; // تمت الإضافة
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+import 'secure_crypto_service.dart';
 
 void _scannerSafeIgnore() {}
 
@@ -40,6 +43,15 @@ class SupabaseService {
 
   static SupabaseClient get client => Supabase.instance.client;
 
+  static String get _safeDevicePlatform {
+    if (kIsWeb) return 'web';
+    try {
+      return Platform.operatingSystem;
+    } catch (_) {
+      return 'unknown';
+    }
+  }
+
   // إشعار داخلي للتطبيق: إذا حذف السيرفر منشورًا بعد مراجعة Respect AI،
   // نبلغ الواجهات فورًا حتى تخفيه بدون انتظار تحديث الفيد.
   static final StreamController<String> _respectAiDeletedPostController = StreamController<String>.broadcast();
@@ -59,68 +71,914 @@ class SupabaseService {
   }
 
 
-  // ================= Respect AI =================
-  // مهم: لا تضع مفتاح Groq داخل تطبيق Flutter.
-  // التطبيق يرسل الطلب للسيرفر فقط، والسيرفر هو الذي يحمل المفتاح.
-  static const String respectAiBackendUrl = 'https://respect-app-9fzq.onrender.com/respect-ai/reply';
-  static const String respectAiModerationBackendUrl = 'https://respect-app-9fzq.onrender.com/respect-ai/moderate';
-  static const String respectAiPostModerationBackendUrl = 'https://respect-app-9fzq.onrender.com/respect-ai/moderate-post';
-  static const String respectAiStoryModerationBackendUrl = 'https://respect-app-9fzq.onrender.com/respect-ai/moderate-story';
-  static const String respectAiReportReviewBackendUrl = 'https://respect-app-9fzq.onrender.com/respect-ai/review-report';
-  static const String respectAiSearchExpandBackendUrl = 'https://respect-app-9fzq.onrender.com/respect-ai/search-expand';
+  // ================= Respect AI / Secure Backend Gateway =================
+  // لا تضع مفاتيح حقيقية داخل Flutter.
+  // هذه القيم تحفظ في Render فقط:
+  // SUPABASE_SERVICE_ROLE_KEY / QWEN_API_KEY / HF_TOKEN / Firebase Service Account / Paddle Secret.
+  //
+  // تغيير الرابط بدون تعديل الكود:
+  // flutter build apk --dart-define=RESPECT_API_BASE_URL=https://YOUR_RENDER_BACKEND_URL
+  //
+  // توقيع الطلبات الحساسة:
+  // flutter build apk --dart-define=RESPECT_REQUEST_SIGNING_SECRET=ضع_نفس_القيمة_الموجودة_في_Render
+  static const String _apiBaseUrlOverride =
+      String.fromEnvironment('RESPECT_API_BASE_URL', defaultValue: '');
+
+  static const List<int> _obfuscatedApiBaseUrl = <int>[
+    123, 57, 47, 119, 108, 17, 110, 60, 63, 62, 116, 111, 78, 34, 103, 96,
+    58, 119, 111, 6, 120, 117, 55, 42, 41, 112, 69, 51, 118, 35, 63, 98,
+    109, 5, 34, 124, 32,
+  ];
+  static const List<int> _apiBaseUrlXorKey = <int>[19, 77, 91, 7, 31, 43, 65];
+
+  static final Random _secureHeaderRandom = Random.secure();
+
+  static String get respectApiBaseUrl {
+    final override = _apiBaseUrlOverride.trim();
+    final raw = override.isNotEmpty ? override : _decodeXorAscii(_obfuscatedApiBaseUrl, _apiBaseUrlXorKey);
+    return _normalizeHttpsBaseUrl(raw);
+  }
+
+  static String get respectAiBackendUrl => _backendEndpoint('/respect-ai/reply');
+  static String get respectAiModerationBackendUrl => _backendEndpoint('/respect-ai/moderate');
+  static String get respectAiPostModerationBackendUrl => _backendEndpoint('/respect-ai/moderate-post');
+  static String get respectAiStoryModerationBackendUrl => _backendEndpoint('/respect-ai/moderate-story');
+  static String get respectAiReportReviewBackendUrl => _backendEndpoint('/respect-ai/review-report');
+  static String get respectAiSearchExpandBackendUrl => _backendEndpoint('/respect-ai/search-expand');
+  static String get authOtpBackendBaseUrl => respectApiBaseUrl;
   static const String respectAiUsername = '@respectai';
   static const String respectAiName = 'Respect AI';
 
-
-  // لا تضع السر داخل الكود. مرّره وقت البناء:
-  // flutter build apk --dart-define=APP_SECRET=your_secret
+  // لا تضع السر داخل الكود. مرّره وقت البناء فقط.
+  // ملاحظة: أي سر داخل APK قابل للاستخراج في النهاية، لذلك هو طبقة تصعيب وليس بديلًا عن صلاحيات السيرفر.
   static const String pushApiSecret =
-  String.fromEnvironment('APP_SECRET', defaultValue: '');
+      String.fromEnvironment('APP_SECRET', defaultValue: '');
 
-  static Map<String, String> _jsonSecretHeaders() {
-    final headers = <String, String>{'Content-Type': 'application/json'};
+  static const String _requestSigningSecret =
+      String.fromEnvironment('RESPECT_REQUEST_SIGNING_SECRET', defaultValue: '');
+
+  static String _decodeXorAscii(List<int> data, List<int> key) {
+    if (data.isEmpty || key.isEmpty) return '';
+    final out = List<int>.generate(data.length, (i) => data[i] ^ key[i % key.length]);
+    return utf8.decode(out);
+  }
+
+  static String _normalizeHttpsBaseUrl(String value) {
+    var base = value.trim().replaceAll(RegExp(r'/+$'), '');
+    if (base.isEmpty) return '';
+    final isLocal = base.contains('localhost') || base.contains('127.0.0.1') || base.contains('10.0.2.2');
+    if (!base.startsWith('https://') && !isLocal) {
+      base = base.replaceFirst(RegExp(r'^http://', caseSensitive: false), '');
+      base = 'https://$base';
+    }
+    return base;
+  }
+
+  static String _backendEndpoint(String path) {
+    final base = respectApiBaseUrl;
+    final safePath = path.startsWith('/') ? path : '/$path';
+    return '$base$safePath';
+  }
+
+  static Map<String, String> _jsonSecretHeaders({String body = '', Uri? uri}) {
+    final headers = <String, String>{
+      'Content-Type': 'application/json; charset=utf-8',
+      'Accept': 'application/json',
+      'X-Respect-Client': kIsWeb ? 'flutter-web' : 'flutter-app',
+      'X-Respect-Platform': _safeDevicePlatform,
+    };
+
     final secret = pushApiSecret.trim();
     if (secret.isNotEmpty) headers['X-App-Secret'] = secret;
+
+    final signingSecret = _requestSigningSecret.trim();
+    if (signingSecret.isNotEmpty) {
+      final timestamp = (DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000).toString();
+      final nonce = _newRequestNonce();
+      final path = uri?.path ?? '';
+      final payload = '$timestamp\n$nonce\n$path\n$body';
+      final signatureBytes = _hmacSha256(utf8.encode(signingSecret), utf8.encode(payload));
+      final signature = base64UrlEncode(signatureBytes).replaceAll('=', '');
+
+      headers['X-App-Timestamp'] = timestamp;
+      headers['X-App-Nonce'] = nonce;
+      headers['X-App-Signature'] = signature;
+      headers['X-App-Signature-Version'] = 'v1';
+    }
+
     return headers;
+  }
+
+  static Future<http.Response> _postSignedJson(
+    Uri uri,
+    Object payload, {
+    Duration timeout = const Duration(seconds: 25),
+  }) async {
+    final body = jsonEncode(payload);
+    return http
+        .post(
+          uri,
+          headers: _jsonSecretHeaders(body: body, uri: uri),
+          body: body,
+        )
+        .timeout(timeout);
+  }
+
+  static String _newRequestNonce() {
+    final bytes = List<int>.generate(16, (_) => _secureHeaderRandom.nextInt(256));
+    return base64UrlEncode(bytes).replaceAll('=', '');
+  }
+
+  static List<int> _hmacSha256(List<int> key, List<int> message) {
+    var actualKey = List<int>.from(key);
+    if (actualKey.length > 64) actualKey = _sha256(actualKey);
+    if (actualKey.length < 64) actualKey = <int>[...actualKey, ...List<int>.filled(64 - actualKey.length, 0)];
+
+    final oKeyPad = List<int>.generate(64, (i) => actualKey[i] ^ 0x5c);
+    final iKeyPad = List<int>.generate(64, (i) => actualKey[i] ^ 0x36);
+    return _sha256(<int>[...oKeyPad, ..._sha256(<int>[...iKeyPad, ...message])]);
+  }
+
+  static List<int> _sha256(List<int> input) {
+    final k = <int>[
+      0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+      0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+      0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+      0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+      0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+      0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+      0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+      0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+    ];
+
+    var h0 = 0x6a09e667;
+    var h1 = 0xbb67ae85;
+    var h2 = 0x3c6ef372;
+    var h3 = 0xa54ff53a;
+    var h4 = 0x510e527f;
+    var h5 = 0x9b05688c;
+    var h6 = 0x1f83d9ab;
+    var h7 = 0x5be0cd19;
+
+    final data = <int>[...input.map((e) => e & 0xff), 0x80];
+    while ((data.length % 64) != 56) {
+      data.add(0);
+    }
+
+    final bitLength = input.length * 8;
+    for (var shift = 56; shift >= 0; shift -= 8) {
+      data.add((bitLength >> shift) & 0xff);
+    }
+
+    for (var chunk = 0; chunk < data.length; chunk += 64) {
+      final w = List<int>.filled(64, 0);
+      for (var i = 0; i < 16; i++) {
+        final j = chunk + (i * 4);
+        w[i] = ((data[j] << 24) | (data[j + 1] << 16) | (data[j + 2] << 8) | data[j + 3]) & 0xffffffff;
+      }
+      for (var i = 16; i < 64; i++) {
+        final s0 = (_rotr(w[i - 15], 7) ^ _rotr(w[i - 15], 18) ^ (w[i - 15] >> 3)) & 0xffffffff;
+        final s1 = (_rotr(w[i - 2], 17) ^ _rotr(w[i - 2], 19) ^ (w[i - 2] >> 10)) & 0xffffffff;
+        w[i] = (w[i - 16] + s0 + w[i - 7] + s1) & 0xffffffff;
+      }
+
+      var a = h0;
+      var b = h1;
+      var c = h2;
+      var d = h3;
+      var e = h4;
+      var f = h5;
+      var g = h6;
+      var h = h7;
+
+      for (var i = 0; i < 64; i++) {
+        final s1 = (_rotr(e, 6) ^ _rotr(e, 11) ^ _rotr(e, 25)) & 0xffffffff;
+        final ch = ((e & f) ^ ((~e) & g)) & 0xffffffff;
+        final temp1 = (h + s1 + ch + k[i] + w[i]) & 0xffffffff;
+        final s0 = (_rotr(a, 2) ^ _rotr(a, 13) ^ _rotr(a, 22)) & 0xffffffff;
+        final maj = ((a & b) ^ (a & c) ^ (b & c)) & 0xffffffff;
+        final temp2 = (s0 + maj) & 0xffffffff;
+
+        h = g;
+        g = f;
+        f = e;
+        e = (d + temp1) & 0xffffffff;
+        d = c;
+        c = b;
+        b = a;
+        a = (temp1 + temp2) & 0xffffffff;
+      }
+
+      h0 = (h0 + a) & 0xffffffff;
+      h1 = (h1 + b) & 0xffffffff;
+      h2 = (h2 + c) & 0xffffffff;
+      h3 = (h3 + d) & 0xffffffff;
+      h4 = (h4 + e) & 0xffffffff;
+      h5 = (h5 + f) & 0xffffffff;
+      h6 = (h6 + g) & 0xffffffff;
+      h7 = (h7 + h) & 0xffffffff;
+    }
+
+    final out = <int>[];
+    for (final h in <int>[h0, h1, h2, h3, h4, h5, h6, h7]) {
+      out
+        ..add((h >> 24) & 0xff)
+        ..add((h >> 16) & 0xff)
+        ..add((h >> 8) & 0xff)
+        ..add(h & 0xff);
+    }
+    return out;
+  }
+
+  static int _rotr(int value, int bits) {
+    final v = value & 0xffffffff;
+    return ((v >> bits) | ((v << (32 - bits)) & 0xffffffff)) & 0xffffffff;
+  }
+
+  // ================= Streamers Metadata =================
+  // يستخدمها الأدمن لإضافة قناة من الرابط فقط، ثم تعبئة الاسم/الصورة/المنصة تلقائيًا.
+  static String cleanStreamerUrl(String value) {
+    final v = value.trim();
+    if (v.isEmpty) return '';
+    return v.startsWith('http://') || v.startsWith('https://') ? v : 'https://$v';
+  }
+
+  static String streamerPlatformFromUrl(String url) {
+    final u = cleanStreamerUrl(url).toLowerCase();
+    if (u.contains('kick.com')) return 'Kick';
+    if (u.contains('twitch.tv')) return 'Twitch';
+    if (u.contains('youtube.com') || u.contains('youtu.be')) return 'YouTube';
+    if (u.contains('facebook.com')) return 'Facebook';
+    if (u.contains('tiktok.com')) return 'TikTok';
+    return 'Stream';
+  }
+
+  static String streamerChannelFromUrl(String url) {
+    try {
+      final uri = Uri.parse(cleanStreamerUrl(url));
+      final parts = uri.pathSegments.where((p) => p.trim().isNotEmpty).toList();
+      if (parts.isEmpty) return '';
+      final host = uri.host.toLowerCase();
+      if (host.contains('youtube.com') && parts.first == 'channel' && parts.length > 1) return parts[1];
+      if (host.contains('youtube.com') && parts.first == 'c' && parts.length > 1) return parts[1];
+      if (host.contains('youtube.com') && parts.first == 'user' && parts.length > 1) return parts[1];
+      if (host.contains('youtube.com') && parts.first.startsWith('@')) return parts.first.replaceAll('@', '');
+      if (host.contains('youtu.be')) return parts.first;
+      return parts.first.replaceAll('@', '');
+    } catch (_) {
+      return '';
+    }
+  }
+
+  static Future<Map<String, dynamic>> fetchStreamerMetadata(
+    String url, {
+    String fallbackName = 'Streamer',
+  }) async {
+    final cleanUrl = cleanStreamerUrl(url);
+    final platform = streamerPlatformFromUrl(cleanUrl);
+    final channel = streamerChannelFromUrl(cleanUrl);
+
+    Map<String, dynamic> fallback() => <String, dynamic>{
+          'streamUrl': cleanUrl,
+          'streamName': channel.isNotEmpty ? channel : fallbackName,
+          'streamerName': channel.isNotEmpty ? channel : fallbackName,
+          'streamTitle': '',
+          'streamThumbnailUrl': '',
+          'streamThumbnailPath': '',
+          'streamPlatform': platform,
+          'streamIsLive': false,
+          'streamViewers': 0,
+          'streamChannelKey': channel,
+          'streamLastCheckedAt': DateTime.now().toUtc().toIso8601String(),
+        };
+
+    if (cleanUrl.isEmpty) return fallback();
+
+    try {
+      Map<String, dynamic> meta;
+      if (platform == 'Kick' && channel.isNotEmpty) {
+        meta = await _fetchKickStreamerMetadata(cleanUrl, channel, fallbackName: fallbackName);
+      } else if (platform == 'Twitch' && channel.isNotEmpty) {
+        meta = await _fetchTwitchStreamerMetadata(cleanUrl, channel, fallbackName: fallbackName);
+      } else if (platform == 'YouTube') {
+        meta = await _fetchYouTubeStreamerMetadata(cleanUrl, fallbackName: fallbackName);
+      } else {
+        meta = await _fetchGenericStreamerMetadata(
+          cleanUrl,
+          fallbackName: fallbackName,
+          platform: platform,
+          channel: channel,
+        );
+      }
+
+      final streamName = _streamFirstNonEmpty([
+        (meta['streamName'] ?? '').toString(),
+        (meta['streamerName'] ?? '').toString(),
+        channel,
+        fallbackName,
+      ]);
+      final thumbnail = _normalizeStreamerImageUrl((meta['streamThumbnailUrl'] ?? '').toString());
+      return <String, dynamic>{
+        ...fallback(),
+        ...meta,
+        'streamUrl': cleanUrl,
+        'streamName': streamName,
+        'streamerName': streamName,
+        'streamThumbnailUrl': thumbnail,
+        'streamThumbnailPath': thumbnail,
+        'streamPlatform': _streamFirstNonEmpty([(meta['streamPlatform'] ?? '').toString(), platform]),
+        'streamChannelKey': _streamFirstNonEmpty([(meta['streamChannelKey'] ?? '').toString(), channel]),
+        'streamViewers': _streamToInt((meta['streamViewers'] ?? '0').toString()),
+        'streamIsLive': truthy(meta['streamIsLive']),
+        'streamLastCheckedAt': DateTime.now().toUtc().toIso8601String(),
+      };
+    } catch (e, st) {
+      _logIgnoredError(e, st);
+      return fallback();
+    }
+  }
+
+  static Future<Map<String, dynamic>> _fetchKickStreamerMetadata(
+    String url,
+    String channel, {
+    required String fallbackName,
+  }) async {
+    for (final api in <String>[
+      'https://kick.com/api/v2/channels/$channel',
+      'https://kick.com/api/v1/channels/$channel',
+    ]) {
+      try {
+        final raw = await _readStreamerUrl(api, json: true);
+        final decoded = jsonDecode(raw);
+        if (decoded is! Map) continue;
+        final data = decoded.map((k, v) => MapEntry(k.toString(), v));
+        final livestream = data['livestream'];
+        final liveMap = livestream is Map ? livestream.map((k, v) => MapEntry(k.toString(), v)) : <String, dynamic>{};
+        final user = data['user'];
+        final userMap = user is Map ? user.map((k, v) => MapEntry(k.toString(), v)) : <String, dynamic>{};
+        final isLive = liveMap.isNotEmpty || (liveMap['playback_url']?.toString() ?? '').isNotEmpty;
+        final viewers = _streamToInt(_streamFirstNonEmpty([
+          liveMap['viewer_count']?.toString() ?? '',
+          liveMap['viewers']?.toString() ?? '',
+          data['viewer_count']?.toString() ?? '',
+        ]));
+        final title = _streamCleanHtml(_streamFirstNonEmpty([
+          liveMap['session_title']?.toString() ?? '',
+          liveMap['title']?.toString() ?? '',
+        ]));
+        var thumbnail = _streamFirstNonEmpty([
+          liveMap['thumbnail'] is Map ? ((liveMap['thumbnail'] as Map)['url']?.toString() ?? '') : '',
+          liveMap['thumbnail']?.toString() ?? '',
+          liveMap['thumbnail_url']?.toString() ?? '',
+          liveMap['preview']?.toString() ?? '',
+          liveMap['preview_url']?.toString() ?? '',
+          data['banner_image'] is Map ? ((data['banner_image'] as Map)['url']?.toString() ?? '') : '',
+          data['banner_image']?.toString() ?? '',
+          userMap['profile_pic']?.toString() ?? '',
+        ]);
+        if (thumbnail.isEmpty && channel.isNotEmpty) {
+          thumbnail = 'https://images.kick.com/video_thumbnails/$channel/thumbnail.jpg';
+        }
+        final name = _streamFirstNonEmpty([
+          data['slug']?.toString() ?? '',
+          userMap['username']?.toString() ?? '',
+          channel,
+          fallbackName,
+        ]);
+        return <String, dynamic>{
+          'streamName': name,
+          'streamerName': name,
+          'streamTitle': title,
+          'streamThumbnailUrl': thumbnail,
+          'streamThumbnailPath': thumbnail,
+          'streamPlatform': 'Kick',
+          'streamIsLive': isLive,
+          'streamViewers': viewers,
+          'streamChannelKey': channel,
+        };
+      } catch (e, st) {
+        _logIgnoredError(e, st);
+      }
+    }
+    return _fetchGenericStreamerMetadata(url, fallbackName: fallbackName, platform: 'Kick', channel: channel);
+  }
+
+  static Future<Map<String, dynamic>> _fetchTwitchStreamerMetadata(
+    String url,
+    String channel, {
+    required String fallbackName,
+  }) async {
+    var channelName = channel;
+    var title = '';
+    var thumbnail = '';
+    var isLive = false;
+    var viewers = 0;
+
+    try {
+      final raw = await _readStreamerUrl('https://www.twitch.tv/oembed?url=${Uri.encodeComponent(url)}', json: true);
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) {
+        title = _streamCleanHtml((decoded['title'] ?? '').toString());
+        channelName = _streamFirstNonEmpty([(decoded['author_name'] ?? '').toString(), channelName, fallbackName]);
+        thumbnail = (decoded['thumbnail_url'] ?? '').toString();
+      }
+    } catch (e, st) {
+      _logIgnoredError(e, st);
+    }
+
+    try {
+      final gqlBody = jsonEncode([
+        {
+          'operationName': 'StreamMetadata',
+          'variables': {'channelLogin': channel.toLowerCase()},
+          'extensions': {
+            'persistedQuery': {
+              'version': 1,
+              'sha256Hash': 'a647c2a13599e5991e175155f798ca7f1ecddde73f7f341f39009c14dbf59962',
+            }
+          }
+        }
+      ]);
+      final raw = await _postStreamerUrl('https://gql.twitch.tv/gql', gqlBody, headers: const {
+        'Client-ID': 'kimne78kx3ncx6brgo4mv6wki5h1ko',
+        'Content-Type': 'text/plain;charset=UTF-8',
+      });
+      final decoded = jsonDecode(raw);
+      if (decoded is List && decoded.isNotEmpty && decoded.first is Map) {
+        final data = (decoded.first as Map)['data'];
+        final user = data is Map ? data['user'] : null;
+        if (user is Map) {
+          final stream = user['stream'];
+          final streamMap = stream is Map ? stream.map((k, v) => MapEntry(k.toString(), v)) : <String, dynamic>{};
+          final profileImage = user['profileImageURL']?.toString() ?? '';
+          if (streamMap.isNotEmpty) {
+            isLive = true;
+            viewers = _streamToInt(streamMap['viewersCount']?.toString() ?? streamMap['viewers']?.toString() ?? '0');
+            title = _streamCleanHtml(_streamFirstNonEmpty([streamMap['title']?.toString() ?? '', title]));
+            thumbnail = _streamFirstNonEmpty([streamMap['previewImageURL']?.toString() ?? '', thumbnail, profileImage]);
+          } else {
+            thumbnail = _streamFirstNonEmpty([thumbnail, profileImage]);
+          }
+          channelName = _streamFirstNonEmpty([user['displayName']?.toString() ?? '', channelName, fallbackName]);
+        }
+      }
+    } catch (e, st) {
+      _logIgnoredError(e, st);
+    }
+
+    if (thumbnail.contains('{width}')) thumbnail = thumbnail.replaceAll('{width}', '1280');
+    if (thumbnail.contains('{height}')) thumbnail = thumbnail.replaceAll('{height}', '720');
+
+    if (title.isEmpty || thumbnail.isEmpty) {
+      try {
+        final generic = await _fetchGenericStreamerMetadata(url, fallbackName: fallbackName, platform: 'Twitch', channel: channel);
+        title = _streamFirstNonEmpty([title, (generic['streamTitle'] ?? '').toString()]);
+        thumbnail = _streamFirstNonEmpty([thumbnail, (generic['streamThumbnailUrl'] ?? '').toString()]);
+        isLive = isLive || truthy(generic['streamIsLive']);
+        viewers = viewers > 0 ? viewers : _streamToInt((generic['streamViewers'] ?? '0').toString());
+        channelName = _streamFirstNonEmpty([channelName, (generic['streamName'] ?? '').toString()]);
+      } catch (e, st) {
+        _logIgnoredError(e, st);
+      }
+    }
+
+    return <String, dynamic>{
+      'streamName': channelName,
+      'streamerName': channelName,
+      'streamTitle': title,
+      'streamThumbnailUrl': thumbnail,
+      'streamThumbnailPath': thumbnail,
+      'streamPlatform': 'Twitch',
+      'streamIsLive': isLive,
+      'streamViewers': viewers,
+      'streamChannelKey': channel,
+    };
+  }
+
+  static Future<Map<String, dynamic>> _fetchYouTubeStreamerMetadata(
+    String url, {
+    required String fallbackName,
+  }) async {
+    var title = '';
+    var thumbnail = '';
+    var channelName = streamerChannelFromUrl(url);
+    var isLive = false;
+    var viewers = 0;
+    try {
+      final raw = await _readStreamerUrl('https://www.youtube.com/oembed?url=${Uri.encodeComponent(url)}&format=json', json: true);
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) {
+        title = _streamCleanHtml((decoded['title'] ?? '').toString());
+        channelName = _streamFirstNonEmpty([(decoded['author_name'] ?? '').toString(), channelName, fallbackName]);
+        thumbnail = (decoded['thumbnail_url'] ?? '').toString();
+      }
+    } catch (e, st) {
+      _logIgnoredError(e, st);
+    }
+    try {
+      final html = await _readStreamerUrl(url);
+      final generic = _streamerMetadataFromHtml(html, fallbackName: fallbackName, platform: 'YouTube', channel: channelName);
+      title = _streamFirstNonEmpty([title, (generic['streamTitle'] ?? '').toString()]);
+      thumbnail = _streamFirstNonEmpty([thumbnail, (generic['streamThumbnailUrl'] ?? '').toString()]);
+      viewers = _streamToInt((generic['streamViewers'] ?? '0').toString());
+      isLive = truthy(generic['streamIsLive']);
+      channelName = _streamFirstNonEmpty([channelName, (generic['streamName'] ?? '').toString(), fallbackName]);
+    } catch (e, st) {
+      _logIgnoredError(e, st);
+    }
+    return <String, dynamic>{
+      'streamName': channelName,
+      'streamerName': channelName,
+      'streamTitle': title,
+      'streamThumbnailUrl': thumbnail,
+      'streamThumbnailPath': thumbnail,
+      'streamPlatform': 'YouTube',
+      'streamIsLive': isLive,
+      'streamViewers': viewers,
+      'streamChannelKey': streamerChannelFromUrl(url),
+    };
+  }
+
+  static Future<Map<String, dynamic>> _fetchGenericStreamerMetadata(
+    String url, {
+    required String fallbackName,
+    required String platform,
+    required String channel,
+  }) async {
+    final html = await _readStreamerUrl(url);
+    return _streamerMetadataFromHtml(html, fallbackName: fallbackName, platform: platform, channel: channel);
+  }
+
+  static Map<String, dynamic> _streamerMetadataFromHtml(
+    String html, {
+    required String fallbackName,
+    required String platform,
+    required String channel,
+  }) {
+    final title = _streamCleanHtml(_streamFirstNonEmpty([
+      _streamMeta(html, 'property', 'og:title'),
+      _streamMeta(html, 'name', 'twitter:title'),
+      _streamJsonString(html, 'title'),
+      _streamFirstMatch(html, RegExp(r'<title[^>]*>(.*?)</title>', caseSensitive: false, dotAll: true)),
+    ]));
+    final image = _streamFirstNonEmpty([
+      _streamMeta(html, 'property', 'og:image'),
+      _streamMeta(html, 'property', 'og:image:secure_url'),
+      _streamMeta(html, 'name', 'twitter:image'),
+      _streamMeta(html, 'name', 'twitter:image:src'),
+      _streamJsonString(html, 'thumbnailUrl'),
+      _streamJsonString(html, 'thumbnail_url'),
+    ]);
+    final viewers = _streamExtractViewers(html);
+    final live = _streamLooksLive(html, title, viewers);
+    return <String, dynamic>{
+      'streamName': channel.isNotEmpty ? channel : fallbackName,
+      'streamerName': channel.isNotEmpty ? channel : fallbackName,
+      'streamTitle': title,
+      'streamThumbnailUrl': image,
+      'streamThumbnailPath': image,
+      'streamPlatform': platform,
+      'streamIsLive': live,
+      'streamViewers': viewers,
+      'streamChannelKey': channel,
+    };
+  }
+
+  static Future<String> _readStreamerUrl(String url, {bool json = false}) async {
+    final uri = Uri.parse(cleanStreamerUrl(url));
+    final headers = <String, String>{
+      HttpHeaders.userAgentHeader:
+          'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/124 Mobile Safari/537.36 RespectApp/1.0',
+      HttpHeaders.acceptHeader: json ? 'application/json,text/plain,*/*' : 'text/html,application/xhtml+xml,application/json,text/plain,*/*',
+      HttpHeaders.acceptLanguageHeader: 'en-US,en;q=0.9,ar;q=0.8',
+    };
+    if (uri.host.toLowerCase().contains('kick.com')) {
+      headers[HttpHeaders.refererHeader] = 'https://kick.com/';
+      headers['Origin'] = 'https://kick.com';
+    }
+    final response = await http.get(uri, headers: headers).timeout(const Duration(seconds: 10));
+    if (response.statusCode < 200 || response.statusCode >= 400) {
+      throw Exception('stream metadata http ${response.statusCode}');
+    }
+    return utf8.decode(response.bodyBytes);
+  }
+
+  static Future<String> _postStreamerUrl(String url, String body, {Map<String, String> headers = const {}}) async {
+    final merged = <String, String>{
+      HttpHeaders.userAgentHeader: 'Mozilla/5.0 RespectApp/1.0',
+      ...headers,
+    };
+    final response = await http
+        .post(Uri.parse(url), headers: merged, body: body)
+        .timeout(const Duration(seconds: 10));
+    if (response.statusCode < 200 || response.statusCode >= 400) {
+      throw Exception('stream metadata post http ${response.statusCode}');
+    }
+    return utf8.decode(response.bodyBytes);
+  }
+
+  static String _normalizeStreamerImageUrl(String url) {
+    final clean = url.trim();
+    if (clean.isEmpty) return '';
+    if (clean.startsWith('//')) return 'https:$clean';
+    return clean;
+  }
+
+  static String _streamMeta(String html, String attrName, String attrValue) {
+    final patternA = RegExp(
+      '<meta[^>]*$attrName=["\\\']$attrValue["\\\'][^>]*content=["\\\']([^"\\\']*)["\\\'][^>]*>',
+      caseSensitive: false,
+      dotAll: true,
+    );
+    final patternB = RegExp(
+      '<meta[^>]*content=["\\\']([^"\\\']*)["\\\'][^>]*$attrName=["\\\']$attrValue["\\\'][^>]*>',
+      caseSensitive: false,
+      dotAll: true,
+    );
+    final a = _streamFirstMatch(html, patternA);
+    return a.isNotEmpty ? a : _streamFirstMatch(html, patternB);
+  }
+
+  static String _streamJsonString(String text, String key) {
+    final escaped = RegExp('"$key"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"', caseSensitive: false, dotAll: true);
+    final m = escaped.firstMatch(text);
+    if (m == null) return '';
+    return _streamCleanHtml((m.group(1) ?? '').replaceAll('\\/', '/').replaceAll('\\u0026', '&'));
+  }
+
+  static String _streamFirstMatch(String text, RegExp regex) => regex.firstMatch(text)?.group(1)?.trim() ?? '';
+
+  static String _streamFirstNonEmpty(List<String> values) =>
+      values.firstWhere((v) => v.trim().isNotEmpty, orElse: () => '').trim();
+
+  static String _streamCleanHtml(String value) => value
+      .replaceAll('&amp;', '&')
+      .replaceAll('&quot;', '"')
+      .replaceAll('&#39;', "'")
+      .replaceAll('&lt;', '<')
+      .replaceAll('&gt;', '>')
+      .replaceAll('\\/', '/')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+
+  static int _streamToInt(String value) {
+    final clean = value.toLowerCase().replaceAll(',', '').trim();
+    final match = RegExp(r'(\d+(?:\.\d+)?)\s*([km]?)').firstMatch(clean);
+    if (match == null) return 0;
+    final n = double.tryParse(match.group(1) ?? '0') ?? 0;
+    final suffix = match.group(2) ?? '';
+    if (suffix == 'm') return (n * 1000000).round();
+    if (suffix == 'k') return (n * 1000).round();
+    return n.round();
+  }
+
+  static int _streamExtractViewers(String html) {
+    final patterns = <RegExp>[
+      RegExp(r'"viewer_count"\s*:\s*(\d+)', caseSensitive: false),
+      RegExp(r'"viewers"\s*:\s*(\d+)', caseSensitive: false),
+      RegExp(r'"viewersCount"\s*:\s*(\d+)', caseSensitive: false),
+      RegExp(r'"currentViewers"\s*:\s*(\d+)', caseSensitive: false),
+      RegExp(r'"live_viewers"\s*:\s*(\d+)', caseSensitive: false),
+      RegExp(r'"concurrentViewers"\s*:\s*(\d+)', caseSensitive: false),
+      RegExp(r'(\d+(?:\.\d+)?\s*[kKmM]?)\s+(?:watching|viewers|مشاهد|مشاهدين)', caseSensitive: false),
+    ];
+    for (final p in patterns) {
+      final m = p.firstMatch(html);
+      if (m != null) return _streamToInt(m.group(1) ?? '0');
+    }
+    return 0;
+  }
+
+  static bool _streamLooksLive(String html, String title, int viewers) {
+    final h = html.toLowerCase();
+    final t = title.toLowerCase();
+    return viewers > 0 ||
+        h.contains('"is_live":true') ||
+        h.contains('"islive":true') ||
+        h.contains('"islivebroadcast":true') ||
+        h.contains('"status":"live"') ||
+        h.contains('live_user') ||
+        h.contains('watching now') ||
+        h.contains('is currently live') ||
+        t.contains(' live') ||
+        t.contains('مباشر');
   }
 
   // ضع هنا رابط صورة Respect AI الثابتة.
   // الأفضل ترفع صورة PNG إلى Supabase Storage وتضع الرابط هنا.
   static const String respectAiAvatarUrl = 'https://oafbzceorbjykgoffuaa.supabase.co/storage/v1/object/public/avatars/respectai.png';
 
-  // ================= Verification / Posting limits / Stories =================
+  // ================= Subscriptions / Verification / Posting limits / Stories =================
+  // النظام الجديد: المستخدم يختار مستوى الباقة Silver/Gold/Premium + مدة الاشتراك.
+  // التوثيق والميزات صارت مبنية على subscription_tier + verification_plan بدل خطة واحدة فقط.
   static const int freePostMaxChars = 800;
-  static const int verifiedPostMaxChars = 2000;
+  static const int silverPostMaxChars = 1200;
+  static const int goldPostMaxChars = 2000;
+  static const int premiumPostMaxChars = 3500;
+
   static const int freeRespectAiDailyLimit = 10;
-  static const int verifiedRespectAiDailyLimit = 50;
+  static const int silverRespectAiDailyLimit = 25;
+  static const int goldRespectAiDailyLimit = 50;
+  static const int premiumRespectAiDailyLimit = 120;
+
+  // للتوافق مع الكود القديم الذي كان يعتبر كل موثق = 2000 حرف و 50 طلب AI.
+  static const int verifiedPostMaxChars = goldPostMaxChars;
+  static const int verifiedRespectAiDailyLimit = goldRespectAiDailyLimit;
+
   static const String _localStoriesKey = 'respect_active_stories_v1';
   static const String _seenStoriesKey = 'respect_seen_stories_v1';
   static const String _localAiUsageKeyPrefix = 'respect_ai_usage_';
 
+  static const List<Map<String, dynamic>> subscriptionTiers = [
+    {
+      'id': 'silver',
+      'title': 'الباقة الفضية',
+      'shortTitle': 'فضية',
+      'badge': 'مناسبة للبداية',
+      'icon': 'star',
+      'maxPostChars': silverPostMaxChars,
+      'aiDailyLimit': silverRespectAiDailyLimit,
+      'features': [
+        'علامة توثيق فضية',
+        '1200 حرف للتغريدة',
+        '25 رد Respect AI يوميًا',
+        'فتح الستوري',
+        'أولوية ظهور خفيفة',
+        'شارة موثق تظهر في الفيد والبحث والرسائل',
+        'رابط واحد واضح في البروفايل',
+      ],
+    },
+    {
+      'id': 'gold',
+      'title': 'الباقة الذهبية',
+      'shortTitle': 'ذهبية',
+      'badge': 'الأكثر توازنًا',
+      'icon': 'workspace_premium',
+      'maxPostChars': goldPostMaxChars,
+      'aiDailyLimit': goldRespectAiDailyLimit,
+      'features': [
+        'كل ميزات الفضية',
+        '2000 حرف للتغريدة',
+        '50 رد Respect AI يوميًا',
+        'أولوية أعلى في الظهور',
+        'رسائل من الحسابات الموثقة فقط عند تفعيل الخصوصية',
+        'إحصائيات منشورات أساسية',
+        'تثبيت منشورين في الحساب',
+        'إطار ذهبي للبروفايل',
+        'أولوية في نتائج البحث',
+        'زر تواصل رسمي في البروفايل',
+      ],
+    },
+    {
+      'id': 'premium',
+      'title': 'الباقة المميزة',
+      'shortTitle': 'مميزة',
+      'badge': 'أقوى باقة',
+      'icon': 'diamond',
+      'maxPostChars': premiumPostMaxChars,
+      'aiDailyLimit': premiumRespectAiDailyLimit,
+      'features': [
+        'كل ميزات الذهبية',
+        '3500 حرف للتغريدة',
+        '120 رد Respect AI يوميًا',
+        'تمييز أقوى للحساب',
+        'أولوية دعم ومراجعة أسرع',
+        'إطار ألماسي متحرك للبروفايل',
+        'تثبيت 3 منشورات في الحساب',
+        'إحصائيات متقدمة للحساب',
+        'ظهور في قسم الحسابات المميزة',
+        'حماية أعلى من تقليد الاسم',
+        'شارة خاصة داخل اللايف والتعليقات',
+      ],
+    },
+  ];
+
+  static const List<Map<String, dynamic>> subscriptionDurations = [
+    {'id': 'monthly', 'title': 'شهر', 'months': 1, 'badge': 'مرن'},
+    {'id': 'quarterly', 'title': '3 أشهر', 'months': 3, 'badge': 'أوفر'},
+    {'id': 'yearly', 'title': 'سنة', 'months': 12, 'badge': 'الأفضل'},
+  ];
 
   static const List<Map<String, dynamic>> verificationPlans = [
     {
-      'id': 'monthly',
-      'title': 'توثيق شهر',
+      'id': 'silver_monthly',
+      'tier': 'silver',
+      'duration': 'monthly',
+      'title': 'الفضية - شهر',
       'months': 1,
       'price': 2.0,
-      'badge': 'الأرخص للتجربة',
+      'badge': 'مناسبة للتجربة',
+      'paddle_price_id': String.fromEnvironment('PADDLE_PRICE_SILVER_MONTHLY', defaultValue: 'pri_REPLACE_SILVER_MONTHLY'),
     },
     {
-      'id': 'quarterly',
-      'title': 'توثيق 3 أشهر',
+      'id': 'silver_quarterly',
+      'tier': 'silver',
+      'duration': 'quarterly',
+      'title': 'الفضية - 3 أشهر',
       'months': 3,
       'price': 5.0,
-      'badge': 'وفر 1 دولار',
+      'badge': 'وفر أكثر',
+      'paddle_price_id': String.fromEnvironment('PADDLE_PRICE_SILVER_QUARTERLY', defaultValue: 'pri_REPLACE_SILVER_QUARTERLY'),
     },
     {
-      'id': 'yearly',
-      'title': 'توثيق سنة',
+      'id': 'silver_yearly',
+      'tier': 'silver',
+      'duration': 'yearly',
+      'title': 'الفضية - سنة',
       'months': 12,
       'price': 18.0,
-      'badge': 'الأفضل والأوفر',
+      'badge': 'اشتراك سنوي',
+      'paddle_price_id': String.fromEnvironment('PADDLE_PRICE_SILVER_YEARLY', defaultValue: 'pri_REPLACE_SILVER_YEARLY'),
+    },
+    {
+      'id': 'gold_monthly',
+      'tier': 'gold',
+      'duration': 'monthly',
+      'title': 'الذهبية - شهر',
+      'months': 1,
+      'price': 4.0,
+      'badge': 'الأكثر توازنًا',
+      'paddle_price_id': String.fromEnvironment('PADDLE_PRICE_GOLD_MONTHLY', defaultValue: 'pri_REPLACE_GOLD_MONTHLY'),
+    },
+    {
+      'id': 'gold_quarterly',
+      'tier': 'gold',
+      'duration': 'quarterly',
+      'title': 'الذهبية - 3 أشهر',
+      'months': 3,
+      'price': 10.0,
+      'badge': 'وفر 2 دولار',
+      'paddle_price_id': String.fromEnvironment('PADDLE_PRICE_GOLD_QUARTERLY', defaultValue: 'pri_REPLACE_GOLD_QUARTERLY'),
+    },
+    {
+      'id': 'gold_yearly',
+      'tier': 'gold',
+      'duration': 'yearly',
+      'title': 'الذهبية - سنة',
+      'months': 12,
+      'price': 35.0,
+      'badge': 'أفضل قيمة للذهبية',
+      'paddle_price_id': String.fromEnvironment('PADDLE_PRICE_GOLD_YEARLY', defaultValue: 'pri_REPLACE_GOLD_YEARLY'),
+    },
+    {
+      'id': 'premium_monthly',
+      'tier': 'premium',
+      'duration': 'monthly',
+      'title': 'المميزة - شهر',
+      'months': 1,
+      'price': 7.0,
+      'badge': 'أقوى شهرية',
+      'paddle_price_id': String.fromEnvironment('PADDLE_PRICE_PREMIUM_MONTHLY', defaultValue: 'pri_01kts7c3ff0pax8rh9pw0ekyds'),
+    },
+    {
+      'id': 'premium_quarterly',
+      'tier': 'premium',
+      'duration': 'quarterly',
+      'title': 'المميزة - 3 أشهر',
+      'months': 3,
+      'price': 18.0,
+      'badge': 'ممتازة للنشطين',
+      'paddle_price_id': String.fromEnvironment('PADDLE_PRICE_PREMIUM_QUARTERLY', defaultValue: 'pri_01kts7eyc987m59vb9z1hhssxg'),
+    },
+    {
+      'id': 'premium_yearly',
+      'tier': 'premium',
+      'duration': 'yearly',
+      'title': 'المميزة - سنة',
+      'months': 12,
+      'price': 60.0,
+      'badge': 'الأفضل والأقوى',
+      'paddle_price_id': String.fromEnvironment('PADDLE_PRICE_PREMIUM_YEARLY', defaultValue: 'pri_01kts7hvvacsrs3z79jjbtzmrf'),
     },
   ];
+
+  static const bool paddleSandboxMode =
+      bool.fromEnvironment('PADDLE_SANDBOX_MODE', defaultValue: true);
+  static const String paddleClientSideToken =
+      String.fromEnvironment('PADDLE_CLIENT_SIDE_TOKEN', defaultValue: '');
+  static const String paddleSandboxCheckoutBaseUrl = 'https://sandbox-checkout.paddle.com';
+  static const String paddleProductionCheckoutBaseUrl = 'https://checkout.paddle.com';
+
+  // هذا endpoint لازم يكون في سيرفر Render، وليس داخل Flutter، لأنه هو الذي ينشئ Transaction
+  // ويتأكد من الدفع عبر Paddle Webhook ثم يفعّل الاشتراك.
+  static String get paddleCreateVerificationCheckoutUrl =>
+      _backendEndpoint('/paddle/create-verification-checkout');
+
+  static const Map<String, String> paddleVerificationPriceIds = {
+    'silver_monthly': String.fromEnvironment('PADDLE_PRICE_SILVER_MONTHLY', defaultValue: 'pri_REPLACE_SILVER_MONTHLY'),
+    'silver_quarterly': String.fromEnvironment('PADDLE_PRICE_SILVER_QUARTERLY', defaultValue: 'pri_REPLACE_SILVER_QUARTERLY'),
+    'silver_yearly': String.fromEnvironment('PADDLE_PRICE_SILVER_YEARLY', defaultValue: 'pri_REPLACE_SILVER_YEARLY'),
+    'gold_monthly': String.fromEnvironment('PADDLE_PRICE_GOLD_MONTHLY', defaultValue: 'pri_REPLACE_GOLD_MONTHLY'),
+    'gold_quarterly': String.fromEnvironment('PADDLE_PRICE_GOLD_QUARTERLY', defaultValue: 'pri_REPLACE_GOLD_QUARTERLY'),
+    'gold_yearly': String.fromEnvironment('PADDLE_PRICE_GOLD_YEARLY', defaultValue: 'pri_REPLACE_GOLD_YEARLY'),
+    'premium_monthly': String.fromEnvironment('PADDLE_PRICE_PREMIUM_MONTHLY', defaultValue: 'pri_01kts7c3ff0pax8rh9pw0ekyds'),
+    'premium_quarterly': String.fromEnvironment('PADDLE_PRICE_PREMIUM_QUARTERLY', defaultValue: 'pri_01kts7eyc987m59vb9z1hhssxg'),
+    'premium_yearly': String.fromEnvironment('PADDLE_PRICE_PREMIUM_YEARLY', defaultValue: 'pri_01kts7hvvacsrs3z79jjbtzmrf'),
+    // توافق مع الخطة القديمة
+    'monthly': String.fromEnvironment('PADDLE_PRICE_PREMIUM_MONTHLY', defaultValue: 'pri_01kts7c3ff0pax8rh9pw0ekyds'),
+    'quarterly': String.fromEnvironment('PADDLE_PRICE_PREMIUM_QUARTERLY', defaultValue: 'pri_01kts7eyc987m59vb9z1hhssxg'),
+    'yearly': String.fromEnvironment('PADDLE_PRICE_PREMIUM_YEARLY', defaultValue: 'pri_01kts7hvvacsrs3z79jjbtzmrf'),
+  };
 
   static DateTime? verifiedUntilForUser(Map<String, dynamic>? user) {
     if (user == null) return null;
@@ -140,13 +998,50 @@ class SupabaseService {
     return v == 'true' || v == '1' || v == 'yes' || v == 'verified' || v == 'active';
   }
 
+  static Map<String, dynamic> subscriptionTierById(String tierId) {
+    final id = tierId.trim().toLowerCase();
+    return subscriptionTiers.firstWhere(
+      (t) => (t['id'] ?? '').toString() == id,
+      orElse: () => subscriptionTiers.first,
+    );
+  }
+
+  static String tierForPlanId(String planId) {
+    final id = planId.trim().toLowerCase();
+    final plan = verificationPlans.firstWhere(
+      (p) => (p['id'] ?? '').toString() == id,
+      orElse: () => const <String, dynamic>{},
+    );
+    final tier = (plan['tier'] ?? '').toString().trim().toLowerCase();
+    if (tier.isNotEmpty) return tier;
+    if (id == 'monthly' || id == 'quarterly' || id == 'yearly') return 'premium';
+    return 'silver';
+  }
+
+  static String subscriptionTierForUser(Map<String, dynamic>? user) {
+    if (user == null) return 'free';
+    final expires = verifiedUntilForUser(user)?.toUtc();
+    if (expires != null && expires.isBefore(DateTime.now().toUtc())) return 'free';
+
+    final rawTier = (user['subscription_tier'] ?? user['tier'] ?? user['plan_tier'] ?? '').toString().trim().toLowerCase();
+    if (rawTier == 'silver' || rawTier == 'gold' || rawTier == 'premium') return rawTier;
+
+    final planId = (user['verification_plan'] ?? user['plan_id'] ?? '').toString().trim().toLowerCase();
+    if (planId.isNotEmpty) return tierForPlanId(planId);
+
+    if (truthy(user['is_verified']) || truthy(user['verified']) || truthy(user['respect_verified'])) return 'premium';
+    return 'free';
+  }
+
   static bool isVerifiedUser(Map<String, dynamic>? user) {
     if (user == null) return false;
     if (isRespectAiUsername((user['username'] ?? '').toString())) return true;
 
     final expires = verifiedUntilForUser(user)?.toUtc();
     final hasActiveExpiry = expires != null && expires.isAfter(DateTime.now().toUtc());
+    final tier = subscriptionTierForUser(user);
     final activeStatus = (user['verification_status'] ?? '').toString().toLowerCase().trim() == 'active' ||
+        tier == 'silver' || tier == 'gold' || tier == 'premium' ||
         (user['subscription_tier'] ?? '').toString().toLowerCase().trim() == 'verified';
     if ((activeStatus || truthy(user['is_verified']) || truthy(user['verified'])) && expires != null) {
       return hasActiveExpiry;
@@ -158,25 +1053,312 @@ class SupabaseService {
         truthy(user['blue_badge']) ||
         truthy(user['respect_verified']);
     if (direct && expires == null) return true;
-    return hasActiveExpiry;
+    return hasActiveExpiry || tier != 'free';
   }
 
-  static int postMaxCharsForUser(Map<String, dynamic>? user) => isVerifiedUser(user) ? verifiedPostMaxChars : freePostMaxChars;
-  static int respectAiDailyLimitForUser(Map<String, dynamic>? user) => isVerifiedUser(user) ? verifiedRespectAiDailyLimit : freeRespectAiDailyLimit;
+  static int postMaxCharsForUser(Map<String, dynamic>? user) {
+    final tier = subscriptionTierForUser(user);
+    if (tier == 'premium') return premiumPostMaxChars;
+    if (tier == 'gold') return goldPostMaxChars;
+    if (tier == 'silver') return silverPostMaxChars;
+    return freePostMaxChars;
+  }
+
+  static int respectAiDailyLimitForUser(Map<String, dynamic>? user) {
+    final tier = subscriptionTierForUser(user);
+    if (tier == 'premium') return premiumRespectAiDailyLimit;
+    if (tier == 'gold') return goldRespectAiDailyLimit;
+    if (tier == 'silver') return silverRespectAiDailyLimit;
+    return freeRespectAiDailyLimit;
+  }
+
+  static List<String> subscriptionFeaturesForUser(Map<String, dynamic>? user) {
+    final tier = subscriptionTierForUser(user);
+    if (tier == 'free') {
+      return const <String>[
+        '800 حرف للتغريدة',
+        '10 ردود Respect AI يوميًا',
+      ];
+    }
+    final features = subscriptionTierById(tier)['features'];
+    if (features is List) return features.map((e) => e.toString()).toList();
+    return const <String>[];
+  }
+
+  static bool canUseStories(Map<String, dynamic>? user) => subscriptionTierForUser(user) != 'free';
+  static bool canUseGoldFeatures(Map<String, dynamic>? user) {
+    final tier = subscriptionTierForUser(user);
+    return tier == 'gold' || tier == 'premium';
+  }
+  static bool canUsePremiumFeatures(Map<String, dynamic>? user) => subscriptionTierForUser(user) == 'premium';
+
+  static Map<String, dynamic> subscriptionPowerForTier(String tier) {
+    final t = tier.trim().toLowerCase();
+    if (t == 'premium') {
+      return const <String, dynamic>{
+        'pinLimit': 3,
+        'storyLimit': 12,
+        'videoMaxSeconds': 420,
+        'searchBoost': 900,
+        'profileFrame': 'diamond',
+        'analytics': 'advanced',
+        'officialContact': true,
+        'featuredDirectory': true,
+        'nameProtection': true,
+        'liveBadge': true,
+      };
+    }
+    if (t == 'gold') {
+      return const <String, dynamic>{
+        'pinLimit': 2,
+        'storyLimit': 8,
+        'videoMaxSeconds': 240,
+        'searchBoost': 520,
+        'profileFrame': 'gold',
+        'analytics': 'basic',
+        'officialContact': true,
+        'featuredDirectory': false,
+        'nameProtection': false,
+        'liveBadge': true,
+      };
+    }
+    if (t == 'silver') {
+      return const <String, dynamic>{
+        'pinLimit': 1,
+        'storyLimit': 5,
+        'videoMaxSeconds': 120,
+        'searchBoost': 220,
+        'profileFrame': 'silver',
+        'analytics': 'mini',
+        'officialContact': false,
+        'featuredDirectory': false,
+        'nameProtection': false,
+        'liveBadge': false,
+      };
+    }
+    return const <String, dynamic>{
+      'pinLimit': 1,
+      'storyLimit': 1,
+      'videoMaxSeconds': 60,
+      'searchBoost': 0,
+      'profileFrame': 'none',
+      'analytics': 'none',
+      'officialContact': false,
+      'featuredDirectory': false,
+      'nameProtection': false,
+      'liveBadge': false,
+    };
+  }
+
+  static Map<String, dynamic> subscriptionPowerForUser(Map<String, dynamic>? user) {
+    return subscriptionPowerForTier(subscriptionTierForUser(user));
+  }
+
+  static int pinnedPostLimitForUser(Map<String, dynamic>? user) =>
+      int.tryParse((subscriptionPowerForUser(user)['pinLimit'] ?? 1).toString()) ?? 1;
+
+  static int storyLimitForUser(Map<String, dynamic>? user) =>
+      int.tryParse((subscriptionPowerForUser(user)['storyLimit'] ?? 1).toString()) ?? 1;
+
+  static int videoMaxSecondsForUser(Map<String, dynamic>? user) =>
+      int.tryParse((subscriptionPowerForUser(user)['videoMaxSeconds'] ?? 60).toString()) ?? 60;
+
+  static bool canUseOfficialContact(Map<String, dynamic>? user) =>
+      subscriptionPowerForUser(user)['officialContact'] == true;
+
+  static bool hasFeaturedDirectory(Map<String, dynamic>? user) =>
+      subscriptionPowerForUser(user)['featuredDirectory'] == true;
+
+  static bool hasNameProtection(Map<String, dynamic>? user) =>
+      subscriptionPowerForUser(user)['nameProtection'] == true;
+
+  static String profileFrameForUser(Map<String, dynamic>? user) =>
+      (subscriptionPowerForUser(user)['profileFrame'] ?? 'none').toString();
+
+  static String analyticsLevelForUser(Map<String, dynamic>? user) =>
+      (subscriptionPowerForUser(user)['analytics'] ?? 'none').toString();
+
+  static String tierDisplayName(String tier) {
+    switch (tier.trim().toLowerCase()) {
+      case 'premium':
+        return 'مميزة';
+      case 'gold':
+        return 'ذهبية';
+      case 'silver':
+        return 'فضية';
+      default:
+        return 'مجانية';
+    }
+  }
+
+  static String tierPowerDescription(String tier) {
+    switch (tier.trim().toLowerCase()) {
+      case 'premium':
+        return 'توثيق ألماسي، أولوية ظهور قوية، 3 تثبيتات، إحصائيات متقدمة، وظهور ضمن الحسابات المميزة.';
+      case 'gold':
+        return 'توثيق ذهبي، أولوية بحث وفيد، رسائل موثقين فقط، 2 تثبيت، وإحصائيات أساسية.';
+      case 'silver':
+        return 'توثيق فضي، ستوري، حد كتابة أعلى، ودفعة ظهور خفيفة.';
+      default:
+        return 'حساب عادي بدون قوة توثيق.';
+    }
+  }
+
+  static int searchPriorityWeightForUser(Map<String, dynamic>? user) {
+    final tier = subscriptionTierForUser(user);
+    final base = subscriptionPriorityWeightForTier(tier);
+    if (isRespectAiUsername((user?['username'] ?? '').toString())) return 2000;
+    return base;
+  }
+
+  static Future<List<Map<String, dynamic>>> getFeaturedVerifiedUsers({int limit = 20}) async {
+    try {
+      final rows = await client
+          .from('users')
+          .select()
+          .inFilter('subscription_tier', ['premium', 'gold', 'silver'])
+          .order('subscription_tier', ascending: false)
+          .limit(limit);
+      final out = List<Map<String, dynamic>>.from((rows as List).map((e) => Map<String, dynamic>.from(e as Map)));
+      out.sort((a, b) {
+        final pa = searchPriorityWeightForUser(a);
+        final pb = searchPriorityWeightForUser(b);
+        if (pa != pb) return pb.compareTo(pa);
+        return (b['created_at'] ?? '').toString().compareTo((a['created_at'] ?? '').toString());
+      });
+      return out.take(limit).toList();
+    } catch (_) {
+      return <Map<String, dynamic>>[];
+    }
+  }
+
+  static Future<Map<String, int>> getPostAnalyticsSummary(String username) async {
+    final user = displayUsername(username);
+    final out = <String, int>{
+      'posts': 0,
+      'likes': 0,
+      'reposts': 0,
+      'views': 0,
+      'replies': 0,
+      'engagement': 0,
+    };
+    try {
+      final posts = await client
+          .from('posts')
+          .select('id,likes,reposts,views,reply_count,replies')
+          .eq('username', user)
+          .limit(200);
+      final rows = List<Map<String, dynamic>>.from((posts as List).map((e) => Map<String, dynamic>.from(e as Map)));
+      out['posts'] = rows.length;
+      for (final row in rows) {
+        out['likes'] = (out['likes'] ?? 0) + (int.tryParse((row['likes'] ?? 0).toString()) ?? 0);
+        out['reposts'] = (out['reposts'] ?? 0) + (int.tryParse((row['reposts'] ?? 0).toString()) ?? 0);
+        out['views'] = (out['views'] ?? 0) + (int.tryParse((row['views'] ?? 0).toString()) ?? 0);
+        final replies = row['replies'] is List ? (row['replies'] as List).length : (int.tryParse((row['reply_count'] ?? 0).toString()) ?? 0);
+        out['replies'] = (out['replies'] ?? 0) + replies;
+      }
+      out['engagement'] = (out['likes'] ?? 0) + (out['reposts'] ?? 0) + (out['replies'] ?? 0);
+    } catch (_) {}
+    return out;
+  }
+
+  /// ميزة: استقبال الرسائل من الحسابات الموثقة فقط.
+  /// هذه ليست مجرد نص في الباقة: لا تعمل إلا للذهبية والمميزة.
+  static bool canUseVerifiedOnlyMessagesFeature(Map<String, dynamic>? user) {
+    final tier = subscriptionTierForUser(user);
+    return tier == 'gold' || tier == 'premium';
+  }
+
+  static Future<bool> canUseVerifiedOnlyMessagesForUsername(String username) async {
+    try {
+      final user = await getUserByUsername(username);
+      return canUseVerifiedOnlyMessagesFeature(user);
+    } catch (e, st) {
+      _logIgnoredError(e, st);
+      return false;
+    }
+  }
+
+  static int subscriptionPriorityWeightForTier(String tier) {
+    switch (tier.trim().toLowerCase()) {
+      case 'premium':
+        return 900;
+      case 'gold':
+        return 520;
+      case 'silver':
+        return 220;
+      default:
+        return 0;
+    }
+  }
+
+  static int subscriptionPriorityWeightForUser(Map<String, dynamic>? user) {
+    return subscriptionPriorityWeightForTier(subscriptionTierForUser(user));
+  }
+
+  static String subscriptionPriorityLabelForTier(String tier) {
+    switch (tier.trim().toLowerCase()) {
+      case 'premium':
+        return 'أولوية مميزة';
+      case 'gold':
+        return 'أولوية ذهبية';
+      case 'silver':
+        return 'أولوية فضية';
+      default:
+        return '';
+    }
+  }
+
+  static bool subscriptionBoostActiveForUser(Map<String, dynamic>? user) {
+    if (user == null) return false;
+    final tier = subscriptionTierForUser(user);
+    if (tier == 'free') return false;
+    final expires = verifiedUntilForUser(user)?.toUtc();
+    return expires == null || expires.isAfter(DateTime.now().toUtc());
+  }
+
+  static Map<String, dynamic> authorSubscriptionPostFields(Map<String, dynamic>? user) {
+    final tier = subscriptionTierForUser(user);
+    final priority = subscriptionPriorityWeightForTier(tier);
+    final expires = verifiedUntilForUser(user)?.toUtc();
+    return <String, dynamic>{
+      'author_subscription_tier': tier,
+      'author_subscription_priority': priority,
+      'author_subscription_boost_until': expires?.toIso8601String(),
+      'author_post_max_chars': postMaxCharsForUser(user),
+      'author_ai_daily_limit': respectAiDailyLimitForUser(user),
+      'author_subscription_label': subscriptionPriorityLabelForTier(tier),
+    };
+  }
 
   static Future<Map<String, dynamic>> getPostingLimitsForUsername(String username) async {
     Map<String, dynamic>? user;
     try { user = await getUserByUsername(username); } catch (e, st) { _logIgnoredError(e, st); }
     final verified = isVerifiedUser(user);
-    final limit = verified ? verifiedPostMaxChars : freePostMaxChars;
-    final aiLimit = verified ? verifiedRespectAiDailyLimit : freeRespectAiDailyLimit;
+    final tier = subscriptionTierForUser(user);
+    final tierInfo = tier == 'free' ? const <String, dynamic>{'title': 'مجاني'} : subscriptionTierById(tier);
+    final limit = postMaxCharsForUser(user);
+    final aiLimit = respectAiDailyLimitForUser(user);
     final used = await respectAiUsageCountToday(username);
     return <String, dynamic>{
       'verified': verified,
+      'subscriptionTier': tier,
+      'subscriptionTitle': (tierInfo['title'] ?? 'مجاني').toString(),
+      'features': subscriptionFeaturesForUser(user),
       'maxPostChars': limit,
       'aiDailyLimit': aiLimit,
       'aiUsedToday': used,
       'aiRemainingToday': (aiLimit - used).clamp(0, aiLimit),
+      'canUseStories': canUseStories(user),
+      'canUseGoldFeatures': canUseGoldFeatures(user),
+      'canUsePremiumFeatures': canUsePremiumFeatures(user),
+      'power': subscriptionPowerForUser(user),
+      'pinLimit': pinnedPostLimitForUser(user),
+      'storyLimit': storyLimitForUser(user),
+      'videoMaxSeconds': videoMaxSecondsForUser(user),
+      'profileFrame': profileFrameForUser(user),
+      'analyticsLevel': analyticsLevelForUser(user),
+      'officialContact': canUseOfficialContact(user),
     };
   }
 
@@ -237,7 +1419,7 @@ class SupabaseService {
     final max = int.tryParse((limits['aiDailyLimit'] ?? freeRespectAiDailyLimit).toString()) ?? freeRespectAiDailyLimit;
     final used = int.tryParse((limits['aiUsedToday'] ?? 0).toString()) ?? 0;
     if (used >= max) {
-      throw Exception('وصلت لحد Respect AI اليومي ($max مرة). الحساب الموثق يحصل على $verifiedRespectAiDailyLimit مرة يوميًا.');
+      throw Exception('وصلت لحد Respect AI اليومي ($max مرة). رقّ الباقة لزيادة الحد اليومي.');
     }
   }
 
@@ -269,6 +1451,8 @@ class SupabaseService {
     required String mediaPath,
     required String mediaType,
     String avatarUrl = '',
+    bool privateStory = false,
+    List<String> allowedViewers = const <String>[],
   }) async {
     await enforceVerifiedFeature(username: username, featureName: 'الستوري');
     final user = displayUsername(username);
@@ -276,6 +1460,12 @@ class SupabaseService {
     final publicUrl = await uploadStoryMedia(username: user, filePath: mediaPath, video: isVideo);
     final now = DateTime.now().toUtc();
     final expires = now.add(const Duration(hours: 24));
+    final cleanAllowedViewers = allowedViewers
+        .map(displayUsername)
+        .where((u) => u != '@user' && u != user)
+        .toSet()
+        .toList();
+
     final payload = <String, dynamic>{
       'username': user,
       'name': name,
@@ -285,6 +1475,9 @@ class SupabaseService {
       'created_at': now.toIso8601String(),
       'expires_at': expires.toIso8601String(),
       'is_active': true,
+      'is_private': privateStory,
+      'privacy': privateStory ? 'private' : 'public',
+      'allowed_viewers': privateStory ? cleanAllowedViewers : <String>[],
     };
     try {
       final inserted = await client.from('respect_stories').insert(payload).select().single();
@@ -327,7 +1520,7 @@ class SupabaseService {
     try {
       dynamic query = client
           .from('respect_stories')
-          .select()
+          .select('id,username,name,avatar_url,media_url,media_type,created_at,expires_at,is_active,is_private,privacy,allowed_viewers')
           .eq('is_active', true)
           .gt('expires_at', now);
       if (names.isNotEmpty) query = query.inFilter('username', names);
@@ -406,6 +1599,87 @@ class SupabaseService {
     );
   }
 
+  static String paddlePriceIdForPlan(String planId) {
+    final id = planId.trim().toLowerCase();
+    final priceId = paddleVerificationPriceIds[id] ?? (verificationPlanById(id)['paddle_price_id'] ?? '').toString();
+    if (priceId.trim().isEmpty) {
+      throw Exception('لا يوجد Paddle price id لخطة $planId');
+    }
+    return priceId;
+  }
+
+  static Future<String> createVerificationCheckout({
+    required String username,
+    required String planId,
+  }) async {
+    final user = displayUsername(username);
+    final plan = verificationPlanById(planId);
+    final priceId = paddlePriceIdForPlan(planId);
+    final tier = (plan['tier'] ?? tierForPlanId(planId)).toString();
+    final duration = (plan['duration'] ?? '').toString();
+
+    final payload = <String, dynamic>{
+      'username': user,
+      'planId': planId,
+      'priceId': priceId,
+      'tier': tier,
+      'duration': duration,
+      'months': plan['months'],
+      'priceUsd': plan['price'],
+      'mode': paddleSandboxMode ? 'sandbox' : 'production',
+      'clientSideToken': paddleClientSideToken,
+      'platform': _safeDevicePlatform,
+      'customData': {
+        'app': 'respect',
+        'product_type': 'verification_subscription',
+        'platform': _safeDevicePlatform,
+        'username': user,
+        'plan_id': planId,
+        'planId': planId,
+        'tier': tier,
+        'duration': duration,
+        'months': plan['months'],
+      },
+    };
+
+    try {
+      final response = await _postSignedJson(
+  Uri.parse(paddleCreateVerificationCheckoutUrl),
+  payload,
+  timeout: const Duration(seconds: 20),
+);
+
+      Map<String, dynamic> decoded = <String, dynamic>{};
+      try {
+        final raw = jsonDecode(response.body);
+        if (raw is Map) decoded = raw.map((k, v) => MapEntry(k.toString(), v));
+      } catch (_) {}
+
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        final url = (decoded['checkout_url'] ??
+                decoded['checkoutUrl'] ??
+                decoded['url'] ??
+                decoded['payment_url'] ??
+                decoded['paymentUrl'] ??
+                '')
+            .toString()
+            .trim();
+
+        if (url.startsWith('http://') || url.startsWith('https://')) {
+          return url;
+        }
+      }
+
+      final message = (decoded['detail'] ?? decoded['error'] ?? decoded['message'] ?? response.body).toString();
+      throw Exception(message.isEmpty ? 'فشل إنشاء رابط الدفع من السيرفر' : message);
+    } on TimeoutException {
+      throw Exception('انتهت مهلة الاتصال بسيرفر الدفع');
+    } catch (e) {
+      // نرمي رسالة واضحة بدل تفعيل التوثيق مباشرة. لا تفعل التوثيق من Flutter أبدًا.
+      throw Exception('تأكد من إضافة endpoint /paddle/create-verification-checkout في السيرفر. التفاصيل: $e');
+    }
+  }
+
   static Future<Map<String, dynamic>> activateVerificationPlan({
     required String username,
     required String planId,
@@ -415,6 +1689,7 @@ class SupabaseService {
     final plan = verificationPlanById(planId);
     final months = int.tryParse((plan['months'] ?? 1).toString()) ?? 1;
     final price = double.tryParse((plan['price'] ?? 2).toString()) ?? 2.0;
+    final tier = (plan['tier'] ?? tierForPlanId(planId)).toString().trim().toLowerCase();
     final now = DateTime.now().toUtc();
     final oldUser = await getUserByUsername(user);
     final oldUntil = verifiedUntilForUser(oldUser)?.toUtc();
@@ -426,7 +1701,7 @@ class SupabaseService {
       'verified': true,
       'respect_verified': true,
       'verification_status': 'active',
-      'subscription_tier': 'verified',
+      'subscription_tier': tier,
       'verification_plan': planId,
       'verified_until': expires.toIso8601String(),
       'verification_expires_at': expires.toIso8601String(),
@@ -440,7 +1715,23 @@ class SupabaseService {
       try { await client.from('users').update(payload).eq('username', user).timeout(const Duration(seconds: 8)); } catch (e, st) { _logIgnoredError(e, st); }
     }
 
-    try { await client.from('posts').update({'author_verified': true}).or('username.eq.$user,username.eq.$clean').timeout(const Duration(seconds: 8)); } catch (e, st) { _logIgnoredError(e, st); }
+    final priorityPayload = <String, dynamic>{
+      'author_verified': true,
+      'author_subscription_tier': tier,
+      'author_subscription_priority': subscriptionPriorityWeightForTier(tier),
+      'author_subscription_boost_until': expires.toIso8601String(),
+      'author_post_max_chars': postMaxCharsForUser({...?oldUser, ...payload}),
+      'author_ai_daily_limit': respectAiDailyLimitForUser({...?oldUser, ...payload}),
+      'author_subscription_label': subscriptionPriorityLabelForTier(tier),
+    };
+
+    try {
+      await client.from('posts').update(priorityPayload).or('username.eq.$user,username.eq.$clean').timeout(const Duration(seconds: 8));
+    } catch (_) {
+      try {
+        await client.from('posts').update({'author_verified': true}).or('username.eq.$user,username.eq.$clean').timeout(const Duration(seconds: 8));
+      } catch (e, st) { _logIgnoredError(e, st); }
+    }
     try { await client.from('post_replies').update({'author_verified': true}).or('username.eq.$user,username.eq.$clean').timeout(const Duration(seconds: 8)); } catch (e, st) { _logIgnoredError(e, st); }
 
     try {
@@ -448,6 +1739,7 @@ class SupabaseService {
         'username': user,
         'plan_id': planId,
         'plan_title': (plan['title'] ?? '').toString(),
+        'tier': tier,
         'months': months,
         'price_usd': price,
         'status': 'active',
@@ -486,7 +1778,7 @@ class SupabaseService {
     usersMap[clean] = {...current, ...payload, 'username': user, 'id': clean};
     await prefs.setString('respect_users_map', jsonEncode(usersMap));
 
-    return <String, dynamic>{...payload, 'username': user, 'plan': plan, 'price_usd': price};
+    return <String, dynamic>{...payload, 'username': user, 'plan': plan, 'tier': tier, 'price_usd': price};
   }
 
   static Future<void> enforceVerifiedFeature({required String username, required String featureName}) async {
@@ -503,6 +1795,8 @@ class SupabaseService {
     required String name,
     required List<Map<String, String>> mediaItems,
     String avatarUrl = '',
+    bool privateStory = false,
+    List<String> allowedViewers = const <String>[],
   }) async {
     final created = <Map<String, dynamic>>[];
     for (final item in mediaItems) {
@@ -515,6 +1809,8 @@ class SupabaseService {
         mediaPath: path,
         mediaType: type,
         avatarUrl: avatarUrl,
+        privateStory: privateStory,
+        allowedViewers: allowedViewers,
       );
       created.add(story);
     }
@@ -759,7 +2055,7 @@ class SupabaseService {
     try {
       final rows = await client
           .from('respect_story_likes')
-          .select()
+          .select('id,story_id,username,name,avatar_url,created_at')
           .eq('story_id', id)
           .order('created_at', ascending: false)
           .limit(100)
@@ -974,15 +2270,19 @@ class SupabaseService {
       throw Exception('ضع رابط سيرفر Respect AI داخل SupabaseService.respectAiBackendUrl');
     }
 
+    await enforceRespectAiDailyLimit(askerUsername);
+
     final cleanQuestion = _cleanAiUserText(userText);
     final finalQuestion = cleanQuestion.isEmpty ? userText.trim() : cleanQuestion;
     final detectedMode = mode.trim().isEmpty || mode == 'reply' ? detectRespectAiMode(userText) : mode;
+    Map<String, dynamic>? askerUser;
+    try { askerUser = await getUserByUsername(askerUsername).timeout(const Duration(seconds: 6)); } catch (_) {}
+    final askerTier = subscriptionTierForUser(askerUser);
+    final askerAiLimit = respectAiDailyLimitForUser(askerUser);
 
-    final response = await http
-        .post(
-      Uri.parse(endpoint),
-      headers: _jsonSecretHeaders(),
-      body: jsonEncode({
+    final response = await _postSignedJson(
+  Uri.parse(endpoint),
+  {
         'text': finalQuestion,
         'askerUsername': displayUsername(askerUsername),
         'username': displayUsername(askerUsername),
@@ -994,9 +2294,12 @@ class SupabaseService {
         'language': 'ar',
         'dialect': 'auto',
         'style': 'colloquial_friend',
-      }),
-    )
-        .timeout(const Duration(seconds: 60));
+        'subscriptionTier': askerTier,
+        'aiDailyLimit': askerAiLimit,
+        'premiumMode': askerTier == 'premium',
+      },
+  timeout: const Duration(seconds: 60),
+);
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw Exception('Respect AI server error: ${response.statusCode} ${response.body}');
@@ -1005,7 +2308,10 @@ class SupabaseService {
     final decoded = jsonDecode(utf8.decode(response.bodyBytes));
     if (decoded is Map) {
       final answer = (decoded['answer'] ?? decoded['text'] ?? decoded['reply'] ?? '').toString().trim();
-      if (answer.isNotEmpty) return answer;
+      if (answer.isNotEmpty) {
+        await _incrementRespectAiUsage(askerUsername);
+        return answer;
+      }
     }
     throw Exception('Respect AI empty answer');
   }
@@ -1063,11 +2369,9 @@ class SupabaseService {
         : respectAiModerationBackendUrl.trim();
 
     try {
-      final response = await http
-          .post(
-        Uri.parse(endpoint),
-        headers: _jsonSecretHeaders(),
-        body: jsonEncode({
+      final response = await _postSignedJson(
+  Uri.parse(endpoint),
+  {
           'text': clean,
           'username': displayUsername(authorUsername),
           'authorUsername': displayUsername(authorUsername),
@@ -1078,9 +2382,9 @@ class SupabaseService {
           'parentReplyText': parentReplyText.trim(),
           'recentRepliesText': recentRepliesText.trim(),
           'language': 'ar',
-        }),
-      )
-          .timeout(const Duration(seconds: 40));
+        },
+  timeout: const Duration(seconds: 40),
+);
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
         throw Exception('Moderation server error: ${response.statusCode} ${response.body}');
@@ -1179,11 +2483,9 @@ class SupabaseService {
         : respectAiStoryModerationBackendUrl.trim();
 
     try {
-      final response = await http
-          .post(
-        Uri.parse(endpoint),
-        headers: _jsonSecretHeaders(),
-        body: jsonEncode({
+      final response = await _postSignedJson(
+  Uri.parse(endpoint),
+  {
           'postId': id,
           'replyId': id,
           'text': text.trim(),
@@ -1195,9 +2497,9 @@ class SupabaseService {
           'videoUrl': isVideo ? url : '',
           'contentType': 'story',
           'language': 'ar',
-        }),
-      )
-          .timeout(const Duration(seconds: 240));
+        },
+  timeout: const Duration(seconds: 240),
+);
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
         throw Exception('Server story moderation error: ${response.statusCode} ${response.body}');
@@ -1309,12 +2611,15 @@ class SupabaseService {
         ? respectAiModerationBackendUrl.replaceFirst('/moderate', '/moderate-post')
         : respectAiPostModerationBackendUrl.trim();
 
+    Map<String, dynamic>? authorUser;
+    try { authorUser = await getUserByUsername(authorUsername).timeout(const Duration(seconds: 6)); } catch (_) {}
+    final authorTier = subscriptionTierForUser(authorUser);
+    final authorPriority = subscriptionPriorityWeightForTier(authorTier);
+
     try {
-      final response = await http
-          .post(
-        Uri.parse(endpoint),
-        headers: _jsonSecretHeaders(),
-        body: jsonEncode({
+      final response = await _postSignedJson(
+  Uri.parse(endpoint),
+  {
           'postId': id,
           'text': clean,
           'username': displayUsername(authorUsername),
@@ -1323,10 +2628,13 @@ class SupabaseService {
           'imageUrl': safeImageUrls.isNotEmpty ? safeImageUrls.first : '',
           'videoUrl': safeVideoUrl,
           'contentType': 'post',
+          'authorSubscriptionTier': authorTier,
+          'authorSubscriptionPriority': authorPriority,
+          'premiumReview': authorTier == 'premium',
           'language': 'ar',
-        }),
-      )
-          .timeout(const Duration(seconds: 180));
+        },
+  timeout: const Duration(seconds: 180),
+);
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
         throw Exception('Server post moderation error: ${response.statusCode} ${response.body}');
@@ -1779,7 +3087,7 @@ $examples
       'device_id': id,
       'current_device_id': id,
       'last_device_id': id,
-      'device_platform': Platform.operatingSystem,
+      'device_platform': _safeDevicePlatform,
       'device_updated_at': DateTime.now().toUtc().toIso8601String(),
       if (username != null && username.trim().isNotEmpty) 'username': displayUsername(username),
     };
@@ -1827,7 +3135,7 @@ $examples
     try {
       final row = await client
           .from('respect_device_bans')
-          .select()
+          .select('id,device_id,username,is_active,reason,created_at,expires_at')
           .eq('device_id', deviceId)
           .eq('is_active', true)
           .maybeSingle()
@@ -1839,7 +3147,7 @@ $examples
     try {
       final row = await client
           .from('users')
-          .select()
+          .select('id,username,name,email,avatar_url,imagePath,profileImagePath,is_blocked,blocked_at,device_id,current_device_id,last_device_id')
           .or('device_id.eq.$deviceId,current_device_id.eq.$deviceId,last_device_id.eq.$deviceId')
           .maybeSingle()
           .timeout(const Duration(seconds: 7));
@@ -1893,19 +3201,11 @@ $examples
     final now = DateTime.now().toUtc().toIso8601String();
     final cleanReason = reason.trim().isEmpty ? 'Blocked by admin' : reason.trim();
 
+    // لا نرسل أعمدة غير موجودة مثل users.blocked / banned / disabled.
+    // قاعدة بياناتك الحالية فيها is_blocked و blocked_at فقط حسب رسالة PostgREST.
     final userPayload = <String, dynamic>{
       'is_blocked': blocked,
-      'isBlocked': blocked,
-      'blocked': blocked,
-      'banned': blocked,
-      'disabled': blocked,
-      'canLogin': !blocked,
-      'device_banned': blocked,
-      'device_blocked': blocked,
-      'blocked_reason': blocked ? cleanReason : '',
-      'blockedReason': blocked ? cleanReason : '',
       'blocked_at': blocked ? now : null,
-      'blockedAt': blocked ? now : null,
       'updated_at': now,
     };
 
@@ -1915,19 +3215,17 @@ $examples
           .update(userPayload)
           .or('username.eq.$user,username.eq.$clean')
           .timeout(const Duration(seconds: 8));
-    } catch (_) {
+    } catch (e, st) {
+      _logIgnoredError(e, st);
+      // احتياط لو جدول users عندك لا يحتوي updated_at.
       try {
-        final fallback = Map<String, dynamic>.from(userPayload)
-          ..remove('isBlocked')
-          ..remove('blocked')
-          ..remove('banned')
-          ..remove('disabled')
-          ..remove('canLogin')
-          ..remove('device_blocked')
-          ..remove('blockedReason')
-          ..remove('blockedAt');
-        await client.from('users').update(fallback).or('username.eq.$user,username.eq.$clean').timeout(const Duration(seconds: 8));
-      } catch (e, st) { _logIgnoredError(e, st); }
+        final fallback = Map<String, dynamic>.from(userPayload)..remove('updated_at');
+        await client
+            .from('users')
+            .update(fallback)
+            .or('username.eq.$user,username.eq.$clean')
+            .timeout(const Duration(seconds: 8));
+      } catch (e2, st2) { _logIgnoredError(e2, st2); }
     }
 
     if (deviceId.isNotEmpty) {
@@ -2764,6 +4062,33 @@ $examples
     final clean = strictUsername(username);
     if (clean.isEmpty) return false;
     final except = exceptUsername == null ? '' : strictUsername(exceptUsername);
+    final lookupHash = await SecureCryptoService.databaseLookupHash('username', displayUsername(clean));
+
+    Future<bool> scanRows(dynamic rows) async {
+      for (final raw in rows as List) {
+        final row = Map<String, dynamic>.from(raw as Map);
+        var found = strictUsername((row['username'] ?? '').toString());
+        if (found.isEmpty || found.startsWith('enc')) {
+          found = strictUsername((row['username_plain'] ?? row['username_decrypted'] ?? '').toString());
+        }
+        if (found.isNotEmpty && found != except) return true;
+        final foundHash = (row['username_lookup_hash'] ?? row['username_hash'] ?? '').toString();
+        if (lookupHash.isNotEmpty && foundHash == lookupHash && clean != except) return true;
+      }
+      return false;
+    }
+
+    try {
+      final rows = await client
+          .from('users')
+          .select('username,username_lookup_hash,username_hash')
+          .or('username_lookup_hash.eq.$lookupHash,username_hash.eq.$lookupHash,username.eq.$clean,username.eq.@$clean')
+          .limit(3)
+          .timeout(const Duration(seconds: 8));
+      if (await scanRows(rows)) return true;
+    } catch (e, st) { _logIgnoredError(e, st); }
+
+    // توافق مع قاعدة البيانات القديمة قبل إضافة أعمدة الحماية.
     try {
       final rows = await client
           .from('users')
@@ -2771,11 +4096,7 @@ $examples
           .or('username.eq.$clean,username.eq.@$clean')
           .limit(3)
           .timeout(const Duration(seconds: 8));
-      for (final raw in rows as List) {
-        final row = Map<String, dynamic>.from(raw as Map);
-        final found = strictUsername((row['username'] ?? '').toString());
-        if (found.isNotEmpty && found != except) return true;
-      }
+      return scanRows(rows);
     } catch (e, st) { _logIgnoredError(e, st); }
     return false;
   }
@@ -2920,6 +4241,24 @@ $examples
       accounts.add({...normalized, 'id': username});
     }
     await prefs.setString('respect_accounts_v1', jsonEncode(accounts));
+
+    // تجهيز مفتاح التشفير فور حفظ المستخدم وليس عند فتح الشات فقط.
+    // هذا يجعل الحسابات الجديدة والمستخدمين الذين سجلوا دخولهم قادرين على استقبال رسائل مشفرة مباشرة.
+    try {
+      final userForKey = displayUsername(username);
+      final keyPayload = await SecureCryptoService.localPublicKeyPayloadForUser(userForKey);
+      if (keyPayload.isNotEmpty) {
+        final cleanUser = normalizeUsername(userForKey);
+        await client
+            .from('users')
+            .update(keyPayload)
+            .or('username.eq.$userForKey,username.eq.$cleanUser')
+            .timeout(const Duration(seconds: 8));
+        normalized.addAll(keyPayload);
+        users[username] = normalized;
+        await prefs.setString('respect_users_map', jsonEncode(users));
+      }
+    } catch (e, st) { _logIgnoredError(e, st); }
   }
 
   static Future<void> logout() async {
@@ -2967,18 +4306,37 @@ $examples
 
   static Future<Map<String, dynamic>?> getUserByUsername(String username) async {
     final clean = normalizeUsername(username);
-    final data = await client.from('users').select().eq('username', '@$clean').maybeSingle();
-    if (data != null) return Map<String, dynamic>.from(data);
+    if (clean.isEmpty) return null;
+    final display = displayUsername(clean);
+    final lookupHash = await SecureCryptoService.databaseLookupHash('username', display);
 
-    final data2 = await client.from('users').select().eq('username', clean).maybeSingle();
+    try {
+      final data = await client
+          .from('users')
+          .select(_userListColumns)
+          .or('username_lookup_hash.eq.$lookupHash,username_hash.eq.$lookupHash,username.eq.$display,username.eq.$clean')
+          .maybeSingle()
+          .timeout(const Duration(seconds: 8));
+      if (data != null) {
+        final user = Map<String, dynamic>.from(data as Map);
+        user['username'] = display;
+        user['username_decrypted'] = display;
+        return user;
+      }
+    } catch (e, st) { _logIgnoredError(e, st); }
+
+    final data = await client.from('users').select(_userListColumns).eq('username', '@$clean').maybeSingle();
+    if (data != null) return Map<String, dynamic>.from(data as Map);
+
+    final data2 = await client.from('users').select(_userListColumns).eq('username', clean).maybeSingle();
     if (data2 == null) return null;
-    return Map<String, dynamic>.from(data2);
+    return Map<String, dynamic>.from(data2 as Map);
   }
 
   static Future<Map<String, dynamic>?> getUserByEmail(String email) async {
     final clean = normalizeEmail(email);
     if (clean.isEmpty) return null;
-    final data = await client.from('users').select().eq('email', clean).maybeSingle();
+    final data = await client.from('users').select(_userListColumns).eq('email', clean).maybeSingle();
     if (data == null) return null;
     return Map<String, dynamic>.from(data);
   }
@@ -3032,6 +4390,10 @@ $examples
     final cleanName = cleanProfileName(name);
     final pass = password.trim();
     final deviceId = await currentDeviceId();
+    final displayUser = displayUsername(clean);
+    final usernameLookupHash = await SecureCryptoService.databaseLookupHash('username', displayUser);
+    final encryptedUsername = await SecureCryptoService.encryptDatabaseField('username', displayUser);
+    final protectedPassword = await SecureCryptoService.passwordDatabaseHash(pass);
 
     await validateNewAccountFields(
       username: clean,
@@ -3043,20 +4405,46 @@ $examples
     if (birthDate.trim().isEmpty) throw Exception('اختر تاريخ الميلاد');
     if (!acceptedTerms) throw Exception('يجب الموافقة على سياسة الخصوصية وقوانين الاستخدام');
 
+    // مهم جدًا:
+    // لا نستخدم client.auth.signUp هنا بعد إضافة OTP الخاص بنا،
+    // لأن Supabase يرسل إيميل تأكيد تلقائيًا وقد يظهر خطأ:
+    // email rate limit exceeded
+    // لذلك ننشئ مستخدم Auth من السيرفر باستخدام service role مع email_confirm=true،
+    // ثم نسجل الدخول عاديًا حتى تتكون جلسة Supabase.
+    await _createPasswordAuthUserOnBackend(
+      username: clean,
+      email: cleanEmail,
+      password: pass,
+      name: cleanName,
+    );
+
     try {
-      await client.auth.signUp(
+      final auth = await client.auth.signInWithPassword(
         email: cleanEmail,
         password: pass,
-        data: <String, dynamic>{'username': clean, 'name': cleanName},
       );
+      if (auth.user == null) {
+        throw Exception('تعذر فتح جلسة الحساب بعد إنشائه');
+      }
     } on AuthException catch (e) {
       throw Exception(e.message);
     }
 
+    final e2eePayload = await SecureCryptoService.localPublicKeyPayloadForUser(clean);
+
     final payload = <String, dynamic>{
-      'username': clean,
+      // نبقي username كمعرف عام للتوافق مع باقي التطبيق، ونخزن النسخة المحمية في username_encrypted.
+      // تسجيل الدخول والبحث عن التكرار يستخدم username_lookup_hash.
+      'username': displayUser,
+      'username_encrypted': encryptedUsername,
+      'username_lookup_hash': usernameLookupHash,
+      'username_hash': usernameLookupHash,
       'email': cleanEmail,
-      'password': null,
+      // لا نخزن كلمة المرور كنص واضح داخل public.users.
+      // تسجيل الدخول الحقيقي يتم عبر Supabase Auth، وهذا الحقل فقط لإرضاء NOT NULL إن كان موجودًا.
+      'password': protectedPassword,
+      'password_hash': protectedPassword,
+      'password_encryption_version': 'hash_hmac_sha256_v1',
       'name': cleanName,
       'birth_date': birthDate.trim(),
       'accepted_terms': acceptedTerms,
@@ -3066,7 +4454,7 @@ $examples
       'device_id': deviceId,
       'current_device_id': deviceId,
       'last_device_id': deviceId,
-      'device_platform': Platform.operatingSystem,
+      'device_platform': _safeDevicePlatform,
       'device_updated_at': DateTime.now().toUtc().toIso8601String(),
       'bio': 'Respect App user',
       'avatar_url': '',
@@ -3075,6 +4463,7 @@ $examples
       'is_blocked': false,
       'is_verified': false,
       'verified_until': null,
+      ...e2eePayload,
     };
 
     dynamic inserted;
@@ -3090,36 +4479,363 @@ $examples
         ..remove('last_device_id')
         ..remove('device_platform')
         ..remove('device_updated_at')
+        ..remove('e2ee_public_key')
+        ..remove('e2ee_key_type')
+        ..remove('e2ee_key_version')
+        ..remove('e2ee_updated_at')
+        ..remove('username_encrypted')
+        ..remove('username_lookup_hash')
+        ..remove('username_hash')
+        ..remove('password_hash')
+        ..remove('password_encryption_version')
         ..remove('device_banned')
         ..remove('device_blocked')
-        ..remove('password');
+        ..['password'] = protectedPassword;
       inserted = await client.from('users').insert(fallback).select().single();
     }
 
     final user = Map<String, dynamic>.from(inserted as Map);
+    user['username'] = displayUser;
+    user['username_decrypted'] = displayUser;
     await saveCurrentUser(user);
-    await registerCurrentDeviceForUser(clean);
+    await registerCurrentDeviceForUser(displayUser);
     return user;
   }
 
+
+
+  // ================= Login OTP / Trusted Device =================
+  static Uri _authEndpoint(String path) {
+    final base = authOtpBackendBaseUrl.trim().replaceAll(RegExp(r'/+$'), '');
+    return Uri.parse('$base$path');
+  }
+
+  static Future<Map<String, dynamic>> _postAuthJson(String path, Map<String, dynamic> body) async {
+    final response = await _postSignedJson(
+  _authEndpoint(path),
+  body,
+  timeout: const Duration(seconds: 25),
+);
+
+    Map<String, dynamic> decoded = <String, dynamic>{};
+    try {
+      final raw = jsonDecode(utf8.decode(response.bodyBytes));
+      if (raw is Map) decoded = raw.map((k, v) => MapEntry(k.toString(), v));
+    } catch (_) {}
+
+    if (response.statusCode < 200 || response.statusCode >= 300 || decoded['ok'] == false) {
+      final detail = (decoded['detail'] ?? decoded['error'] ?? decoded['message'] ?? response.body).toString();
+      throw Exception(detail.replaceFirst('Exception: ', '').trim().isEmpty ? 'تعذر تنفيذ طلب التحقق' : detail);
+    }
+    return decoded;
+  }
+
+
+  static Future<Map<String, dynamic>> checkLoginAttemptAllowed(String usernameOrEmail) async {
+    final input = usernameOrEmail.trim();
+    if (input.isEmpty) throw Exception('اكتب اسم المستخدم أو الإيميل');
+    final deviceId = await currentDeviceId();
+    return _postAuthJson('/auth/check-login-attempt', {
+      'login': input,
+      'deviceId': deviceId,
+    });
+  }
+
+  static Future<Map<String, dynamic>> reportLoginAttempt({
+    required String usernameOrEmail,
+    required bool success,
+  }) async {
+    final input = usernameOrEmail.trim();
+    if (input.isEmpty) return <String, dynamic>{'ok': false};
+    final deviceId = await currentDeviceId();
+    return _postAuthJson('/auth/report-login-attempt', {
+      'login': input,
+      'deviceId': deviceId,
+      'success': success,
+    });
+  }
+
+  static Future<Map<String, dynamic>> requestPasswordReset(String usernameOrEmail) async {
+    final input = usernameOrEmail.trim();
+    if (input.isEmpty) throw Exception('اكتب اسم المستخدم أو الإيميل أولاً');
+    final deviceId = await currentDeviceId();
+    return _postAuthJson('/auth/request-password-reset', {
+      'login': input,
+      'deviceId': deviceId,
+    });
+  }
+
+  static String normalizePhoneE164({required String countryCode, required String phone}) {
+    final rawPhone = phone.trim();
+    final rawCountry = countryCode.trim();
+    if (rawPhone.isEmpty) return '';
+    if (rawPhone.startsWith('+')) {
+      final digits = rawPhone.replaceAll(RegExp(r'\D+'), '');
+      return digits.isEmpty ? '' : '+$digits';
+    }
+    final cc = rawCountry.replaceAll(RegExp(r'\D+'), '');
+    final local = rawPhone.replaceAll(RegExp(r'\D+'), '').replaceFirst(RegExp(r'^0+'), '');
+    if (cc.isEmpty || local.isEmpty) return '';
+    return '+$cc$local';
+  }
+
+  static Future<Map<String, dynamic>> requestPhoneSecurityCode({
+    required String username,
+    required String countryCode,
+    required String phone,
+  }) async {
+    final user = displayUsername(username);
+    final phoneE164 = normalizePhoneE164(countryCode: countryCode, phone: phone);
+    if (normalizeUsername(user).isEmpty || user == '@user') throw Exception('تعذر قراءة المستخدم الحالي');
+    if (phoneE164.isEmpty) throw Exception('اكتب رقم الجوال بشكل صحيح');
+    final deviceId = await currentDeviceId();
+    return _postAuthJson('/auth/phone-security/send', {
+      'username': user,
+      'countryCode': countryCode.trim(),
+      'phone': phone.trim(),
+      'deviceId': deviceId,
+    });
+  }
+
+  static Future<Map<String, dynamic>> verifyPhoneSecurityCode({
+    required String username,
+    required String phoneE164,
+    required String code,
+  }) async {
+    final user = displayUsername(username);
+    final cleanCode = code.trim();
+    if (!RegExp(r'^\d{4,10}$').hasMatch(cleanCode)) throw Exception('اكتب رمز SMS الصحيح');
+    final deviceId = await currentDeviceId();
+    return _postAuthJson('/auth/phone-security/verify', {
+      'username': user,
+      'phoneE164': phoneE164.trim(),
+      'code': cleanCode,
+      'deviceId': deviceId,
+    });
+  }
+
+  static Future<Map<String, dynamic>> requestSmsLoginCode(String usernameOrEmail) async {
+    final input = usernameOrEmail.trim();
+    if (input.isEmpty) throw Exception('اكتب اسم المستخدم أو الإيميل أولاً');
+    final deviceId = await currentDeviceId();
+    return _postAuthJson('/auth/sms-login/send', {
+      'login': input,
+      'deviceId': deviceId,
+    });
+  }
+
+  static Future<Map<String, dynamic>?> loginWithSmsCode(String usernameOrEmail, String code) async {
+    await enforceCurrentDeviceAllowed();
+    final input = usernameOrEmail.trim();
+    final cleanCode = code.trim();
+    if (input.isEmpty || !RegExp(r'^\d{4,10}$').hasMatch(cleanCode)) return null;
+    final deviceId = await currentDeviceId();
+    final res = await _postAuthJson('/auth/sms-login/verify', {
+      'login': input,
+      'code': cleanCode,
+      'deviceId': deviceId,
+    });
+    final raw = res['user'];
+    if (raw is! Map) return null;
+    final user = raw.map((k, v) => MapEntry(k.toString(), v));
+    if (isBlockedUserMap(user)) return null;
+    await saveCurrentUser(user);
+    await registerCurrentDeviceForUser((user['username'] ?? input).toString());
+    return user;
+  }
+
+  static Future<void> _createPasswordAuthUserOnBackend({
+    required String username,
+    required String email,
+    required String password,
+    required String name,
+  }) async {
+    final cleanEmail = normalizeEmail(email);
+    final cleanUsername = strictUsername(username);
+    final cleanName = cleanProfileName(name);
+    final pass = password.trim();
+
+    if (!isValidEmail(cleanEmail)) throw Exception('اكتب إيميل صحيح');
+    if (pass.length < 6) throw Exception('كلمة المرور لازم تكون 6 أحرف على الأقل');
+
+    await _postAuthJson('/auth/create-password-user', {
+      'email': cleanEmail,
+      'password': pass,
+      'username': displayUsername(cleanUsername),
+      'name': cleanName,
+    });
+  }
+
+  static Future<Map<String, dynamic>> requestAuthOtp({
+    required String email,
+    required String purpose,
+    String username = '',
+  }) async {
+    await enforceCurrentDeviceAllowed();
+    final cleanEmail = normalizeEmail(email);
+    if (!isValidEmail(cleanEmail)) throw Exception('اكتب إيميل صحيح لاستلام رمز التحقق');
+    final deviceId = await currentDeviceId();
+    return _postAuthJson('/auth/send-otp', {
+      'email': cleanEmail,
+      'purpose': purpose,
+      'username': displayUsername(username),
+      'deviceId': deviceId,
+    });
+  }
+
+  static Future<bool> verifyAuthOtp({
+    required String email,
+    required String code,
+    required String purpose,
+    String username = '',
+  }) async {
+    await enforceCurrentDeviceAllowed();
+    final cleanEmail = normalizeEmail(email);
+    final cleanCode = code.trim();
+    if (!RegExp(r'^\d{6}$').hasMatch(cleanCode)) throw Exception('رمز التحقق يجب أن يكون 6 أرقام');
+    final deviceId = await currentDeviceId();
+    final res = await _postAuthJson('/auth/verify-otp', {
+      'email': cleanEmail,
+      'code': cleanCode,
+      'purpose': purpose,
+      'username': displayUsername(username),
+      'deviceId': deviceId,
+    });
+    return res['ok'] == true;
+  }
+
+  static Future<bool> isTrustedDeviceForUsername(String username) async {
+    final user = displayUsername(username);
+    if (normalizeUsername(user).isEmpty) return false;
+    final deviceId = await currentDeviceId();
+    try {
+      final res = await _postAuthJson('/auth/is-trusted-device', {
+        'username': user,
+        'deviceId': deviceId,
+      });
+      return res['trusted'] == true;
+    } catch (e, st) {
+      _logIgnoredError(e, st);
+      return false;
+    }
+  }
+
+  static Future<void> trustCurrentDeviceForUsername(String username, {int days = 90}) async {
+    final user = displayUsername(username);
+    if (normalizeUsername(user).isEmpty) return;
+    final deviceId = await currentDeviceId();
+    try {
+      await _postAuthJson('/auth/trust-device', {
+        'username': user,
+        'deviceId': deviceId,
+        'deviceName': _safeDevicePlatform,
+        'days': days,
+      });
+    } catch (e, st) {
+      final msg = e.toString().toLowerCase();
+      // إذا الجهاز محفوظ مسبقًا فلا نعتبرها مشكلة ولا نعرض إشعار خطأ للمستخدم.
+      if (msg.contains('23505') ||
+          msg.contains('duplicate key') ||
+          msg.contains('already exists') ||
+          msg.contains('respect_trusted_devices_username_device_id_key')) {
+        return;
+      }
+      _logIgnoredError(e, st);
+      throw Exception("تعذر حفظ الجهاز الموثوق: ${e.toString().replaceFirst('Exception: ', '')}");
+    }
+  }
+
+  /// يتحقق من كلمة المرور بدون حفظ جلسة المستخدم محليًا.
+  /// يستخدم قبل OTP في تسجيل الدخول العادي، حتى لا يدخل الحساب قبل التحقق.
+  static Future<Map<String, dynamic>?> verifyLoginPasswordOnly(String usernameOrEmail, String password) async {
+    await enforceCurrentDeviceAllowed();
+
+    final input = usernameOrEmail.trim();
+    final cleanUsername = normalizeUsername(input);
+    final cleanEmail = normalizeEmail(input);
+    final pass = password.trim();
+    if (pass.isEmpty) return null;
+
+    String emailForAuth = cleanEmail;
+    Map<String, dynamic>? userByUsername;
+    if (!isValidEmail(input)) {
+      userByUsername = await getUserByUsername(cleanUsername);
+      emailForAuth = normalizeEmail((userByUsername?['email'] ?? '').toString());
+    }
+    if (emailForAuth.isEmpty) return null;
+
+    try {
+      final auth = await client.auth.signInWithPassword(
+        email: emailForAuth,
+        password: pass,
+      );
+      if (auth.user == null) return null;
+    } on AuthException catch (e) {
+      throw Exception(e.message);
+    } finally {
+      try { await client.auth.signOut(); } catch (e, st) { _logIgnoredError(e, st); }
+    }
+
+    final data = await getUserByEmail(emailForAuth) ?? userByUsername;
+    if (data == null) return null;
+    if (isBlockedUserMap(data)) return null;
+    return data;
+  }
+
   static const String googleWebClientId =
-      '631853899852-8dtiut3ng0l2ahsi691i0kigr3qgd98b.apps.googleusercontent.com';
+    '384970345898-sk04dn1l9df9233c7vpu0e7061evrvai.apps.googleusercontent.com';
+
+  // iOS يحتاج iOS OAuth Client ID داخل GoogleService-Info.plist أو عبر dart-define.
+  // Android يبقى يستخدم Web Client ID كـ serverClientId فقط حتى لا يرجع ApiException: 10.
+  static const String googleIosClientId =
+      String.fromEnvironment('GOOGLE_IOS_CLIENT_ID', defaultValue: '');
 
   static Future<Map<String, dynamic>?> signInWithGoogle() async {
-    // مهم:
-    // صفحة LoginScreen تستدعي هذه الدالة مباشرة، لذلك لا نعتمد على AuthState listener وحده
-    // حتى لا يصير تزامن مزدوج ومحاولة إنشاء نفس حساب Google مرتين.
+    if (kIsWeb) {
+      await client.auth.signInWithOAuth(
+        OAuthProvider.google,
+        redirectTo: Uri.base.origin,
+      );
+
+      // في الويب Supabase سيعمل redirect ويرجع للموقع،
+      // وبعد الرجوع AuthState listener في LoginScreen يكمل syncGoogleSessionUser.
+      return null;
+    }
+
+    // Android fix:
+    // لا تمرر Web Client ID داخل clientId على أندرويد؛ هذا يسبب ApiException: 10.
+    // المطلوب مع Supabase هو Web Client ID كـ serverClientId فقط حتى يرجع idToken صالح.
     final googleSignIn = GoogleSignIn(
       scopes: <String>['email', 'profile'],
+      clientId: (!kIsWeb && Platform.isIOS && googleIosClientId.trim().isNotEmpty)
+          ? googleIosClientId.trim()
+          : null,
       serverClientId: googleWebClientId,
     );
 
-    // تنظيف جلسة Google القديمة يمنع رجوع نفس النتيجة العالقة أحيانًا بعد فشل سابق.
     try {
+      // تنظيف الجلسة القديمة فقط، بدون disconnect حتى لا يسبب مشاكل صلاحيات/اختيار الحساب.
       await googleSignIn.signOut();
-    } catch (e, st) { _logIgnoredError(e, st); }
+    } catch (e, st) {
+      _logIgnoredError(e, st);
+    }
 
-    final googleUser = await googleSignIn.signIn();
+    GoogleSignInAccount? googleUser;
+    try {
+      googleUser = await googleSignIn.signIn();
+    } on PlatformException catch (e) {
+      final code = e.code;
+      final message = (e.message ?? '').trim();
+      if (code == 'sign_in_failed' || message.contains('ApiException: 10') || message.contains('Api10')) {
+        throw Exception(
+          'فشل تسجيل الدخول بجوجل Api10. تأكد أن google-services.json الجديد داخل android/app، '
+          'وأن Android OAuth client موجود للـ package com.example.rp_stream_hub مع SHA-1 الصحيح، '
+          'ثم نفذ flutter clean واحذف التطبيق من الجوال وثبته من جديد.',
+        );
+      }
+      throw Exception('فشل تسجيل الدخول بجوجل: ${message.isEmpty ? code : message}');
+    }
+
     if (googleUser == null) return null;
 
     final googleAuth = await googleUser.authentication;
@@ -3127,7 +4843,10 @@ $examples
     final googleAccessValue = googleAuth.accessToken;
 
     if (googleIdValue == null || googleIdValue.trim().isEmpty) {
-      throw Exception('تعذر الحصول على Google sign-in credential. تأكد من Web Client ID و SHA-1/SHA-256 في Firebase console.');
+      throw Exception(
+        'تعذر الحصول على Google idToken. تأكد من أن googleWebClientId هو Web OAuth Client ID '
+        'وأن OAuth consent screen يحتوي حسابك ضمن Test users إذا كان التطبيق Testing.',
+      );
     }
 
     await client.auth.signInWithIdToken(
@@ -3184,10 +4903,20 @@ $examples
     final username = await _uniqueGoogleUsername(email.isNotEmpty ? email.split('@').first : name);
     final googleDeviceId = await currentDeviceId();
     final profileName = await _uniqueGoogleProfileName(name.trim().isEmpty ? '@$username' : name.trim());
+    final googleDisplayUser = displayUsername(username);
+    final googleUsernameLookupHash = await SecureCryptoService.databaseLookupHash('username', googleDisplayUser);
+    final googleEncryptedUsername = await SecureCryptoService.encryptDatabaseField('username', googleDisplayUser);
+    final googlePasswordPlaceholder = await SecureCryptoService.passwordDatabaseHash('google:${authUser.id}');
     final payload = <String, dynamic>{
-      'username': username,
+      'username': googleDisplayUser,
+      'username_encrypted': googleEncryptedUsername,
+      'username_lookup_hash': googleUsernameLookupHash,
+      'username_hash': googleUsernameLookupHash,
       'email': email,
-      'password': null,
+      // حسابات Google لا تستخدم كلمة مرور محلية، لكن العمود في قاعدة البيانات NOT NULL.
+      'password': googlePasswordPlaceholder,
+      'password_hash': googlePasswordPlaceholder,
+      'password_encryption_version': 'hash_hmac_sha256_v1',
       'name': profileName,
       'birth_date': null,
       'accepted_terms': true,
@@ -3197,7 +4926,7 @@ $examples
       'device_id': googleDeviceId,
       'current_device_id': googleDeviceId,
       'last_device_id': googleDeviceId,
-      'device_platform': Platform.operatingSystem,
+      'device_platform': _safeDevicePlatform,
       'device_updated_at': DateTime.now().toUtc().toIso8601String(),
       'bio': 'Respect App user',
       'avatar_url': avatar,
@@ -3220,6 +4949,11 @@ $examples
         ..remove('last_device_id')
         ..remove('device_platform')
         ..remove('device_updated_at')
+        ..remove('username_encrypted')
+        ..remove('username_lookup_hash')
+        ..remove('username_hash')
+        ..remove('password_hash')
+        ..remove('password_encryption_version')
         ..remove('device_banned')
         ..remove('device_blocked')
         ..remove('password');
@@ -3243,8 +4977,10 @@ $examples
     }
 
     final user = Map<String, dynamic>.from(inserted as Map);
+    user['username'] = googleDisplayUser;
+    user['username_decrypted'] = googleDisplayUser;
     await saveCurrentUser(user);
-    await registerCurrentDeviceForUser((user['username'] ?? '').toString());
+    await registerCurrentDeviceForUser(googleDisplayUser);
 
     final ban = await currentDeviceBan();
     if (ban != null) {
@@ -3306,33 +5042,47 @@ $examples
     return true;
   }
 
+  static const String _userListColumns =
+      'id,username,name,bio,email,avatar_url,cover_url,is_verified,verified,verified_until,verification_status,subscription_tier,is_blocked,blocked_at,created_at,is_admin,phone_e164,phone_country_code,phone_national,phone_verified,phone_verified_at,sms_security_enabled,sms_login_enabled';
+
+  static const String _postListColumns =
+      'id,username,name,user,text,created_at,time,avatar_url,image_url,video_url,voice_url,voice_seconds,likes,reposts,shares,views,replies,reply_count,community_id,author_verified,author_subscription_tier,author_subscription_priority,author_subscription_boost_until,author_post_max_chars,author_ai_daily_limit,author_subscription_label';
+
   static Future<List<Map<String, dynamic>>> getUsers() async {
-    final data = await client.from('users').select().order('created_at', ascending: false);
+    final data = await client.from('users').select(_userListColumns).order('created_at', ascending: false);
     return List<Map<String, dynamic>>.from(data.map((e) => Map<String, dynamic>.from(e)));
   }
 
   static Future<List<Map<String, dynamic>>> getPosts() async {
-    final postsData = await client.from('posts').select().order('created_at', ascending: false);
+    final postsData = await client.from('posts').select(_postListColumns).order('created_at', ascending: false);
     final posts = List<Map<String, dynamic>>.from(postsData.map((e) => Map<String, dynamic>.from(e)));
 
     // نربط صورة البروفايل من جدول users حتى كل الأجهزة تشوف نفس الصورة من السيرفر.
     try {
-      final usersData = await client.from('users').select('username,avatar_url,imagePath,profileImagePath');
+      final usersData = await client.from('users').select('username,avatar_url,imagePath,profileImagePath,is_verified,verified,verified_until,verification_status,subscription_tier,verification_plan,subscription_expires_at');
       final avatars = <String, String>{};
+      final usersByUsername = <String, Map<String, dynamic>>{};
       for (final raw in usersData) {
         final user = Map<String, dynamic>.from(raw as Map);
         final username = displayUsername((user['username'] ?? '').toString());
+        if (username == '@user') continue;
+        usersByUsername[username] = user;
         final avatar = (user['avatar_url'] ?? user['imagePath'] ?? user['profileImagePath'] ?? '').toString().trim();
         // لا نستخدم أي مسار محلي من جهاز مستخدم آخر؛ الرابط العام فقط هو الذي يظهر للجميع.
-        if (username != '@user' && _isRemoteImageUrl(avatar)) avatars[username] = avatar;
+        if (_isRemoteImageUrl(avatar)) avatars[username] = avatar;
       }
 
       for (final post in posts) {
         final username = displayUsername((post['username'] ?? '').toString());
         final avatar = avatars[username];
+        final user = usersByUsername[username];
         if (avatar != null && avatar.isNotEmpty) {
           post['avatar_url'] = avatar;
           post['avatarPath'] = avatar;
+        }
+        if (user != null) {
+          post['author_verified'] = isVerifiedUser(user);
+          post.addAll(authorSubscriptionPostFields(user));
         }
       }
     } catch (e, st) { _logIgnoredError(e, st); }
@@ -3388,7 +5138,7 @@ $examples
 
   static Future<Map<String, dynamic>?> getPostById(String postId) async {
     if (postId.trim().isEmpty) return null;
-    final row = await client.from('posts').select().eq('id', postId).maybeSingle();
+    final row = await client.from('posts').select(_postListColumns).eq('id', postId).maybeSingle();
     if (row == null) return null;
     final post = Map<String, dynamic>.from(row);
 
@@ -3398,6 +5148,10 @@ $examples
       if (avatar.isNotEmpty) {
         post['avatar_url'] = avatar;
         post['avatarPath'] = avatar;
+      }
+      if (user != null) {
+        post['author_verified'] = isVerifiedUser(user);
+        post.addAll(authorSubscriptionPostFields(user));
       }
     } catch (e, st) { _logIgnoredError(e, st); }
 
@@ -4218,6 +5972,7 @@ $examples
 
     final user = await getUserByUsername(username);
     final avatarUrl = ((user == null ? null : user['avatar_url']) ?? '').toString().trim();
+    final authorSubscriptionFields = authorSubscriptionPostFields(user);
     final payload = <String, dynamic>{
       'user_id': (user == null ? null : user['id']),
       'username': displayUsername(username),
@@ -4228,6 +5983,7 @@ $examples
       'voice_url': safeVoiceUrl,
       'voice_seconds': voiceSeconds,
       'author_verified': isVerifiedUser(user),
+      ...authorSubscriptionFields,
       'audience': audience.trim().isEmpty ? 'public' : audience.trim(),
       'community_id': communityId.trim(),
       'community_name': communityName.trim(),
@@ -4248,6 +6004,12 @@ $examples
       // توافق مع المشاريع القديمة التي لم تضف الأعمدة الجديدة بعد.
       payload.remove('avatar_url');
       payload.remove('author_verified');
+      payload.remove('author_subscription_tier');
+      payload.remove('author_subscription_priority');
+      payload.remove('author_subscription_boost_until');
+      payload.remove('author_post_max_chars');
+      payload.remove('author_ai_daily_limit');
+      payload.remove('author_subscription_label');
       payload.remove('audience');
       payload.remove('community_id');
       payload.remove('community_name');
@@ -4349,10 +6111,9 @@ $examples
     String communityId = '',
     String communityName = '',
   }) async {
-    final response = await http.post(
-      Uri.parse(respectAiReportReviewBackendUrl),
-      headers: _jsonSecretHeaders(),
-      body: jsonEncode({
+    final response = await _postSignedJson(
+  Uri.parse(respectAiReportReviewBackendUrl),
+  {
         'reportId': reportId,
         'postId': postId,
         'reporterUsername': displayUsername(reporterUsername),
@@ -4362,8 +6123,9 @@ $examples
         'postText': postText,
         'communityId': communityId,
         'communityName': communityName,
-      }),
-    ).timeout(const Duration(seconds: 90));
+      },
+  timeout: const Duration(seconds: 90),
+);
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw Exception('AI report review error: ${response.statusCode} ${response.body}');
@@ -4434,25 +6196,177 @@ $examples
     return '${pair[0]}__${pair[1]}';
   }
 
-  static Future<List<Map<String, dynamic>>> getMessagesBetween(String user1, String user2) async {
+  static Future<List<Map<String, dynamic>>> getMessagesBetween(
+    String user1,
+    String user2, {
+    int limit = 150,
+    String? afterCreatedAt,
+  }) async {
     final u1 = displayUsername(user1);
     final u2 = displayUsername(user2);
-    final data = await client
+    unawaited(SecureCryptoService.ensureCurrentUserPublicKey(u1));
+
+    dynamic query = client
         .from('messages')
         .select()
-        .or('and(sender_username.eq.$u1,receiver_username.eq.$u2),and(sender_username.eq.$u2,receiver_username.eq.$u1)')
-        .order('created_at', ascending: true);
-    return List<Map<String, dynamic>>.from(data.map((e) => Map<String, dynamic>.from(e)));
+        .or('and(sender_username.eq.$u1,receiver_username.eq.$u2),and(sender_username.eq.$u2,receiver_username.eq.$u1)');
+
+    final after = afterCreatedAt?.trim();
+    if (after != null && after.isNotEmpty) {
+      query = query.gt('created_at', after);
+    }
+
+    final safeLimit = limit.clamp(30, 300).toInt();
+    final data = await query
+        .order('created_at', ascending: true)
+        .limit(safeLimit)
+        .timeout(const Duration(seconds: 10));
+    final rows = List<Map<String, dynamic>>.from(data.map((e) => Map<String, dynamic>.from(e)));
+    return SecureCryptoService.decryptDirectRows(rows, u1);
   }
 
   static Future<List<Map<String, dynamic>>> getInboxMessages(String username) async {
     final u = displayUsername(username);
+    unawaited(SecureCryptoService.ensureCurrentUserPublicKey(u));
     final data = await client
         .from('messages')
         .select()
         .or('sender_username.eq.$u,receiver_username.eq.$u')
         .order('created_at', ascending: false);
-    return List<Map<String, dynamic>>.from(data.map((e) => Map<String, dynamic>.from(e)));
+    final rows = List<Map<String, dynamic>>.from(data.map((e) => Map<String, dynamic>.from(e)));
+    return SecureCryptoService.decryptDirectRows(rows, u);
+  }
+
+
+
+  static String _encryptedMediaContentType() => 'application/octet-stream';
+
+  static Future<String> uploadEncryptedChatMedia({
+    required String sender,
+    required String receiver,
+    required String filePath,
+    required String mediaType,
+  }) async {
+    final senderUsername = displayUsername(sender);
+    final receiverUsername = displayUsername(receiver);
+    final encrypted = await SecureCryptoService.encryptMediaFileForPeer(
+      sender: senderUsername,
+      receiver: receiverUsername,
+      filePath: filePath,
+      mediaType: mediaType,
+    );
+    final encryptedFile = encrypted['file'] as File;
+    final metadata = Map<String, dynamic>.from(encrypted['metadata'] as Map);
+    final clean = normalizeUsername(senderUsername);
+    final type = mediaType.toLowerCase().trim().isEmpty ? 'file' : mediaType.toLowerCase().trim();
+    final storagePath = 'chat/$clean/encrypted/$type/${DateTime.now().microsecondsSinceEpoch}.renc';
+
+    await client.storage.from('post-media').upload(
+      storagePath,
+      encryptedFile,
+      fileOptions: FileOptions(
+        contentType: _encryptedMediaContentType(),
+        cacheControl: '604800',
+        upsert: true,
+      ),
+    );
+
+    final url = client.storage.from('post-media').getPublicUrl(storagePath);
+    metadata
+      ..['url'] = url
+      ..['sender'] = senderUsername
+      ..['receiver'] = receiverUsername;
+    return jsonEncode(metadata);
+  }
+
+
+  static Future<String> uploadEncryptedGroupChatMedia({
+    required String groupId,
+    required String sender,
+    required String filePath,
+    required String mediaType,
+    int maxViews = 0,
+  }) async {
+    final senderUsername = displayUsername(sender);
+    final membersRows = await getChatGroupMembers(groupId);
+    final members = membersRows
+        .map((e) => displayUsername((e['username'] ?? '').toString()))
+        .where((u) => u != '@user')
+        .toSet()
+        .toList();
+    if (!members.contains(senderUsername)) members.add(senderUsername);
+    members.sort();
+    if (members.isEmpty) throw Exception('لا يوجد أعضاء لتشفير وسائط المجموعة');
+
+    final type = mediaType.toLowerCase().trim().isEmpty ? 'file' : mediaType.toLowerCase().trim();
+    final clean = normalizeUsername(senderUsername);
+    final recipients = <String, dynamic>{};
+    final missing = <String>[];
+
+    for (final member in members) {
+      try {
+        if (!await SecureCryptoService.hasPublicKeyForUsername(member)) {
+          missing.add(member);
+          continue;
+        }
+        final encrypted = await SecureCryptoService.encryptMediaFileForPeer(
+          sender: senderUsername,
+          receiver: member,
+          filePath: filePath,
+          mediaType: type,
+        );
+        final encryptedFile = encrypted['file'] as File;
+        final metadata = Map<String, dynamic>.from(encrypted['metadata'] as Map);
+        final storagePath = 'chat/$clean/encrypted/groups/$groupId/${normalizeUsername(member)}/$type/${DateTime.now().microsecondsSinceEpoch}_${Random().nextInt(999999)}.renc';
+
+        await client.storage.from('post-media').upload(
+          storagePath,
+          encryptedFile,
+          fileOptions: FileOptions(
+            contentType: _encryptedMediaContentType(),
+            cacheControl: '604800',
+            upsert: true,
+          ),
+        );
+
+        final url = client.storage.from('post-media').getPublicUrl(storagePath);
+        metadata
+          ..['url'] = url
+          ..['sender'] = senderUsername
+          ..['receiver'] = member
+          ..['media_type'] = type
+          ..['type'] = type;
+        recipients[member] = metadata;
+      } catch (e, st) {
+        _logIgnoredError(e, st);
+        missing.add(member);
+      }
+    }
+
+    if (recipients.isEmpty) {
+      throw Exception('GROUP_E2EE_NOT_READY: لا يمكن رفع الوسائط المشفرة قبل تجهيز مفاتيح أعضاء المجموعة. افتح التطبيق من حسابات الأعضاء مرة واحدة بعد التحديث.');
+    }
+
+    return jsonEncode(<String, dynamic>{
+      'respect_group_e2ee_media': true,
+      'version': SecureCryptoService.groupEnvelopeVersion,
+      'crypto_version': SecureCryptoService.encryptionVersion,
+      'group_id': groupId.trim(),
+      'sender': senderUsername,
+      'media_type': type,
+      'type': type,
+      'recipients': recipients,
+      if (maxViews > 0) 'max_views': maxViews.clamp(0, 2).toInt(),
+      if (missing.isNotEmpty) 'missing': missing,
+      'created_at': DateTime.now().toUtc().toIso8601String(),
+    });
+  }
+
+  static Future<Map<String, dynamic>> decryptGroupMessageRow(
+    Map<String, dynamic> row,
+    String currentUsername,
+  ) {
+    return SecureCryptoService.decryptGroupRow(Map<String, dynamic>.from(row), currentUsername);
   }
 
   static Future<Map<String, dynamic>> sendMessage({
@@ -4467,21 +6381,32 @@ $examples
     String? replySender,
   }) async {
     final current = await currentUser();
+    final senderUsername = displayUsername(sender);
+    final receiverUsername = displayUsername(receiver);
+    final encryptedFields = await SecureCryptoService.encryptedDirectFields(
+      sender: senderUsername,
+      receiver: receiverUsername,
+      text: text,
+      replyText: replyText,
+    );
     final payload = <String, dynamic>{
-      'sender_username': displayUsername(sender),
-      'receiver_username': displayUsername(receiver),
-      'text': text.trim(),
+      'sender_username': senderUsername,
+      'receiver_username': receiverUsername,
+      'text': (encryptedFields['text'] ?? text.trim()).toString(),
       'is_read': false,
       'status': 'sent',
-      'sender_name': ((current == null ? null : current['name']) ?? (current == null ? null : current['profileName']) ?? displayUsername(sender)).toString(),
+      'sender_name': ((current == null ? null : current['name']) ?? (current == null ? null : current['profileName']) ?? senderUsername).toString(),
       'sender_avatar': ((current == null ? null : current['avatar_url']) ?? (current == null ? null : current['imagePath']) ?? (current == null ? null : current['profileImagePath']) ?? '').toString(),
     };
+    for (final entry in encryptedFields.entries) {
+      if (entry.key != 'text' && entry.value != null) payload[entry.key] = entry.value;
+    }
 
     final cleanReplyId = replyToId?.trim() ?? '';
     final cleanReplyText = replyText?.trim() ?? '';
     if (cleanReplyId.isNotEmpty || cleanReplyText.isNotEmpty) {
       payload['reply_to_id'] = cleanReplyId;
-      payload['reply_text'] = cleanReplyText;
+      payload['reply_text'] = (encryptedFields['reply_text'] ?? cleanReplyText).toString();
       payload['reply_sender'] = displayUsername(replySender ?? '');
     }
 
@@ -4495,14 +6420,15 @@ $examples
 
     try {
       final inserted = await client.from('messages').insert(payload).select().single();
-      return Map<String, dynamic>.from(inserted);
+      return await SecureCryptoService.decryptDirectRow(Map<String, dynamic>.from(inserted), senderUsername);
     } catch (_) {
       payload.remove('status');
       payload.remove('sender_name');
       payload.remove('sender_avatar');
+      _removeEncryptionPayloadFields(payload);
       try {
         final inserted = await client.from('messages').insert(payload).select().single();
-        return Map<String, dynamic>.from(inserted);
+        return await SecureCryptoService.decryptDirectRow(Map<String, dynamic>.from(inserted), senderUsername);
       } catch (_) {
         payload.remove('reply_to_id');
         payload.remove('reply_text');
@@ -4511,8 +6437,73 @@ $examples
         payload.remove('media_url');
         payload.remove('voice_seconds');
         final inserted = await client.from('messages').insert(payload).select().single();
-        return Map<String, dynamic>.from(inserted);
+        return await SecureCryptoService.decryptDirectRow(Map<String, dynamic>.from(inserted), senderUsername);
       }
+    }
+  }
+
+
+  static void _removeEncryptionPayloadFields(Map<String, dynamic> payload) {
+    payload.remove('encrypted');
+    payload.remove('encryption_version');
+    payload.remove('ciphertext');
+    payload.remove('nonce');
+    payload.remove('mac');
+    payload.remove('reply_ciphertext');
+    payload.remove('reply_nonce');
+    payload.remove('reply_mac');
+    if ((payload['text'] ?? '').toString() == SecureCryptoService.encryptedTextPlaceholder) {
+      payload['text'] = 'رسالة';
+    }
+    if ((payload['reply_text'] ?? '').toString() == SecureCryptoService.encryptedTextPlaceholder) {
+      payload['reply_text'] = 'رسالة';
+    }
+  }
+
+
+  static Future<Map<String, dynamic>> sendCallHistoryMessage({
+    required String sender,
+    required String receiver,
+    required String callId,
+    required bool video,
+    required String status,
+    int durationSeconds = 0,
+  }) async {
+    final cleanStatus = status.trim().isEmpty ? 'missed' : status.trim();
+    final text = video
+        ? 'مكالمة فيديو ${_callStatusArabic(cleanStatus)}'
+        : 'مكالمة صوتية ${_callStatusArabic(cleanStatus)}';
+
+    final meta = jsonEncode(<String, dynamic>{
+      'kind': 'call',
+      'call_id': callId,
+      'video': video,
+      'status': cleanStatus,
+      'duration_seconds': durationSeconds,
+      'created_at': DateTime.now().toUtc().toIso8601String(),
+    });
+
+    return sendMessage(
+      sender: sender,
+      receiver: receiver,
+      text: text,
+      mediaType: 'call',
+      mediaUrl: meta,
+    );
+  }
+
+  static String _callStatusArabic(String status) {
+    switch (status) {
+      case 'answered':
+        return 'تم الرد عليها';
+      case 'rejected':
+        return 'مرفوضة';
+      case 'cancelled':
+        return 'ملغاة';
+      case 'missed':
+        return 'فائتة';
+      default:
+        return 'منتهية';
     }
   }
 
@@ -4541,9 +6532,12 @@ $examples
       }
     }
     rows.sort((a, b) {
-      final au = displayUsername((a['username'] ?? '').toString()) == respectAiUsername ? 0 : 1;
-      final bu = displayUsername((b['username'] ?? '').toString()) == respectAiUsername ? 0 : 1;
-      return au.compareTo(bu);
+      final au = displayUsername((a['username'] ?? '').toString()) == respectAiUsername ? 100000 : searchPriorityWeightForUser(a);
+      final bu = displayUsername((b['username'] ?? '').toString()) == respectAiUsername ? 100000 : searchPriorityWeightForUser(b);
+      if (au != bu) return bu.compareTo(au);
+      final av = (a['name'] ?? a['username'] ?? '').toString().toLowerCase();
+      final bv = (b['name'] ?? b['username'] ?? '').toString().toLowerCase();
+      return av.compareTo(bv);
     });
     return rows;
   }
@@ -4646,11 +6640,11 @@ $examples
     if (q.isEmpty || q.startsWith('#')) return _localSmartSearchTerms(q);
     final local = _localSmartSearchTerms(q);
     try {
-      final response = await http.post(
-        Uri.parse(respectAiSearchExpandBackendUrl),
-        headers: _jsonSecretHeaders(),
-        body: jsonEncode({'query': q, 'language': 'ar'}),
-      ).timeout(const Duration(seconds: 14));
+      final response = await _postSignedJson(
+  Uri.parse(respectAiSearchExpandBackendUrl),
+  {'query': q, 'language': 'ar'},
+  timeout: const Duration(seconds: 14),
+);
 
       if (response.statusCode < 200 || response.statusCode >= 300) return local;
       final decoded = jsonDecode(utf8.decode(response.bodyBytes));
@@ -4771,7 +6765,7 @@ $examples
       return ranked.take(safeLimit).toList();
     } catch (_) {
       try {
-        dynamic builder = client.from('posts').select();
+        dynamic builder = client.from('posts').select(_postListColumns);
         builder = _applyExploreTimeFilter(builder, timeFilter);
         final rows = await builder
             .order('created_at', ascending: false)
@@ -5182,7 +7176,61 @@ $examples
   // للمحاكي Android Emulator استخدم: http://10.0.2.2:8000
   // ═══════════════════════════════════════════════════════════════════════════
 
-  static const String pushApiBaseUrl = 'https://respect-app-9fzq.onrender.com';
+  static String get pushApiBaseUrl => respectApiBaseUrl;
+
+
+  static Future<Map<String, dynamic>> sendGeneralNotificationToAll({
+    required String title,
+    required String body,
+  }) async {
+    final cleanTitle = title.trim();
+    final cleanBody = body.trim();
+    if (cleanTitle.isEmpty || cleanBody.isEmpty) {
+      throw Exception('العنوان والنص مطلوبان');
+    }
+
+    final current = await currentUser();
+    final senderUsername = displayUsername(((current == null ? null : current['username']) ?? '').toString());
+    final senderName = ((current == null ? null : current['name']) ?? (current == null ? null : current['profileName']) ?? senderUsername).toString();
+
+    final response = await _postSignedJson(
+      Uri.parse('$pushApiBaseUrl/send_general_push'),
+      {
+        'title': cleanTitle,
+        'body': cleanBody,
+        'senderUsername': senderUsername,
+        'senderName': senderName,
+        'data': {
+          'type': 'general_notification',
+          'title': cleanTitle,
+          'body': cleanBody,
+          'senderUsername': senderUsername,
+          'senderName': senderName,
+        },
+      },
+      timeout: const Duration(seconds: 25),
+    );
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('HTTP ${response.statusCode}: ${response.body}');
+    }
+    final decoded = jsonDecode(response.body);
+    if (decoded is Map) return Map<String, dynamic>.from(decoded);
+    return {'ok': true};
+  }
+
+  static Future<List<Map<String, dynamic>>> getGeneralNotifications({int limit = 80}) async {
+    try {
+      final rows = await client
+          .from('respect_general_notifications')
+          .select()
+          .order('created_at', ascending: false)
+          .limit(limit);
+      return List<Map<String, dynamic>>.from(rows.map((e) => Map<String, dynamic>.from(e as Map)));
+    } catch (_) {
+      return <Map<String, dynamic>>[];
+    }
+  }
 
   static Future<void> sendPushToUser({
     required String receiverUsername,
@@ -5192,17 +7240,9 @@ $examples
     required Map<String, dynamic> data,
   }) async {
     try {
-      final headers = <String, String>{
-        'Content-Type': 'application/json',
-      };
-      if (pushApiSecret.trim().isNotEmpty) {
-        headers['X-App-Secret'] = pushApiSecret.trim();
-      }
-
-      final response = await http.post(
+      final response = await _postSignedJson(
         Uri.parse('$pushApiBaseUrl/send_user_push'),
-        headers: headers,
-        body: jsonEncode({
+        {
           'receiverUsername': displayUsername(receiverUsername),
           'type': type,
           'title': title,
@@ -5213,8 +7253,9 @@ $examples
             'title': title,
             'body': body,
           },
-        }),
-      ).timeout(const Duration(seconds: 12));
+        },
+        timeout: const Duration(seconds: 12),
+      );
 
       _safeDebugLog('Push API response for $type: ${response.statusCode} - ${response.body}');
     } catch (e) {
@@ -5230,20 +7271,18 @@ $examples
     required String text,
   }) async {
     try {
-      final headers = <String, String>{'Content-Type': 'application/json'};
-      if (pushApiSecret.trim().isNotEmpty) headers['X-App-Secret'] = pushApiSecret.trim();
-
-      final response = await http.post(
+      final response = await _postSignedJson(
         Uri.parse('$pushApiBaseUrl/send_message_push'),
-        headers: headers,
-        body: jsonEncode({
+        {
           'receiverUsername': displayUsername(receiverUsername),
-          'senderUsername': displayUsername(senderUsername),
-          'senderName': senderName,
+          'senderUsername': displayUsername(senderUsername), // للفتح داخل المحادثة فقط، بدون نص أو اسم ظاهر
+          'senderName': '',
           'messageId': messageId,
-          'text': text,
-        }),
-      ).timeout(const Duration(seconds: 12));
+          'text': '',
+          'privacy': 'metadata_only',
+        },
+        timeout: const Duration(seconds: 12),
+      );
 
       _safeDebugLog('Message push response: ${response.statusCode} - ${response.body}');
     } catch (e) {
@@ -5260,21 +7299,19 @@ $examples
     required bool video,
   }) async {
     try {
-      final headers = <String, String>{'Content-Type': 'application/json'};
-      if (pushApiSecret.trim().isNotEmpty) headers['X-App-Secret'] = pushApiSecret.trim();
-
-      final response = await http.post(
+      final response = await _postSignedJson(
         Uri.parse('$pushApiBaseUrl/send_call_push'),
-        headers: headers,
-        body: jsonEncode({
+        {
           'receiverUsername': displayUsername(receiverUsername),
           'callId': callId,
-          'callerUsername': displayUsername(callerUsername),
-          'callerName': callerName,
-          'callerAvatar': callerAvatar,
+          'callerUsername': displayUsername(callerUsername), // للربط فقط
+          'callerName': '',
+          'callerAvatar': '',
           'video': video,
-        }),
-      ).timeout(const Duration(seconds: 12));
+          'privacy': 'metadata_only',
+        },
+        timeout: const Duration(seconds: 12),
+      );
 
       _safeDebugLog('Call push response: ${response.statusCode} - ${response.body}');
     } catch (e) {
@@ -5426,6 +7463,49 @@ $examples
         .eq('username', displayUsername(username));
   }
 
+  static Future<void> leaveChatGroup({required String groupId, required String username}) async {
+    final me = displayUsername(username);
+    if (groupId.trim().isEmpty || me == '@user') return;
+
+    final groupRaw = await client.from('respect_chat_groups').select().eq('id', groupId).maybeSingle();
+    final group = groupRaw == null ? <String, dynamic>{} : Map<String, dynamic>.from(groupRaw as Map);
+    final founder = displayUsername((group['founder_username'] ?? '').toString());
+    final members = await getChatGroupMembers(groupId);
+    final others = members
+        .where((m) => displayUsername((m['username'] ?? '').toString()) != me)
+        .map((m) => Map<String, dynamic>.from(m))
+        .toList();
+
+    if (founder == me && others.isNotEmpty) {
+      final nextFounder = displayUsername((others.first['username'] ?? '').toString());
+      await client.from('respect_chat_group_members').update({'role': 'founder'}).eq('group_id', groupId).eq('username', nextFounder);
+      await client.from('respect_chat_groups').update({
+        'founder_username': nextFounder,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', groupId);
+    }
+
+    await client
+        .from('respect_chat_group_members')
+        .delete()
+        .eq('group_id', groupId)
+        .eq('username', me);
+
+    if (others.isEmpty) {
+      try { await client.from('respect_group_messages').delete().eq('group_id', groupId); } catch (_) {}
+      try { await client.from('respect_chat_groups').delete().eq('id', groupId); } catch (_) {}
+    } else {
+      await client.from('respect_chat_groups').update({
+        'last_message': '$me خرج من المجموعة',
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', groupId);
+      for (final member in others) {
+        final u = displayUsername((member['username'] ?? '').toString());
+        unawaited(sendUserBroadcast(username: u, event: 'group_updated', payload: {'group_id': groupId, 'left_username': me}));
+      }
+    }
+  }
+
   static Future<void> setChatGroupLocked({required String groupId, required bool locked}) async {
     await client.from('respect_chat_groups').update({
       'locked': locked,
@@ -5433,15 +7513,32 @@ $examples
     }).eq('id', groupId);
   }
 
-  static Future<List<Map<String, dynamic>>> getGroupMessages(String groupId) async {
+  static Future<List<Map<String, dynamic>>> getGroupMessages(
+    String groupId, {
+    int limit = 300,
+    String? afterCreatedAt,
+  }) async {
     try {
-      final rows = await client
+      dynamic query = client
           .from('respect_group_messages')
           .select()
-          .eq('group_id', groupId)
+          .eq('group_id', groupId);
+
+      final after = afterCreatedAt?.trim();
+      if (after != null && after.isNotEmpty) {
+        query = query.gt('created_at', after);
+      }
+
+      final safeLimit = limit.clamp(30, 300).toInt();
+      final rows = await query
           .order('created_at', ascending: true)
-          .limit(300);
-      return List<Map<String, dynamic>>.from(rows.map((e) => Map<String, dynamic>.from(e as Map)));
+          .limit(safeLimit)
+          .timeout(const Duration(seconds: 10));
+      final list = List<Map<String, dynamic>>.from(rows.map((e) => Map<String, dynamic>.from(e as Map)));
+      final current = await currentUser();
+      final me = displayUsername((current?['username'] ?? '').toString());
+      if (me == '@user') return list;
+      return SecureCryptoService.decryptGroupRows(list, me);
     } catch (_) {
       return <Map<String, dynamic>>[];
     }
@@ -5464,21 +7561,37 @@ $examples
     final senderAvatar = ((current == null ? null : current['avatar_url']) ?? (current == null ? null : current['imagePath']) ?? (current == null ? null : current['profileImagePath']) ?? '').toString();
     final now = DateTime.now().toUtc().toIso8601String();
 
+    final membersRows = await getChatGroupMembers(groupId);
+    final members = membersRows
+        .map((e) => displayUsername((e['username'] ?? '').toString()))
+        .where((u) => u != '@user')
+        .toSet()
+        .toList();
+    if (!members.contains(senderUsername)) members.add(senderUsername);
+
+    final cleanReplyId = replyToId?.trim() ?? '';
+    final cleanReplyText = replyText?.trim() ?? '';
+    final encryptedFields = await SecureCryptoService.encryptedGroupFields(
+      sender: senderUsername,
+      groupId: groupId,
+      memberUsernames: members,
+      text: text.trim(),
+      replyText: cleanReplyText,
+    );
+
     final payload = <String, dynamic>{
       'group_id': groupId,
       'sender_username': senderUsername,
       'sender_name': senderName,
       'sender_avatar': senderAvatar,
-      'text': text.trim(),
+      'text': (encryptedFields['text'] ?? '').toString(),
       'status': 'delivered',
       'created_at': now,
     };
 
-    final cleanReplyId = replyToId?.trim() ?? '';
-    final cleanReplyText = replyText?.trim() ?? '';
     if (cleanReplyId.isNotEmpty || cleanReplyText.isNotEmpty) {
       payload['reply_to_id'] = cleanReplyId;
-      payload['reply_text'] = cleanReplyText;
+      payload['reply_text'] = (encryptedFields['reply_text'] ?? '').toString();
       payload['reply_sender'] = displayUsername(replySender ?? '');
     }
 
@@ -5497,18 +7610,64 @@ $examples
       payload.remove('reply_to_id');
       payload.remove('reply_text');
       payload.remove('reply_sender');
-      payload.remove('media_type');
-      payload.remove('media_url');
-      payload.remove('voice_seconds');
       inserted = await client.from('respect_group_messages').insert(payload).select().single();
     }
 
     await client.from('respect_chat_groups').update({
-      'last_message': cleanMediaType == 'voice' ? 'رسالة صوتية' : text.trim(),
+      'last_message': cleanMediaType == 'voice'
+          ? '🔒 رسالة صوتية مشفرة'
+          : (cleanMediaType.isNotEmpty ? '🔒 وسائط مشفرة' : '🔒 رسالة مشفرة'),
       'updated_at': now,
     }).eq('id', groupId);
 
     return Map<String, dynamic>.from(inserted as Map);
+  }
+
+  static Future<void> updateChatMessageTextEncrypted({
+    required String messageId,
+    required bool group,
+    required String sender,
+    required String text,
+    String? receiver,
+    String? groupId,
+  }) async {
+    final clean = text.trim();
+    if (clean.isEmpty) return;
+    if (group) {
+      final gid = (groupId ?? '').trim();
+      if (gid.isEmpty) throw Exception('groupId is required');
+      final membersRows = await getChatGroupMembers(gid);
+      final members = membersRows
+          .map((e) => displayUsername((e['username'] ?? '').toString()))
+          .where((u) => u != '@user')
+          .toSet()
+          .toList();
+      if (!members.contains(displayUsername(sender))) members.add(displayUsername(sender));
+      final encrypted = await SecureCryptoService.encryptedGroupFields(
+        sender: sender,
+        groupId: gid,
+        memberUsernames: members,
+        text: clean,
+      );
+      await client.from('respect_group_messages').update({'text': encrypted['text']}).eq('id', messageId);
+    } else {
+      final peer = displayUsername(receiver ?? '');
+      if (peer == '@user') throw Exception('receiver is required');
+      final encrypted = await SecureCryptoService.encryptedDirectFields(
+        sender: sender,
+        receiver: peer,
+        text: clean,
+      );
+      final payload = <String, dynamic>{
+        'text': encrypted['text'],
+        'encrypted': encrypted['encrypted'],
+        'encryption_version': encrypted['encryption_version'],
+        'ciphertext': encrypted['ciphertext'],
+        'nonce': encrypted['nonce'],
+        'mac': encrypted['mac'],
+      };
+      await client.from('messages').update(payload).eq('id', messageId);
+    }
   }
 
   static Future<void> markGroupMessageDelivered(String messageId, String username) async {
@@ -5549,11 +7708,61 @@ $examples
   static Future<void> deleteChatMessage({required String messageId, required bool group}) async {
     final id = messageId.trim();
     if (id.isEmpty) return;
+    final payload = <String, dynamic>{
+      'message_id': id,
+      'status': 'deleted',
+      'action': 'delete',
+      'deleted': true,
+      'deleted_at': DateTime.now().toUtc().toIso8601String(),
+    };
+
     if (group) {
+      String groupId = '';
+      try {
+        final row = await client
+            .from('respect_group_messages')
+            .select('group_id')
+            .eq('id', id)
+            .maybeSingle();
+        groupId = (row?['group_id'] ?? '').toString();
+      } catch (e, st) { _logIgnoredError(e, st); }
+
       try { await client.from('respect_group_message_receipts').delete().eq('message_id', id); } catch (e, st) { _logIgnoredError(e, st); }
       await client.from('respect_group_messages').delete().eq('id', id);
+
+      if (groupId.trim().isNotEmpty) {
+        try {
+          final members = await getChatGroupMembers(groupId);
+          final tasks = <Future<void>>[];
+          for (final member in members) {
+            final username = displayUsername((member['username'] ?? '').toString());
+            if (username == '@user') continue;
+            tasks.add(sendUserBroadcast(username: username, event: 'message_status', payload: {...payload, 'group_id': groupId}));
+          }
+          await Future.wait(tasks, eagerError: false);
+        } catch (e, st) { _logIgnoredError(e, st); }
+      }
     } else {
+      final recipients = <String>{};
+      try {
+        final row = await client
+            .from('messages')
+            .select('sender_username,receiver_username')
+            .eq('id', id)
+            .maybeSingle();
+        if (row != null) {
+          recipients.add(displayUsername((row['sender_username'] ?? '').toString()));
+          recipients.add(displayUsername((row['receiver_username'] ?? '').toString()));
+        }
+      } catch (e, st) { _logIgnoredError(e, st); }
+
       await client.from('messages').delete().eq('id', id);
+
+      final tasks = <Future<void>>[];
+      for (final username in recipients.where((u) => u != '@user')) {
+        tasks.add(sendUserBroadcast(username: username, event: 'message_status', payload: payload));
+      }
+      await Future.wait(tasks, eagerError: false);
     }
   }
 
@@ -5609,8 +7818,8 @@ $examples
 
 
   // ================= Respect Painters / Weekly Art Tournament =================
-  static const String respectAiArtValidateBackendUrl = 'https://respect-app-9fzq.onrender.com/respect-ai/art/validate';
-  static const String respectAiArtTournamentBackendUrl = 'https://respect-app-9fzq.onrender.com/respect-ai/art/run-weekly-tournament';
+  static String get respectAiArtValidateBackendUrl => _backendEndpoint('/respect-ai/art/validate');
+  static String get respectAiArtTournamentBackendUrl => _backendEndpoint('/respect-ai/art/run-weekly-tournament');
 
   static int isoWeekNumber(DateTime date) {
     final d = DateTime.utc(date.year, date.month, date.day);
@@ -5675,17 +7884,17 @@ $examples
     String title = '',
     String description = '',
   }) async {
-    final response = await http.post(
-      Uri.parse(respectAiArtValidateBackendUrl),
-      headers: _jsonSecretHeaders(),
-      body: jsonEncode({
+    final response = await _postSignedJson(
+  Uri.parse(respectAiArtValidateBackendUrl),
+  {
         'username': displayUsername(username),
         'imageUrl': imageUrl,
         'imageUrls': [imageUrl],
         'text': '$title\n$description'.trim(),
         'contentType': 'art_drawing',
-      }),
-    ).timeout(const Duration(seconds: 90));
+      },
+  timeout: const Duration(seconds: 90),
+);
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw Exception('AI drawing validation error: ${response.statusCode} ${response.body}');
@@ -5796,11 +8005,11 @@ $examples
 
   static Future<Map<String, dynamic>> runArtWeeklyTournament({String? weekKey}) async {
     final week = (weekKey == null || weekKey.trim().isEmpty) ? currentArtWeekKey() : weekKey.trim();
-    final response = await http.post(
-      Uri.parse(respectAiArtTournamentBackendUrl),
-      headers: _jsonSecretHeaders(),
-      body: jsonEncode({'weekKey': week}),
-    ).timeout(const Duration(minutes: 5));
+    final response = await _postSignedJson(
+  Uri.parse(respectAiArtTournamentBackendUrl),
+  {'weekKey': week},
+  timeout: const Duration(minutes: 5),
+);
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw Exception('AI art tournament error: ${response.statusCode} ${response.body}');
@@ -5809,5 +8018,533 @@ $examples
     if (decoded is Map) return Map<String, dynamic>.from(decoded);
     return <String, dynamic>{'ok': false, 'reason': 'Invalid AI response'};
   }
+
+
+  // ================= Messaging Privacy / Requests / Reactions =================
+  static const String _messagingPrivacyLocalKeyPrefix = 'respect_msg_privacy_';
+
+  static Future<Map<String, dynamic>> getMessagingPrivacySettings(String username) async {
+    final user = displayUsername(username);
+    final defaults = <String, dynamic>{
+      'username': user,
+      'messages_enabled': true,
+      'verified_only_messages': false,
+      'calls_enabled': true,
+      'chat_requests_required': true,
+    };
+    try {
+      final row = await client.from('respect_messaging_privacy').select().eq('username', user).maybeSingle().timeout(const Duration(seconds: 6));
+      if (row != null) return <String, dynamic>{...defaults, ...Map<String, dynamic>.from(row as Map)};
+    } catch (e, st) { _logIgnoredError(e, st); }
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('$_messagingPrivacyLocalKeyPrefix${normalizeUsername(user)}');
+      if (raw != null && raw.trim().isNotEmpty) {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map) return <String, dynamic>{...defaults, ...decoded.map((k, v) => MapEntry(k.toString(), v))};
+      }
+    } catch (e, st) { _logIgnoredError(e, st); }
+    return defaults;
+  }
+
+  static Future<Map<String, dynamic>> updateMessagingPrivacySettings({
+    required String username,
+    required bool messagesEnabled,
+    required bool verifiedOnlyMessages,
+    required bool callsEnabled,
+    required bool chatRequestsRequired,
+  }) async {
+    final user = displayUsername(username);
+    Map<String, dynamic>? ownerUser;
+    try { ownerUser = await getUserByUsername(user); } catch (e, st) { _logIgnoredError(e, st); }
+    final canUseVerifiedOnly = canUseVerifiedOnlyMessagesFeature(ownerUser);
+    final safeVerifiedOnlyMessages = verifiedOnlyMessages && canUseVerifiedOnly;
+
+    final payload = <String, dynamic>{
+      'username': user,
+      'messages_enabled': messagesEnabled,
+      'verified_only_messages': safeVerifiedOnlyMessages,
+      'calls_enabled': callsEnabled,
+      'chat_requests_required': chatRequestsRequired,
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
+    };
+    try {
+      final row = await client.from('respect_messaging_privacy').upsert(payload, onConflict: 'username').select().single().timeout(const Duration(seconds: 8));
+      return Map<String, dynamic>.from(row as Map);
+    } catch (e, st) { _logIgnoredError(e, st); }
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('$_messagingPrivacyLocalKeyPrefix${normalizeUsername(user)}', jsonEncode(payload));
+    return payload;
+  }
+
+  static Future<Map<String, dynamic>> canSendDirectMessage({required String sender, required String receiver}) async {
+    final s = displayUsername(sender);
+    final r = displayUsername(receiver);
+    if (s == r) return <String, dynamic>{'allowed': true};
+    final settings = await getMessagingPrivacySettings(r);
+    if (!truthy(settings['messages_enabled'] ?? true)) return <String, dynamic>{'allowed': false, 'reason': 'messages_disabled'};
+    if (truthy(settings['verified_only_messages'])) {
+      final receiverUser = await getUserByUsername(r);
+      final receiverCanUseVerifiedOnly = canUseVerifiedOnlyMessagesFeature(receiverUser);
+      if (receiverCanUseVerifiedOnly) {
+        final senderUser = await getUserByUsername(s);
+        if (!isVerifiedUser(senderUser)) {
+          return <String, dynamic>{
+            'allowed': false,
+            'reason': 'verified_only',
+            'required_sender_status': 'verified',
+            'receiver_tier': subscriptionTierForUser(receiverUser),
+          };
+        }
+      } else {
+        // لو انتهى اشتراك صاحب الحساب أو لم يكن ذهبي/مميز، لا نطبق القفل حتى لو بقيت القيمة true في الجدول.
+        unawaited(updateMessagingPrivacySettings(
+          username: r,
+          messagesEnabled: truthy(settings['messages_enabled'] ?? true),
+          verifiedOnlyMessages: false,
+          callsEnabled: truthy(settings['calls_enabled'] ?? true),
+          chatRequestsRequired: truthy(settings['chat_requests_required'] ?? true),
+        ));
+      }
+    }
+    if (truthy(settings['chat_requests_required'] ?? true)) {
+      final accepted = await hasAcceptedChatRequest(s, r);
+      final previousMessages = await _hasAnyDirectMessage(s, r);
+      if (!accepted && !previousMessages) return <String, dynamic>{'allowed': false, 'reason': 'request_required'};
+    }
+    return <String, dynamic>{'allowed': true};
+  }
+
+  static Future<bool> _hasAnyDirectMessage(String a, String b) async {
+    try {
+      final rows = await client.from('messages').select('id').or('and(sender_username.eq.$a,receiver_username.eq.$b),and(sender_username.eq.$b,receiver_username.eq.$a)').limit(1).timeout(const Duration(seconds: 5));
+      return rows is List && rows.isNotEmpty;
+    } catch (_) { return false; }
+  }
+
+  static Future<Map<String, dynamic>> canCallUser({required String caller, required String receiver}) async {
+    final settings = await getMessagingPrivacySettings(receiver);
+    if (!truthy(settings['calls_enabled'] ?? true)) return <String, dynamic>{'allowed': false, 'reason': 'calls_disabled'};
+    return <String, dynamic>{'allowed': true};
+  }
+
+  static Future<bool> hasAcceptedChatRequest(String user1, String user2) async {
+    final a = displayUsername(user1);
+    final b = displayUsername(user2);
+    try {
+      final row = await client
+          .from('respect_chat_requests')
+          .select('id')
+          .or('and(sender_username.eq.$a,receiver_username.eq.$b),and(sender_username.eq.$b,receiver_username.eq.$a)')
+          .eq('status', 'accepted')
+          .maybeSingle()
+          .timeout(const Duration(seconds: 6));
+      return row != null;
+    } catch (_) { return false; }
+  }
+
+  static Future<Map<String, dynamic>> createChatRequest({required String sender, required String receiver}) async {
+    final s = displayUsername(sender);
+    final r = displayUsername(receiver);
+    final now = DateTime.now().toUtc().toIso8601String();
+    final payload = <String, dynamic>{'sender_username': s, 'receiver_username': r, 'status': 'pending', 'created_at': now, 'updated_at': now};
+    try {
+      final row = await client.from('respect_chat_requests').upsert(payload, onConflict: 'sender_username,receiver_username').select().single().timeout(const Duration(seconds: 8));
+      await sendUserBroadcast(username: r, event: 'new_message', payload: {'message': {'id': 'request_$now', 'sender_username': s, 'receiver_username': r, 'text': 'طلب دردشة جديد', 'created_at': now}});
+      return Map<String, dynamic>.from(row as Map);
+    } catch (e, st) { _logIgnoredError(e, st); }
+    return payload;
+  }
+
+  static Future<List<Map<String, dynamic>>> getIncomingChatRequests(String username) async {
+    final user = displayUsername(username);
+    try {
+      final rows = await client.from('respect_chat_requests').select().eq('receiver_username', user).eq('status', 'pending').order('created_at', ascending: false).timeout(const Duration(seconds: 6));
+      return List<Map<String, dynamic>>.from((rows as List).map((e) => Map<String, dynamic>.from(e as Map)));
+    } catch (_) { return <Map<String, dynamic>>[]; }
+  }
+
+  static Future<void> respondChatRequest({required String requestId, required bool approve}) async {
+    final id = requestId.trim();
+    if (id.isEmpty) return;
+    try {
+      await client.from('respect_chat_requests').update({'status': approve ? 'accepted' : 'rejected', 'updated_at': DateTime.now().toUtc().toIso8601String()}).eq('id', id).timeout(const Duration(seconds: 8));
+    } catch (e, st) { _logIgnoredError(e, st); }
+  }
+
+  static Future<Map<String, bool>> getMyMessageReactions(String username) async {
+    final user = displayUsername(username);
+    final out = <String, bool>{};
+    try {
+      final rows = await client.from('respect_message_reactions').select('message_id').eq('username', user).eq('reaction', 'like').timeout(const Duration(seconds: 6));
+      for (final row in rows) {
+        final id = (row['message_id'] ?? '').toString();
+        if (id.isNotEmpty) out[id] = true;
+      }
+    } catch (e, st) { _logIgnoredError(e, st); }
+    return out;
+  }
+
+  static Future<void> setMessageReaction({required String messageId, required String username, required bool liked, bool group = false}) async {
+    final id = messageId.trim();
+    final user = displayUsername(username);
+    if (id.isEmpty) return;
+    try {
+      if (liked) {
+        await client.from('respect_message_reactions').upsert({
+          'message_id': id,
+          'username': user,
+          'reaction': 'like',
+          'is_group': group,
+          'created_at': DateTime.now().toUtc().toIso8601String(),
+        }, onConflict: 'message_id,username,reaction').timeout(const Duration(seconds: 6));
+      } else {
+        await client.from('respect_message_reactions').delete().eq('message_id', id).eq('username', user).eq('reaction', 'like').timeout(const Duration(seconds: 6));
+      }
+    } catch (e, st) { _logIgnoredError(e, st); }
+  }
+
+
+  // ================= Supabase Communities =================
+  // مهم: المجتمعات لازم تُقرأ من Supabase وليس SharedPreferences.
+  // SharedPreferences محلي على الجهاز، لذلك في نسخة release أو عند مستخدم آخر تظهر المجتمعات وكأنها اختفت.
+  static String _newCommunityId() {
+    final now = DateTime.now().toUtc().microsecondsSinceEpoch;
+    final rnd = Random.secure();
+    final salt = List.generate(8, (_) => rnd.nextInt(16).toRadixString(16)).join();
+    return 'community_${now}_$salt';
+  }
+
+  static List<String> _communityStringList(dynamic value, {bool usernames = false}) {
+    dynamic raw = value;
+    if (raw is String) {
+      final trimmed = raw.trim();
+      if (trimmed.isEmpty) return <String>[];
+      try {
+        raw = jsonDecode(trimmed);
+      } catch (_) {
+        raw = trimmed.split(',');
+      }
+    }
+    if (raw is! Iterable) return <String>[];
+    final out = <String>{};
+    for (final item in raw) {
+      final v = item.toString().trim();
+      if (v.isEmpty) continue;
+      out.add(usernames ? displayUsername(v) : v);
+    }
+    return out.toList();
+  }
+
+  static Map<String, dynamic> _normalizeCommunityRow(Map raw, {List<Map<String, dynamic>> posts = const <Map<String, dynamic>>[]}) {
+    final row = raw.map((key, value) => MapEntry(key.toString(), value));
+    final owner = displayUsername((row['owner_username'] ?? row['ownerUsername'] ?? row['owner'] ?? '').toString());
+    final moderators = _communityStringList(row['moderators'], usernames: true);
+    final members = _communityStringList(row['members'], usernames: true);
+    final kicked = _communityStringList(row['kicked_members'] ?? row['kickedMembers'], usernames: true);
+
+    if (owner != '@user') {
+      if (!moderators.contains(owner)) moderators.insert(0, owner);
+      if (!members.contains(owner)) members.insert(0, owner);
+    }
+
+    return <String, dynamic>{
+      'id': (row['id'] ?? _newCommunityId()).toString(),
+      'name': (row['name'] ?? 'مجتمع').toString(),
+      'description': (row['description'] ?? '').toString(),
+      'ownerUsername': owner,
+      'owner_username': owner,
+      'moderators': moderators.toSet().toList(),
+      'members': members.toSet().toList(),
+      'kickedMembers': kicked.toSet().toList(),
+      'kicked_members': kicked.toSet().toList(),
+      'messages': row['messages'] is List ? row['messages'] : <dynamic>[],
+      'reports': row['reports'] is List ? row['reports'] : <dynamic>[],
+      'posts': posts,
+      'created_at': (row['created_at'] ?? '').toString(),
+    };
+  }
+
+  static Map<String, dynamic> _communityPayloadFromJson(Map<String, dynamic> community, {String? ownerUsername}) {
+    final id = (community['id'] ?? '').toString().trim().isEmpty
+        ? _newCommunityId()
+        : (community['id'] ?? '').toString().trim();
+    final owner = displayUsername(
+      (ownerUsername ?? community['owner_username'] ?? community['ownerUsername'] ?? community['owner'] ?? '').toString(),
+    );
+    final moderators = _communityStringList(community['moderators'], usernames: true);
+    final members = _communityStringList(community['members'], usernames: true);
+    final kicked = _communityStringList(community['kicked_members'] ?? community['kickedMembers'], usernames: true);
+
+    if (owner != '@user') {
+      if (!moderators.contains(owner)) moderators.insert(0, owner);
+      if (!members.contains(owner)) members.insert(0, owner);
+    }
+
+    return <String, dynamic>{
+      'id': id,
+      'name': (community['name'] ?? 'مجتمع').toString().trim().isEmpty
+          ? 'مجتمع'
+          : (community['name'] ?? 'مجتمع').toString().trim(),
+      'description': (community['description'] ?? '').toString().trim(),
+      'owner_username': owner,
+      'moderators': moderators.toSet().toList(),
+      'members': members.toSet().toList(),
+      'kicked_members': kicked.toSet().toList(),
+      if ((community['created_at'] ?? '').toString().trim().isNotEmpty)
+        'created_at': (community['created_at'] ?? '').toString(),
+    };
+  }
+
+  static Future<List<Map<String, dynamic>>> getCommunities({bool includePosts = true}) async {
+    try {
+      final rows = await client
+          .from('communities')
+          .select('id,name,description,owner_username,moderators,members,kicked_members,created_at')
+          .order('created_at', ascending: false)
+          .timeout(const Duration(seconds: 10));
+
+      final communityRows = List<Map<String, dynamic>>.from(
+        (rows as List).whereType<Map>().map((e) => Map<String, dynamic>.from(e)),
+      );
+      if (communityRows.isEmpty) return <Map<String, dynamic>>[];
+
+      final postsByCommunity = <String, List<Map<String, dynamic>>>{};
+      if (includePosts) {
+        final ids = communityRows.map((e) => (e['id'] ?? '').toString()).where((e) => e.isNotEmpty).toSet().toList();
+        if (ids.isNotEmpty) {
+          try {
+            final postRows = await client
+                .from('posts')
+                .select('id,username,name,user,text,created_at,time,avatar_url,avatarPath,image_url,video_url,voice_url,voicePath,voice_seconds,voiceSeconds,likes,reposts,shares,views,replies,reply_count,community_id,community_name,community_hidden,community_pinned,author_verified,author_subscription_tier,author_subscription_priority,author_subscription_boost_until,author_subscription_label')
+                .inFilter('community_id', ids)
+                .eq('community_hidden', false)
+                .order('created_at', ascending: false)
+                .timeout(const Duration(seconds: 10));
+            for (final raw in postRows) {
+              if (raw is! Map) continue;
+              final post = raw.map((key, value) => MapEntry(key.toString(), value));
+              final cid = (post['community_id'] ?? '').toString();
+              if (cid.isEmpty) continue;
+              (postsByCommunity[cid] ??= <Map<String, dynamic>>[]).add(post);
+            }
+          } catch (e, st) {
+            _logIgnoredError(e, st);
+          }
+        }
+      }
+
+      return communityRows
+          .map((row) => _normalizeCommunityRow(row, posts: postsByCommunity[(row['id'] ?? '').toString()] ?? const <Map<String, dynamic>>[]))
+          .toList();
+    } catch (e, st) {
+      _logIgnoredError(e, st);
+      return <Map<String, dynamic>>[];
+    }
+  }
+
+  static Future<Map<String, dynamic>?> getCommunityById(String communityId, {bool includePosts = true}) async {
+    final id = communityId.trim();
+    if (id.isEmpty) return null;
+    try {
+      final row = await client
+          .from('communities')
+          .select('id,name,description,owner_username,moderators,members,kicked_members,created_at')
+          .eq('id', id)
+          .maybeSingle()
+          .timeout(const Duration(seconds: 8));
+      if (row == null) return null;
+
+      var posts = <Map<String, dynamic>>[];
+      if (includePosts) {
+        try {
+          final postRows = await client
+              .from('posts')
+              .select('id,username,name,user,text,created_at,time,avatar_url,avatarPath,image_url,video_url,voice_url,voicePath,voice_seconds,voiceSeconds,likes,reposts,shares,views,replies,reply_count,community_id,community_name,community_hidden,community_pinned,author_verified,author_subscription_tier,author_subscription_priority,author_subscription_boost_until,author_subscription_label')
+              .eq('community_id', id)
+              .eq('community_hidden', false)
+              .order('created_at', ascending: false)
+              .timeout(const Duration(seconds: 8));
+          posts = List<Map<String, dynamic>>.from(
+            (postRows as List).whereType<Map>().map((e) => e.map((key, value) => MapEntry(key.toString(), value))),
+          );
+        } catch (e, st) {
+          _logIgnoredError(e, st);
+        }
+      }
+      return _normalizeCommunityRow(Map<String, dynamic>.from(row as Map), posts: posts);
+    } catch (e, st) {
+      _logIgnoredError(e, st);
+      return null;
+    }
+  }
+
+  static Future<Map<String, dynamic>> createCommunity({
+    required String name,
+    required String description,
+    required String ownerUsername,
+  }) async {
+    final owner = displayUsername(ownerUsername);
+    final payload = <String, dynamic>{
+      'id': _newCommunityId(),
+      'name': name.trim().isEmpty ? 'مجتمع' : name.trim(),
+      'description': description.trim(),
+      'owner_username': owner,
+      'moderators': <String>[owner],
+      'members': <String>[owner],
+      'kicked_members': <String>[],
+    };
+
+    final inserted = await client
+        .from('communities')
+        .insert(payload)
+        .select('id,name,description,owner_username,moderators,members,kicked_members,created_at')
+        .single()
+        .timeout(const Duration(seconds: 10));
+    return _normalizeCommunityRow(Map<String, dynamic>.from(inserted as Map));
+  }
+
+  static Future<Map<String, dynamic>> upsertCommunity(Map<String, dynamic> community, {String? ownerUsername}) async {
+    final payload = _communityPayloadFromJson(community, ownerUsername: ownerUsername);
+    final inserted = await client
+        .from('communities')
+        .upsert(payload, onConflict: 'id')
+        .select('id,name,description,owner_username,moderators,members,kicked_members,created_at')
+        .single()
+        .timeout(const Duration(seconds: 10));
+    return _normalizeCommunityRow(Map<String, dynamic>.from(inserted as Map));
+  }
+
+  static Future<void> upsertCommunities(List<Map<String, dynamic>> communities, {String? ownerUsername}) async {
+    if (communities.isEmpty) return;
+    final payloads = communities.map((c) => _communityPayloadFromJson(c, ownerUsername: ownerUsername)).toList();
+    try {
+      await client.from('communities').upsert(payloads, onConflict: 'id').timeout(const Duration(seconds: 12));
+    } catch (e, st) {
+      _logIgnoredError(e, st);
+    }
+  }
+
+  static Future<Map<String, dynamic>?> updateCommunity(Map<String, dynamic> community) async {
+    final id = (community['id'] ?? '').toString().trim();
+    if (id.isEmpty) return null;
+    final payload = _communityPayloadFromJson(community)..remove('id')..remove('created_at');
+    try {
+      final updated = await client
+          .from('communities')
+          .update(payload)
+          .eq('id', id)
+          .select('id,name,description,owner_username,moderators,members,kicked_members,created_at')
+          .maybeSingle()
+          .timeout(const Duration(seconds: 10));
+      if (updated == null) return null;
+      return _normalizeCommunityRow(Map<String, dynamic>.from(updated as Map));
+    } catch (e, st) {
+      _logIgnoredError(e, st);
+      return null;
+    }
+  }
+
+  static Future<Map<String, dynamic>?> setCommunityMembers({
+    required String communityId,
+    required List<String> members,
+    List<String>? moderators,
+    List<String>? kickedMembers,
+  }) async {
+    final id = communityId.trim();
+    if (id.isEmpty) return null;
+    final payload = <String, dynamic>{
+      'members': _communityStringList(members, usernames: true),
+      if (moderators != null) 'moderators': _communityStringList(moderators, usernames: true),
+      if (kickedMembers != null) 'kicked_members': _communityStringList(kickedMembers, usernames: true),
+    };
+    try {
+      final updated = await client
+          .from('communities')
+          .update(payload)
+          .eq('id', id)
+          .select('id,name,description,owner_username,moderators,members,kicked_members,created_at')
+          .maybeSingle()
+          .timeout(const Duration(seconds: 10));
+      if (updated == null) return null;
+      return _normalizeCommunityRow(Map<String, dynamic>.from(updated as Map));
+    } catch (e, st) {
+      _logIgnoredError(e, st);
+      return null;
+    }
+  }
+
+  static Future<Map<String, dynamic>?> joinCommunity({required String communityId, required String username}) async {
+    final community = await getCommunityById(communityId, includePosts: false);
+    if (community == null) return null;
+    final user = displayUsername(username);
+    final kicked = _communityStringList(community['kickedMembers'] ?? community['kicked_members'], usernames: true);
+    if (kicked.contains(user)) {
+      throw StateError('هذا المستخدم مطرود من المجتمع');
+    }
+    final members = _communityStringList(community['members'], usernames: true);
+    if (!members.contains(user)) members.add(user);
+    return setCommunityMembers(
+      communityId: communityId,
+      members: members,
+      moderators: _communityStringList(community['moderators'], usernames: true),
+      kickedMembers: kicked,
+    );
+  }
+
+  static Future<Map<String, dynamic>?> leaveCommunity({required String communityId, required String username}) async {
+    final community = await getCommunityById(communityId, includePosts: false);
+    if (community == null) return null;
+    final user = displayUsername(username);
+    final owner = displayUsername((community['ownerUsername'] ?? community['owner_username'] ?? '').toString());
+    if (user == owner) return community;
+    final members = _communityStringList(community['members'], usernames: true)..remove(user);
+    final moderators = _communityStringList(community['moderators'], usernames: true)..remove(user);
+    return setCommunityMembers(
+      communityId: communityId,
+      members: members,
+      moderators: moderators,
+      kickedMembers: _communityStringList(community['kickedMembers'] ?? community['kicked_members'], usernames: true),
+    );
+  }
+
+  static Future<Map<String, dynamic>?> kickCommunityMember({
+    required String communityId,
+    required String username,
+    bool kicked = true,
+  }) async {
+    final community = await getCommunityById(communityId, includePosts: false);
+    if (community == null) return null;
+    final user = displayUsername(username);
+    final owner = displayUsername((community['ownerUsername'] ?? community['owner_username'] ?? '').toString());
+    if (user == owner) return community;
+
+    final members = _communityStringList(community['members'], usernames: true)..remove(user);
+    final moderators = _communityStringList(community['moderators'], usernames: true)..remove(user);
+    final kickedMembers = _communityStringList(community['kickedMembers'] ?? community['kicked_members'], usernames: true);
+    if (kicked) {
+      if (!kickedMembers.contains(user)) kickedMembers.add(user);
+    } else {
+      kickedMembers.remove(user);
+    }
+    return setCommunityMembers(
+      communityId: communityId,
+      members: members,
+      moderators: moderators,
+      kickedMembers: kickedMembers,
+    );
+  }
+
+  static Future<void> deleteCommunity(String communityId) async {
+    final id = communityId.trim();
+    if (id.isEmpty) return;
+    try {
+      await client.from('communities').delete().eq('id', id).timeout(const Duration(seconds: 10));
+    } catch (e, st) {
+      _logIgnoredError(e, st);
+    }
+  }
+
+
 
 }

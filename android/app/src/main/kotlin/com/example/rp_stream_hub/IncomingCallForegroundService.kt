@@ -13,6 +13,25 @@ class IncomingCallForegroundService : Service() {
 
     companion object {
         private const val CHANNEL_ID = "respect_calls_channel_service"
+        private val activeCalls = LinkedHashMap<String, Long>()
+        private const val ACTIVE_CALL_TTL_MS = 2 * 60 * 1000L
+
+        private fun cleanupActiveCalls() {
+            val now = System.currentTimeMillis()
+            val iterator = activeCalls.entries.iterator()
+            while (iterator.hasNext()) {
+                val entry = iterator.next()
+                if (now - entry.value > ACTIVE_CALL_TTL_MS) iterator.remove()
+            }
+        }
+
+        private fun markIncomingShown(callId: String): Boolean {
+            cleanupActiveCalls()
+            if (callId.isBlank()) return false
+            if (activeCalls.containsKey(callId)) return false
+            activeCalls[callId] = System.currentTimeMillis()
+            return true
+        }
         private const val NOTIFICATION_ID = 101
         const val ACTION_SHOW_INCOMING_CALL = "SHOW_INCOMING_CALL"
         const val EXTRA_CALL_ID = "call_id"
@@ -38,6 +57,7 @@ class IncomingCallForegroundService : Service() {
         }
 
         fun stop(context: Context) {
+            try { activeCalls.clear() } catch (_: Exception) {}
             context.stopService(Intent(context, IncomingCallForegroundService::class.java))
         }
     }
@@ -54,6 +74,10 @@ class IncomingCallForegroundService : Service() {
             val callerUsername = intent.getStringExtra(EXTRA_CALLER_USERNAME) ?: ""
             val callerAvatar = intent.getStringExtra(EXTRA_CALLER_AVATAR) ?: ""
             val video = intent.getBooleanExtra(EXTRA_VIDEO, false)
+
+            if (!markIncomingShown(callId)) {
+                return START_NOT_STICKY
+            }
 
             val notification = buildForegroundNotification(callId, callerName, callerUsername, callerAvatar, video)
             startForeground(NOTIFICATION_ID, notification)
@@ -73,7 +97,7 @@ class IncomingCallForegroundService : Service() {
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 "Respect Incoming Calls",
-                NotificationManager.IMPORTANCE_HIGH
+                NotificationManager.IMPORTANCE_MAX
             ).apply {
                 description = "شاشة ورنين المكالمات الواردة"
                 setSound(ringtoneUri, attrs)

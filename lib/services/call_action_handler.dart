@@ -5,6 +5,7 @@ import '../screens/call_screen.dart';
 import 'call_service.dart';
 import 'supabase_service.dart';
 import 'notification_service.dart';
+import 'secure_crypto_service.dart';
 
 void _scannerSafeIgnore() {}
 
@@ -12,6 +13,8 @@ void _scannerSafeIgnore() {}
 class CallActionHandler {
   static const MethodChannel _channel = MethodChannel('incoming_call_channel');
   static bool _initialized = false;
+  static final Set<String> _openingCalls = <String>{};
+  static final Set<String> _handledActions = <String>{};
 
   static void initialize() {
     if (_initialized) return;
@@ -35,6 +38,7 @@ class CallActionHandler {
         if (action == null || callId == null) return;
 
         if (action == 'accept') {
+          await _stopIncomingNativeUi();
           _openCallScreen(
             callId: callId,
             callerName: callerName,
@@ -44,7 +48,7 @@ class CallActionHandler {
             isCaller: false,
           );
         } else if (action == 'reject') {
-          await _rejectCall(callId);
+          await _rejectCall(callId, callerUsername: callerUsername);
         }
         break;
 
@@ -66,6 +70,7 @@ class CallActionHandler {
         final video = args['video'] as bool? ?? false;
 
         if (action == 'accept' && callId != null) {
+          await _stopIncomingNativeUi();
           _openCallScreen(
             callId: callId,
             callerName: callerName,
@@ -89,14 +94,25 @@ class CallActionHandler {
     required bool video,
     required bool isCaller,
   }) async {
+    final actionKey = 'open:$callId';
+    if (_openingCalls.contains(callId) || _handledActions.contains(actionKey)) return;
+    _openingCalls.add(callId);
+    _handledActions.add(actionKey);
+
     final navigator = NotificationService.navigatorKey.currentState;
-    if (navigator == null) return;
+    if (navigator == null) {
+      _openingCalls.remove(callId);
+      return;
+    }
 
     final callService = CallService();
     final currentUser = await SupabaseService.currentUser();
     final calleeUsername = SupabaseService.displayUsername((currentUser?['username'] ?? '').toString());
 
-    if (!navigator.mounted) return;
+    if (!navigator.mounted) {
+      _openingCalls.remove(callId);
+      return;
+    }
     await navigator.push(
       MaterialPageRoute(
         builder: (_) => CallScreen(
@@ -112,16 +128,47 @@ class CallActionHandler {
         ),
       ),
     );
+    _openingCalls.remove(callId);
   }
 
-  static Future<void> _rejectCall(String callId) async {
+  static Future<void> _stopIncomingNativeUi() async {
+    try {
+      await _channel.invokeMethod('stopIncomingCall');
+    } catch (_) {
+      _scannerSafeIgnore();
+    }
+  }
+
+  static Future<void> _rejectCall(String callId, {String? callerUsername}) async {
+    await _stopIncomingNativeUi();
     try {
       final client = SupabaseService.client;
+      final currentUser = await SupabaseService.currentUser();
+      final me = SecureCryptoService.displayUsername((currentUser?['username'] ?? '').toString());
+      final peer = SecureCryptoService.displayUsername(callerUsername ?? '');
+      final clearPayload = <String, dynamic>{'ended': true, 'reason': 'rejected'};
+      Map<String, dynamic>? encryptedPayload;
+      if (me != '@user' && peer != '@user' && me != peer) {
+        try {
+          await SecureCryptoService.ensureCurrentUserPublicKey(me);
+          if (await SecureCryptoService.hasPublicKeyForUsername(peer)) {
+            encryptedPayload = await SecureCryptoService.encryptCallSignalPayload(
+              sender: me,
+              receiver: peer,
+              roomId: callId,
+              signalType: 'reject',
+              payload: clearPayload,
+            );
+          }
+        } catch (_) {
+          encryptedPayload = null;
+        }
+      }
       final signalData = {
         'room_id': callId,
         'sender_id': 'reject_sender_${DateTime.now().millisecondsSinceEpoch}',
-        'type': 'end',
-        'payload': {'ended': true},
+        'type': encryptedPayload == null ? 'reject' : 'encrypted_signal',
+        'payload': encryptedPayload ?? clearPayload,
       };
       await client.from('call_signals').insert(signalData);
     } catch (e) {
