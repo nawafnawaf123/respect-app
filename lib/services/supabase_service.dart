@@ -105,6 +105,8 @@ class SupabaseService {
   static String get respectAiStoryModerationBackendUrl => _backendEndpoint('/respect-ai/moderate-story');
   static String get respectAiReportReviewBackendUrl => _backendEndpoint('/respect-ai/review-report');
   static String get respectAiSearchExpandBackendUrl => _backendEndpoint('/respect-ai/search-expand');
+  static String get respectAiAppFeedbackSubmitBackendUrl => _backendEndpoint('/respect-ai/app-feedback/submit');
+  static String get respectAiAppFeedbackApproveBackendUrl => _backendEndpoint('/respect-ai/app-feedback/approve');
   static String get authOtpBackendBaseUrl => respectApiBaseUrl;
   static const String respectAiUsername = '@respectai';
   static const String respectAiName = 'Respect AI';
@@ -2314,6 +2316,79 @@ class SupabaseService {
       }
     }
     throw Exception('Respect AI empty answer');
+  }
+
+
+
+  static Future<Map<String, dynamic>> submitRespectAiAppFeedback({
+    required String username,
+    required String name,
+    required String title,
+    required String note,
+    String screen = '',
+    String appVersion = '1.0.0',
+  }) async {
+    final cleanNote = note.trim();
+    if (cleanNote.length < 8) {
+      throw Exception('اكتب وصف المشكلة بتفاصيل أكثر');
+    }
+
+    final endpoint = respectAiAppFeedbackSubmitBackendUrl.trim();
+    final payload = <String, dynamic>{
+      'username': displayUsername(username),
+      'name': name.trim(),
+      'title': title.trim().isEmpty ? 'بلاغ مشكلة في Respect App' : title.trim(),
+      'note': cleanNote,
+      'screen': screen.trim(),
+      'appVersion': appVersion.trim(),
+      'deviceInfo': <String, dynamic>{
+        'platform': _safeDevicePlatform,
+        'isWeb': kIsWeb,
+        'apiBaseUrl': respectApiBaseUrl,
+        'sentAt': DateTime.now().toUtc().toIso8601String(),
+      },
+      'language': 'ar',
+    };
+
+    final response = await _postSignedJson(
+      Uri.parse(endpoint),
+      payload,
+      timeout: const Duration(seconds: 160),
+    );
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('Respect AI feedback error: ${response.statusCode} ${response.body}');
+    }
+
+    final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+    if (decoded is Map) return Map<String, dynamic>.from(decoded);
+    throw Exception('استجابة غير مفهومة من سيرفر البلاغات');
+  }
+
+  static Future<Map<String, dynamic>> approveRespectAiAppFeedbackFix({
+    required String reportId,
+    required String approvedBy,
+  }) async {
+    final cleanId = reportId.trim();
+    if (cleanId.isEmpty) throw Exception('reportId مطلوب');
+
+    final endpoint = respectAiAppFeedbackApproveBackendUrl.trim();
+    final response = await _postSignedJson(
+      Uri.parse(endpoint),
+      <String, dynamic>{
+        'reportId': cleanId,
+        'approvedBy': displayUsername(approvedBy),
+      },
+      timeout: const Duration(seconds: 220),
+    );
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('Respect AI approve error: ${response.statusCode} ${response.body}');
+    }
+
+    final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+    if (decoded is Map) return Map<String, dynamic>.from(decoded);
+    throw Exception('استجابة غير مفهومة من سيرفر التصحيح');
   }
 
   static bool _localObviousViolation(String text) {

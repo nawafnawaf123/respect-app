@@ -36,6 +36,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final TextEditingController _phoneCountryCtrl = TextEditingController(text: '+961');
   final TextEditingController _phoneCtrl = TextEditingController();
   final TextEditingController _phoneCodeCtrl = TextEditingController();
+  final TextEditingController _feedbackTitleCtrl = TextEditingController(text: 'مشكلة في التطبيق');
+  final TextEditingController _feedbackNoteCtrl = TextEditingController();
+  final TextEditingController _feedbackScreenCtrl = TextEditingController(text: 'الإعدادات');
   String _phoneE164 = '';
   bool _phoneVerified = false;
   bool _smsSecurityEnabled = false;
@@ -54,6 +57,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _canUseVerifiedOnlyMessages = false;
   bool _savingMessagingPrivacy = false;
 
+  bool _sendingAiFeedback = false;
+  bool _approvingAiFeedbackFix = false;
+  Map<String, dynamic>? _latestAiFeedbackResult;
+
   @override
   void initState() {
     super.initState();
@@ -65,6 +72,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _phoneCountryCtrl.dispose();
     _phoneCtrl.dispose();
     _phoneCodeCtrl.dispose();
+    _feedbackTitleCtrl.dispose();
+    _feedbackNoteCtrl.dispose();
+    _feedbackScreenCtrl.dispose();
     super.dispose();
   }
 
@@ -352,6 +362,228 @@ class _SettingsScreenState extends State<SettingsScreen> {
     });
   }
 
+
+
+  bool get _canApproveAiFeedbackFix {
+    final clean = _profileUsername.trim().toLowerCase().replaceAll('@', '');
+    return clean == 'mjakcon8' || clean == 'nawafrp' || clean == 'nawaf_city' || clean == 'nawafnawaf123';
+  }
+
+  String _aiFeedbackStatusText(String status) {
+    switch (status.trim().toLowerCase()) {
+      case 'analyzed':
+        return 'تم التحليل وينتظر موافقتك';
+      case 'approved':
+        return 'تمت الموافقة ويجري تجهيز التصحيح';
+      case 'pull_request_created':
+        return 'تم إنشاء Pull Request في GitHub';
+      case 'applied':
+        return 'تم تجهيز التصحيح';
+      case 'failed':
+        return 'فشل تنفيذ التصحيح';
+      default:
+        return status.isEmpty ? 'لم يتم الإرسال بعد' : status;
+    }
+  }
+
+  Future<void> _submitAiFeedbackReport() async {
+    if (_sendingAiFeedback) return;
+    final note = _feedbackNoteCtrl.text.trim();
+    if (note.length < 8) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('اكتب وصف المشكلة بتفاصيل أكثر')),
+      );
+      return;
+    }
+
+    FocusScope.of(context).unfocus();
+    setState(() => _sendingAiFeedback = true);
+    try {
+      final result = await SupabaseService.submitRespectAiAppFeedback(
+        username: _profileUsername,
+        name: _profileName,
+        title: _feedbackTitleCtrl.text,
+        note: note,
+        screen: _feedbackScreenCtrl.text,
+        appVersion: '1.0.0',
+      );
+      if (!mounted) return;
+      setState(() => _latestAiFeedbackResult = result);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تم إرسال البلاغ وبدأ تحليل Qwen3-Coder')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تعذر تحليل البلاغ: ${e.toString().replaceFirst('Exception: ', '')}')),
+      );
+    } finally {
+      if (mounted) setState(() => _sendingAiFeedback = false);
+    }
+  }
+
+  Future<void> _approveAiFeedbackFix() async {
+    if (_approvingAiFeedbackFix) return;
+    final reportId = (_latestAiFeedbackResult?['id'] ?? _latestAiFeedbackResult?['reportId'] ?? '').toString();
+    if (reportId.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('لا يوجد بلاغ محلل للموافقة عليه')),
+      );
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('تأكيد التصحيح'),
+        content: const Text('سيتم طلب التصحيح من Qwen3-Coder ثم إنشاء Pull Request في GitHub إذا كانت مفاتيح GitHub مضبوطة على السيرفر.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('إلغاء')),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(context, true),
+            icon: const Icon(Icons.auto_fix_high_rounded),
+            label: const Text('ابدأ التصحيح'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _approvingAiFeedbackFix = true);
+    try {
+      final result = await SupabaseService.approveRespectAiAppFeedbackFix(
+        reportId: reportId,
+        approvedBy: _profileUsername,
+      );
+      if (!mounted) return;
+      setState(() => _latestAiFeedbackResult = result);
+      final prUrl = (result['pullRequestUrl'] ?? result['prUrl'] ?? '').toString();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(prUrl.isNotEmpty ? 'تم إنشاء Pull Request للتصحيح' : 'تم تجهيز نتيجة التصحيح')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تعذر تنفيذ التصحيح: ${e.toString().replaceFirst('Exception: ', '')}')),
+      );
+    } finally {
+      if (mounted) setState(() => _approvingAiFeedbackFix = false);
+    }
+  }
+
+  Widget _buildAiFeedbackCard() {
+    final result = _latestAiFeedbackResult;
+    final analysis = result == null ? null : Map<String, dynamic>.from((result['analysis'] is Map ? result['analysis'] : result) as Map);
+    final status = (result?['status'] ?? analysis?['status'] ?? '').toString();
+    final suspectedFilesRaw = analysis?['suspectedFiles'] ?? analysis?['files'] ?? result?['suspectedFiles'];
+    final suspectedFiles = suspectedFilesRaw is List
+        ? suspectedFilesRaw.map((e) => e.toString()).where((e) => e.trim().isNotEmpty).take(8).toList()
+        : <String>[];
+    final summary = (analysis?['summary'] ?? analysis?['problem'] ?? result?['summary'] ?? '').toString();
+    final prUrl = (result?['pullRequestUrl'] ?? result?['prUrl'] ?? '').toString();
+
+    return GlassCard(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 14, 14, 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(Icons.bug_report_rounded, color: AppColors.purple),
+              title: Text('ملاحظات / بلاغ مشكلة', style: TextStyle(fontWeight: FontWeight.w900)),
+              subtitle: Text('اكتب المشكلة، وQwen3-Coder يراجع ملفات GitHub ويحدد سببها. التصحيح لا يبدأ إلا بعد موافقة الأدمن.'),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _feedbackTitleCtrl,
+              textInputAction: TextInputAction.next,
+              decoration: InputDecoration(
+                labelText: 'عنوان المشكلة',
+                hintText: 'مثلاً: زر تعديل الملف الشخصي لا يعمل',
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _feedbackScreenCtrl,
+              textInputAction: TextInputAction.next,
+              decoration: InputDecoration(
+                labelText: 'مكان المشكلة / الصفحة',
+                hintText: 'مثلاً: الملف الشخصي، الفيد، الرسائل',
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _feedbackNoteCtrl,
+              minLines: 4,
+              maxLines: 8,
+              decoration: InputDecoration(
+                labelText: 'وصف المشكلة',
+                hintText: 'اشرح ماذا حدث، ماذا توقعت، وهل ظهر خطأ معين',
+                alignLabelWithHint: true,
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
+              ),
+            ),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed: _sendingAiFeedback ? null : _submitAiFeedbackReport,
+              icon: _sendingAiFeedback
+                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.psychology_alt_rounded),
+              label: Text(_sendingAiFeedback ? 'جاري التحليل...' : 'إرسال وتشغيل Qwen3-Coder'),
+            ),
+            if (result != null) ...[
+              const SizedBox(height: 14),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppColors.purple.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: AppColors.purple.withValues(alpha: 0.22)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('الحالة: ${_aiFeedbackStatusText(status)}', style: const TextStyle(fontWeight: FontWeight.w900)),
+                    if (summary.trim().isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Text(summary),
+                    ],
+                    if (suspectedFiles.isNotEmpty) ...[
+                      const SizedBox(height: 10),
+                      const Text('الملفات المتوقعة:', style: TextStyle(fontWeight: FontWeight.w900)),
+                      const SizedBox(height: 4),
+                      ...suspectedFiles.map((file) => Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 2),
+                        child: Text('• $file', textDirection: TextDirection.ltr),
+                      )),
+                    ],
+                    if (prUrl.isNotEmpty) ...[
+                      const SizedBox(height: 10),
+                      Text('Pull Request: $prUrl', textDirection: TextDirection.ltr),
+                    ],
+                    if (_canApproveAiFeedbackFix && status.toLowerCase() == 'analyzed') ...[
+                      const SizedBox(height: 12),
+                      OutlinedButton.icon(
+                        onPressed: _approvingAiFeedbackFix ? null : _approveAiFeedbackFix,
+                        icon: _approvingAiFeedbackFix
+                            ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                            : const Icon(Icons.auto_fix_high_rounded),
+                        label: Text(_approvingAiFeedbackFix ? 'جاري التصحيح...' : 'الموافقة وبدء التصحيح'),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   // طبقة الخصوصية تغطي الشاشة كاملة مع تأثير جانبي
   Widget _privacyOverlay() {
     if (!_privacyModeEnabled) return const SizedBox.shrink();
@@ -434,6 +666,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       activeThumbColor: AppColors.purple,
                     ),
                   ).animate().fadeIn(delay: 200.ms),
+
+                  const SizedBox(height: 12),
+
+                  _buildAiFeedbackCard().animate().fadeIn(delay: 220.ms),
 
                   const SizedBox(height: 12),
 

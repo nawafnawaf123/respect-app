@@ -271,6 +271,25 @@ QWEN_VISION_MODEL = os.getenv("QWEN_VISION_MODEL", "qwen-vl-plus").strip() or "q
 QWEN_MODEL = QWEN_TEXT_MODEL
 QWEN_BASE_URL = os.getenv("QWEN_BASE_URL", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1").rstrip("/")
 
+# ================= Respect App AI Fixer / GitHub =================
+# يقرأ ملفات المشروع من GitHub، يجعل Qwen3-Coder يحلل البلاغ، ثم بعد موافقة الأدمن
+# ينشئ Pull Request بدل تعديل التطبيق مباشرة من جهاز المستخدم.
+RESPECT_REPO_URL = os.getenv("RESPECT_REPO_URL", "https://github.com/nawafnawaf123/Respect-app.git").strip()
+RESPECT_REPO_OWNER = os.getenv("RESPECT_REPO_OWNER", "").strip()
+RESPECT_REPO_NAME = os.getenv("RESPECT_REPO_NAME", "").strip()
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
+GITHUB_DEFAULT_BRANCH = os.getenv("GITHUB_DEFAULT_BRANCH", "").strip()
+GITHUB_API_BASE = os.getenv("GITHUB_API_BASE", "https://api.github.com").rstrip("/")
+QWEN_CODER_MODEL = os.getenv("QWEN_CODER_MODEL", "qwen3-coder-plus").strip() or "qwen3-coder-plus"
+AI_FIX_ADMIN_USERNAMES = {
+    normalize.strip().lower().replace("@", "")
+    for normalize in os.getenv("AI_FIX_ADMIN_USERNAMES", "mjakcon8,nawafrp,nawaf_city,nawafnawaf123").split(",")
+    if normalize.strip()
+}
+APP_AI_FEEDBACK_TABLE = os.getenv("APP_AI_FEEDBACK_TABLE", "app_ai_feedback").strip() or "app_ai_feedback"
+AI_FIX_MAX_FILES = int(os.getenv("AI_FIX_MAX_FILES", "10"))
+AI_FIX_MAX_FILE_CHARS = int(os.getenv("AI_FIX_MAX_FILE_CHARS", "18000"))
+
 
 # ================= Respect Cyber AI / Hugging Face Inference Providers =================
 # هذا لا يشغل الموديل داخل Render، بل يستدعي Hugging Face API حتى لا ينهار السيرفر بسبب RAM/CPU.
@@ -930,6 +949,21 @@ class RespectAISearchExpandResponse(BaseModel):
     terms: list[str]
     model: str
 
+
+class AppAIFeedbackSubmitRequest(BaseModel):
+    username: str = ""
+    name: str = ""
+    title: str = Field(default="بلاغ مشكلة في Respect App", min_length=1)
+    note: str = Field(default="", min_length=8)
+    screen: str = ""
+    appVersion: str = ""
+    deviceInfo: Dict[str, Any] = Field(default_factory=dict)
+    language: str = "ar"
+
+
+class AppAIFeedbackApproveRequest(BaseModel):
+    reportId: str = Field(default="", min_length=3)
+    approvedBy: str = ""
 
 
 
@@ -6094,6 +6128,451 @@ def respect_ai_search_expand(req: RespectAISearchExpandRequest, x_app_secret: Op
 
 
 # ================= Respect Cyber Admin Web Center =================
+
+
+def _repo_owner_name() -> tuple[str, str]:
+    owner = RESPECT_REPO_OWNER.strip()
+    name = RESPECT_REPO_NAME.strip()
+    if owner and name:
+        return owner, name.replace(".git", "")
+    raw = RESPECT_REPO_URL.strip()
+    # يدعم https://github.com/owner/repo.git أو git@github.com:owner/repo.git
+    match = re.search(r"github\.com[:/]+([^/]+)/([^/]+?)(?:\.git)?/?$", raw)
+    if not match:
+        raise HTTPException(status_code=500, detail="RESPECT_REPO_URL غير صالح. ضع رابط GitHub صحيح في متغيرات Render.")
+    return match.group(1), match.group(2).replace(".git", "")
+
+
+def _github_headers(require_token: bool = False) -> Dict[str, str]:
+    if require_token and not GITHUB_TOKEN:
+        raise HTTPException(status_code=500, detail="GITHUB_TOKEN missing. ضعه في Render حتى يستطيع السيرفر إنشاء Pull Request.")
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "Respect-App-AI-Fixer",
+    }
+    if GITHUB_TOKEN:
+        headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"
+    return headers
+
+
+def _github_request(method: str, path: str, *, params: Optional[Dict[str, Any]] = None, payload: Optional[Dict[str, Any]] = None, require_token: bool = False) -> Any:
+    url = f"{GITHUB_API_BASE}{path}"
+    try:
+        response = requests.request(
+            method.upper(),
+            url,
+            headers=_github_headers(require_token=require_token),
+            params=params,
+            json=payload,
+            timeout=35,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"GitHub request failed: {e}")
+    if response.status_code >= 400:
+        raise HTTPException(status_code=500, detail=f"GitHub error {response.status_code}: {_safe_response_text(response.text, 1200)}")
+    if not response.text.strip():
+        return {}
+    try:
+        return response.json()
+    except Exception:
+        return response.text
+
+
+def _github_default_branch(owner: str, repo: str) -> str:
+    if GITHUB_DEFAULT_BRANCH.strip():
+        return GITHUB_DEFAULT_BRANCH.strip()
+    data = _github_request("GET", f"/repos/{owner}/{repo}")
+    branch = str((data or {}).get("default_branch") or "main").strip()
+    return branch or "main"
+
+
+def _github_repo_tree(owner: str, repo: str, branch: str) -> list[Dict[str, Any]]:
+    data = _github_request("GET", f"/repos/{owner}/{repo}/git/trees/{branch}", params={"recursive": "1"})
+    tree = data.get("tree") if isinstance(data, dict) else None
+    if not isinstance(tree, list):
+        raise HTTPException(status_code=500, detail="تعذر قراءة شجرة ملفات GitHub")
+    allowed = (".dart", ".py", ".yaml", ".yml", ".json", ".sql", ".ts", ".tsx", ".js", ".md")
+    blocked_parts = {"build", ".dart_tool", ".git", "node_modules", "ios/Pods", "android/.gradle", "coverage"}
+    files: list[Dict[str, Any]] = []
+    for item in tree:
+        if not isinstance(item, dict) or item.get("type") != "blob":
+            continue
+        path = str(item.get("path") or "")
+        if not path or not path.lower().endswith(allowed):
+            continue
+        if any(part in path for part in blocked_parts):
+            continue
+        size = int(item.get("size") or 0)
+        if size > 650_000:
+            continue
+        files.append({"path": path, "size": size, "sha": item.get("sha")})
+    return files
+
+
+def _github_file_content(owner: str, repo: str, path: str, branch: str) -> Dict[str, Any]:
+    data = _github_request("GET", f"/repos/{owner}/{repo}/contents/{path}", params={"ref": branch})
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=500, detail=f"تعذر قراءة الملف {path}")
+    raw = str(data.get("content") or "")
+    encoding = str(data.get("encoding") or "")
+    text = ""
+    if encoding == "base64" and raw:
+        try:
+            text = base64.b64decode(raw.replace("\n", "")).decode("utf-8", errors="replace")
+        except Exception:
+            text = ""
+    return {"path": path, "sha": data.get("sha"), "content": text, "size": data.get("size") or len(text)}
+
+
+def _feedback_supabase_insert(row: Dict[str, Any]) -> Dict[str, Any]:
+    if not SB_URL or not (SB_SERVICE or SB_ANON):
+        return {"ok": False, "reason": "Supabase env missing"}
+    try:
+        response = requests.post(
+            f"{SB_URL}/rest/v1/{APP_AI_FEEDBACK_TABLE}",
+            headers={**_supabase_headers(use_service_role=True), "Prefer": "return=representation"},
+            json=row,
+            timeout=15,
+        )
+        if response.status_code >= 400:
+            return {"ok": False, "status": response.status_code, "body": _safe_response_text(response.text, 900)}
+        data = response.json() if response.text.strip() else []
+        return {"ok": True, "rows": data}
+    except Exception as e:
+        return {"ok": False, "reason": str(e)}
+
+
+def _feedback_supabase_patch(report_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    if not SB_URL or not (SB_SERVICE or SB_ANON):
+        return {"ok": False, "reason": "Supabase env missing"}
+    try:
+        response = requests.patch(
+            f"{SB_URL}/rest/v1/{APP_AI_FEEDBACK_TABLE}",
+            headers={**_supabase_headers(use_service_role=True), "Prefer": "return=representation"},
+            params={"id": f"eq.{report_id}"},
+            json=payload,
+            timeout=15,
+        )
+        if response.status_code >= 400:
+            return {"ok": False, "status": response.status_code, "body": _safe_response_text(response.text, 900)}
+        data = response.json() if response.text.strip() else []
+        return {"ok": True, "rows": data}
+    except Exception as e:
+        return {"ok": False, "reason": str(e)}
+
+
+def _feedback_supabase_get(report_id: str) -> Optional[Dict[str, Any]]:
+    if not SB_URL or not (SB_SERVICE or SB_ANON):
+        return None
+    try:
+        response = requests.get(
+            f"{SB_URL}/rest/v1/{APP_AI_FEEDBACK_TABLE}",
+            headers=_supabase_headers(use_service_role=True),
+            params={"select": "*", "id": f"eq.{report_id}", "limit": "1"},
+            timeout=15,
+        )
+        if response.status_code >= 400:
+            return None
+        rows = response.json()
+        if isinstance(rows, list) and rows:
+            return Dict[str, Any](rows[0]) if False else dict(rows[0])
+    except Exception:
+        return None
+    return None
+
+
+def _ai_fix_is_admin(username: str) -> bool:
+    clean = normalize_username(username).lower()
+    return bool(clean and clean in AI_FIX_ADMIN_USERNAMES)
+
+
+def _extract_json_object(raw: str) -> Dict[str, Any]:
+    text = (raw or "").strip()
+    if not text:
+        raise HTTPException(status_code=500, detail="Qwen returned empty JSON")
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    match = re.search(r"\{.*\}", text, flags=re.S)
+    if match:
+        try:
+            data = json.loads(match.group(0))
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+    raise HTTPException(status_code=500, detail=f"Qwen JSON parse failed: {_safe_response_text(text, 900)}")
+
+
+def _qwen_coder_json(messages: list[Dict[str, str]], *, max_tokens: int = 2500, temperature: float = 0.1) -> Dict[str, Any]:
+    if not QWEN_API_KEY:
+        raise HTTPException(status_code=500, detail="QWEN_API_KEY missing")
+    try:
+        raw = _chat_completion_request(
+            model=QWEN_CODER_MODEL,
+            api_key=QWEN_API_KEY,
+            base_url=QWEN_BASE_URL,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=120,
+            response_format={"type": "json_object"},
+            log_label="QWEN_CODER",
+        )
+    except HTTPException:
+        raw = _chat_completion_request(
+            model=QWEN_CODER_MODEL,
+            api_key=QWEN_API_KEY,
+            base_url=QWEN_BASE_URL,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=120,
+            log_label="QWEN_CODER_FALLBACK",
+        )
+    return _extract_json_object(raw)
+
+
+def _score_candidate_file(path: str, title: str, note: str, screen: str) -> int:
+    low_path = path.lower()
+    text = f"{title} {note} {screen}".lower()
+    score = 0
+    keywords = {
+        "settings": ["اعدادات", "الإعدادات", "settings", "ملاحظ", "بلاغ", "feedback"],
+        "profile": ["profile", "بروفايل", "الملف الشخصي", "حسابي", "تعديل"],
+        "feed": ["feed", "فيد", "الرئيسية", "منشور", "تغريدة", "هاشتاق"],
+        "chat": ["chat", "message", "رسائل", "دردشة"],
+        "login": ["login", "auth", "تسجيل", "دخول", "كلمة المرور"],
+        "admin": ["admin", "ادمن", "إدارة", "بلاغات"],
+        "supabase": ["supabase", "database", "قاعدة", "مجتمعات", "ديون"],
+        "server": ["server", "backend", "render", "ai", "qwen", "push", "otp"],
+        "notification": ["notification", "اشعار", "إشعار", "push"],
+        "live": ["live", "بث"],
+        "call": ["call", "مكالمة", "اتصال"],
+    }
+    for key, words in keywords.items():
+        if key in low_path and any(w.lower() in text for w in words):
+            score += 10
+    filename = low_path.rsplit("/", 1)[-1]
+    for token in re.findall(r"[a-zA-Z_]{4,}|[\u0600-\u06FF]{3,}", text):
+        t = token.lower().strip("_-")
+        if t and t in filename:
+            score += 3
+    # ملفات مركزية مهمة في مشروعك.
+    if low_path.endswith("supabase_service.dart"):
+        score += 4
+    if low_path.endswith("settings_screen.dart"):
+        score += 4
+    if low_path.endswith("server.py") or "server" in low_path:
+        score += 3
+    return score
+
+
+def _select_candidate_files(files: list[Dict[str, Any]], title: str, note: str, screen: str, limit: int) -> list[str]:
+    scored = []
+    for f in files:
+        path = str(f.get("path") or "")
+        if not path:
+            continue
+        score = _score_candidate_file(path, title, note, screen)
+        if score > 0:
+            scored.append((score, int(f.get("size") or 0), path))
+    scored.sort(key=lambda x: (-x[0], x[1], x[2]))
+    selected = [p for _, _, p in scored[:limit]]
+    for must in ["lib/screens/settings_screen.dart", "lib/services/supabase_service.dart", "server.py", "main.py", "app.py"]:
+        if len(selected) >= limit:
+            break
+        if any(str(f.get("path") or "") == must for f in files) and must not in selected:
+            selected.append(must)
+    if not selected:
+        selected = [str(f.get("path")) for f in files[:limit] if f.get("path")]
+    return selected[:limit]
+
+
+def _file_context(files: list[Dict[str, Any]], max_chars_per_file: int = AI_FIX_MAX_FILE_CHARS) -> str:
+    parts: list[str] = []
+    for f in files:
+        path = str(f.get("path") or "")
+        content = str(f.get("content") or "")
+        if len(content) > max_chars_per_file:
+            content = content[:max_chars_per_file] + "\n/* ... TRUNCATED_FOR_AI_CONTEXT ... */"
+        parts.append(f"\n===== FILE: {path} =====\n{content}")
+    return "\n".join(parts)
+
+
+def _analysis_suspected_paths(analysis: Dict[str, Any]) -> list[str]:
+    paths: list[str] = []
+    for key in ["filesToModify", "suspectedFiles", "files", "candidateFiles"]:
+        value = analysis.get(key)
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    path = str(item.get("path") or item.get("file") or "").strip()
+                else:
+                    path = str(item or "").strip()
+                if path and path not in paths:
+                    paths.append(path)
+    return paths[:AI_FIX_MAX_FILES]
+
+
+def _analyze_feedback_with_qwen(req: AppAIFeedbackSubmitRequest, report_id: str) -> Dict[str, Any]:
+    owner, repo = _repo_owner_name()
+    branch = _github_default_branch(owner, repo)
+    tree = _github_repo_tree(owner, repo, branch)
+    candidate_paths = _select_candidate_files(tree, req.title, req.note, req.screen, AI_FIX_MAX_FILES)
+    fetched: list[Dict[str, Any]] = []
+    for path in candidate_paths:
+        try:
+            fetched.append(_github_file_content(owner, repo, path, branch))
+        except Exception as e:
+            logger.warning("AI feedback fetch candidate failed path=%s err=%s", path, e)
+    file_list = "\n".join(f"- {f.get('path')} ({f.get('size', 0)} bytes)" for f in tree[:280])
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "أنت Qwen3-Coder داخل نظام صيانة Respect App. حلل بلاغ المستخدم على مشروع Flutter/FastAPI/Supabase. "
+                "لا تعدل الآن. فقط حدد الملفات المحتملة وسبب المشكلة وخطة تصحيح آمنة. "
+                "أعد JSON فقط بالمفاتيح: summary, problem, confidence, suspectedFiles, filesToModify, proposedFix, risk, testPlan, status. "
+                "filesToModify يجب أن تكون قائمة عناصر {path, reason}. status يجب أن تكون analyzed."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"REPORT_ID: {report_id}\n"
+                f"المستخدم: {req.username}\nالاسم: {req.name}\nالعنوان: {req.title}\nالصفحة: {req.screen}\nنسخة التطبيق: {req.appVersion}\n"
+                f"نص البلاغ:\n{req.note}\n\n"
+                f"قائمة ملفات المشروع المختصرة:\n{file_list[:18000]}\n\n"
+                f"محتوى ملفات مرشحة:\n{_file_context(fetched)}"
+            ),
+        },
+    ]
+    analysis = _qwen_coder_json(messages, max_tokens=2600, temperature=0.05)
+    analysis.setdefault("status", "analyzed")
+    analysis.setdefault("candidateFiles", candidate_paths)
+    analysis.setdefault("repo", {"owner": owner, "name": repo, "branch": branch})
+    return analysis
+
+
+def _generate_fix_with_qwen(report: Dict[str, Any]) -> Dict[str, Any]:
+    owner, repo = _repo_owner_name()
+    branch = _github_default_branch(owner, repo)
+    analysis = report.get("analysis") if isinstance(report.get("analysis"), dict) else {}
+    paths = _analysis_suspected_paths(analysis)
+    if not paths:
+        paths = list(analysis.get("candidateFiles") or [])[:AI_FIX_MAX_FILES] if isinstance(analysis.get("candidateFiles"), list) else []
+    if not paths:
+        raise HTTPException(status_code=400, detail="لا توجد ملفات محددة للتصحيح في التحليل")
+    fetched: list[Dict[str, Any]] = []
+    for path in paths[:AI_FIX_MAX_FILES]:
+        fetched.append(_github_file_content(owner, repo, path, branch))
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "أنت Qwen3-Coder. مطلوب منك تصحيح بلاغ في مشروع Flutter/FastAPI/Supabase. "
+                "أعد JSON فقط. لا تستخدم markdown. يجب أن يكون الشكل: "
+                "{summary, files:[{path, content, reason}], testPlan}. "
+                "content يجب أن يكون المحتوى الكامل الجديد للملف بعد التصحيح، وليس diff. "
+                "عدّل أقل عدد ممكن من الملفات ولا تغير ميزات غير مرتبطة بالبلاغ."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"البلاغ الأصلي:\nالعنوان: {report.get('title','')}\nالصفحة: {report.get('screen','')}\nالنص: {report.get('note','')}\n\n"
+                f"تحليل سابق:\n{json.dumps(analysis, ensure_ascii=False)[:12000]}\n\n"
+                f"محتوى الملفات المطلوب تصحيحها:\n{_file_context(fetched, max_chars_per_file=max(AI_FIX_MAX_FILE_CHARS, 22000))}"
+            ),
+        },
+    ]
+    fix = _qwen_coder_json(messages, max_tokens=12000, temperature=0.05)
+    files = fix.get("files")
+    if not isinstance(files, list) or not files:
+        raise HTTPException(status_code=500, detail="Qwen لم يرجع ملفات مصححة")
+    safe_files = []
+    allowed_paths = {str(f.get("path")) for f in fetched}
+    for item in files:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get("path") or "").strip()
+        content = item.get("content")
+        if path not in allowed_paths:
+            continue
+        if not isinstance(content, str) or len(content.strip()) < 20:
+            continue
+        safe_files.append({"path": path, "content": content, "reason": str(item.get("reason") or "")})
+    if not safe_files:
+        raise HTTPException(status_code=500, detail="Qwen رجع نتيجة بدون ملفات صالحة للتحديث")
+    fix["files"] = safe_files
+    fix["repo"] = {"owner": owner, "name": repo, "branch": branch}
+    return fix
+
+
+def _create_github_pr_for_fix(report_id: str, title: str, fix: Dict[str, Any], approved_by: str) -> Dict[str, Any]:
+    owner, repo = _repo_owner_name()
+    base_branch = _github_default_branch(owner, repo)
+    base_ref = _github_request("GET", f"/repos/{owner}/{repo}/git/ref/heads/{base_branch}", require_token=True)
+    base_sha = str(((base_ref.get("object") or {}) if isinstance(base_ref, dict) else {}).get("sha") or "")
+    if not base_sha:
+        raise HTTPException(status_code=500, detail="تعذر قراءة base sha من GitHub")
+    safe_id = re.sub(r"[^a-zA-Z0-9_-]+", "-", report_id)[:40]
+    branch = f"respect-ai-fix/{safe_id}-{int(time.time())}"
+    _github_request(
+        "POST",
+        f"/repos/{owner}/{repo}/git/refs",
+        payload={"ref": f"refs/heads/{branch}", "sha": base_sha},
+        require_token=True,
+    )
+    updated = []
+    for item in fix.get("files", []):
+        path = str(item.get("path") or "").strip()
+        content = str(item.get("content") or "")
+        current = _github_file_content(owner, repo, path, base_branch)
+        message = f"Respect AI fix: {title[:60]}"
+        _github_request(
+            "PUT",
+            f"/repos/{owner}/{repo}/contents/{path}",
+            payload={
+                "message": message,
+                "content": base64.b64encode(content.encode("utf-8")).decode("ascii"),
+                "sha": current.get("sha"),
+                "branch": branch,
+                "committer": {"name": "Respect AI Fixer", "email": "respect-ai-fixer@users.noreply.github.com"},
+            },
+            require_token=True,
+        )
+        updated.append({"path": path, "reason": item.get("reason", "")})
+    pr_body = (
+        f"تم إنشاء هذا التصحيح بواسطة Respect AI Fixer بعد موافقة: {approved_by}\n\n"
+        f"Report ID: {report_id}\n\n"
+        f"ملخص Qwen3-Coder:\n{str(fix.get('summary') or '')}\n\n"
+        f"خطة الاختبار:\n{str(fix.get('testPlan') or '')}"
+    )
+    pr = _github_request(
+        "POST",
+        f"/repos/{owner}/{repo}/pulls",
+        payload={
+            "title": f"Respect AI Fix: {title[:70]}",
+            "head": branch,
+            "base": base_branch,
+            "body": pr_body,
+        },
+        require_token=True,
+    )
+    return {
+        "branch": branch,
+        "updatedFiles": updated,
+        "pullRequestUrl": str(pr.get("html_url") or ""),
+        "pullRequestNumber": pr.get("number"),
+    }
+
+
 # صفحة ويب داخل نفس رابط /respect-ai/cyber، مع API إداري محمي بالـ X-App-Secret.
 # ملاحظة مهمة: لا يتم إرسال Supabase service role key إلى المتصفح أبدًا.
 # المتصفح يرسل فقط APP_SHARED_SECRET الذي يكتبه الأدمن، والسيرفر ينفذ العمليات الحساسة من الخلفية.
@@ -6544,6 +7023,98 @@ def respect_ai_cyber_admin_unhide_post(req: CyberAdminPostActionRequest, x_app_s
     if not result.get("updated"):
         result = _patch_supabase_post(req.postId, {"community_hidden": False, "hidden_reason": ""})
     return {"ok": bool(result.get("updated")), "result": result}
+
+
+
+@app.post("/respect-ai/app-feedback/submit")
+def respect_ai_app_feedback_submit(req: AppAIFeedbackSubmitRequest, x_app_secret: Optional[str] = Header(default=None)):
+    _check_secret(x_app_secret)
+    report_id = f"aifix_{int(time.time() * 1000000)}_{secrets.token_hex(4)}"
+    now = datetime.now(timezone.utc).isoformat()
+    base_row = {
+        "id": report_id,
+        "username": _display_username(req.username),
+        "name": (req.name or "")[:120],
+        "title": (req.title or "بلاغ مشكلة في Respect App")[:220],
+        "note": (req.note or "")[:8000],
+        "screen": (req.screen or "")[:160],
+        "app_version": (req.appVersion or "")[:80],
+        "device_info": req.deviceInfo or {},
+        "status": "analyzing",
+        "created_at": now,
+        "updated_at": now,
+    }
+    db_insert = _feedback_supabase_insert(base_row)
+    try:
+        analysis = _analyze_feedback_with_qwen(req, report_id)
+        status = "analyzed"
+        patch = _feedback_supabase_patch(report_id, {"status": status, "analysis": analysis, "updated_at": datetime.now(timezone.utc).isoformat()})
+        return {
+            "ok": True,
+            "id": report_id,
+            "reportId": report_id,
+            "status": status,
+            "analysis": analysis,
+            "databaseSaved": bool(db_insert.get("ok")),
+            "databasePatch": patch,
+            "model": QWEN_CODER_MODEL,
+        }
+    except Exception as e:
+        detail = str(getattr(e, "detail", e))
+        _feedback_supabase_patch(report_id, {"status": "failed", "result": {"error": detail}, "updated_at": datetime.now(timezone.utc).isoformat()})
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(status_code=500, detail=detail)
+
+
+@app.post("/respect-ai/app-feedback/approve")
+def respect_ai_app_feedback_approve(req: AppAIFeedbackApproveRequest, x_app_secret: Optional[str] = Header(default=None)):
+    _check_secret(x_app_secret)
+    approved_by = _display_username(req.approvedBy)
+    if not _ai_fix_is_admin(approved_by):
+        raise HTTPException(status_code=403, detail="هذا الإجراء مسموح للأدمن فقط")
+    report_id = str(req.reportId or "").strip()
+    report = _feedback_supabase_get(report_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="البلاغ غير موجود في جدول app_ai_feedback. تأكد من تشغيل SQL migration.")
+    if not isinstance(report.get("analysis"), dict):
+        raise HTTPException(status_code=400, detail="البلاغ لم يكتمل تحليله بعد")
+    now = datetime.now(timezone.utc).isoformat()
+    _feedback_supabase_patch(report_id, {"status": "approved", "approved_by": approved_by, "approved_at": now, "updated_at": now})
+    try:
+        fix = _generate_fix_with_qwen(report)
+        github_result: Dict[str, Any] = {"pullRequestUrl": "", "updatedFiles": []}
+        if GITHUB_TOKEN:
+            github_result = _create_github_pr_for_fix(report_id, str(report.get("title") or "بلاغ مشكلة"), fix, approved_by)
+            status = "pull_request_created"
+        else:
+            status = "applied"
+            github_result = {
+                "pullRequestUrl": "",
+                "updatedFiles": [{"path": f.get("path"), "reason": f.get("reason", "")} for f in fix.get("files", [])],
+                "warning": "GITHUB_TOKEN غير موجود؛ تم توليد الملفات المصححة فقط بدون إنشاء Pull Request.",
+            }
+        result = {"fix": fix, **github_result, "model": QWEN_CODER_MODEL}
+        patch = _feedback_supabase_patch(report_id, {"status": status, "result": result, "updated_at": datetime.now(timezone.utc).isoformat()})
+        return {
+            "ok": True,
+            "id": report_id,
+            "reportId": report_id,
+            "status": status,
+            "summary": fix.get("summary") or "تم تجهيز التصحيح",
+            "testPlan": fix.get("testPlan") or "",
+            "updatedFiles": github_result.get("updatedFiles", []),
+            "pullRequestUrl": github_result.get("pullRequestUrl", ""),
+            "warning": github_result.get("warning", ""),
+            "databasePatch": patch,
+            "model": QWEN_CODER_MODEL,
+        }
+    except Exception as e:
+        detail = str(getattr(e, "detail", e))
+        _feedback_supabase_patch(report_id, {"status": "failed", "result": {"error": detail}, "updated_at": datetime.now(timezone.utc).isoformat()})
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(status_code=500, detail=detail)
 
 @app.post("/respect-ai/cyber", response_model=RespectAICyberResponse)
 def respect_ai_cyber(req: RespectAICyberRequest, x_app_secret: Optional[str] = Header(default=None)):
