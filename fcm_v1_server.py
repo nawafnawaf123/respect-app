@@ -281,6 +281,7 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
 GITHUB_DEFAULT_BRANCH = os.getenv("GITHUB_DEFAULT_BRANCH", "").strip()
 GITHUB_API_BASE = os.getenv("GITHUB_API_BASE", "https://api.github.com").rstrip("/")
 QWEN_CODER_MODEL = os.getenv("QWEN_CODER_MODEL", "qwen3-coder-plus").strip() or "qwen3-coder-plus"
+QWEN_CODER_TIMEOUT_SECONDS = int(os.getenv("QWEN_CODER_TIMEOUT_SECONDS", "300"))
 AI_FIX_ADMIN_USERNAMES = {
     normalize.strip().lower().replace("@", "")
     for normalize in os.getenv("AI_FIX_ADMIN_USERNAMES", "mjakcon8,nawafrp,nawaf_city,nawafnawaf123").split(",")
@@ -1167,6 +1168,8 @@ def health():
         "qwen_model": QWEN_MODEL,
         "qwen_text_model": QWEN_TEXT_MODEL,
         "qwen_vision_model": QWEN_VISION_MODEL,
+        "qwen_coder_model": QWEN_CODER_MODEL,
+        "qwen_coder_timeout_seconds": QWEN_CODER_TIMEOUT_SECONDS,
         "qwen_base_url": QWEN_BASE_URL,
         "moderation_endpoint": "/respect-ai/moderate",
         "story_moderation_endpoint": "/respect-ai/moderate-story",
@@ -6319,7 +6322,7 @@ def _qwen_coder_json(messages: list[Dict[str, str]], *, max_tokens: int = 2500, 
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
-            timeout=120,
+            timeout=QWEN_CODER_TIMEOUT_SECONDS,
             response_format={"type": "json_object"},
             log_label="QWEN_CODER",
         )
@@ -6331,7 +6334,7 @@ def _qwen_coder_json(messages: list[Dict[str, str]], *, max_tokens: int = 2500, 
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
-            timeout=120,
+            timeout=QWEN_CODER_TIMEOUT_SECONDS,
             log_label="QWEN_CODER_FALLBACK",
         )
     return _extract_json_object(raw)
