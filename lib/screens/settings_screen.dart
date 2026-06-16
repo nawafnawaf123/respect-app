@@ -1,4 +1,4 @@
-// ignore_for_file: deprecated_member_use, unused_element, unused_field, unused_import, unused_local_variable, unused_element_parameter, prefer_const_constructors, prefer_const_declarations, prefer_const_literals_to_create_immutables, curly_braces_in_flow_control_structures, sized_box_for_whitespace, dead_code, unnecessary_type_check, unnecessary_non_null_assertion, use_build_context_synchronously, unnecessary_brace_in_string_interps, prefer_final_fields
+// ignore_for_file: deprecated_member_use, unused_element, unused_field, unused_import, unused_element_parameter, prefer_const_constructors, prefer_const_declarations, prefer_const_literals_to_create_immutables, curly_braces_in_flow_control_structures, sized_box_for_whitespace, dead_code, unnecessary_type_check, unnecessary_non_null_assertion, use_build_context_synchronously, unnecessary_brace_in_string_interps, prefer_final_fields
 import 'dart:convert';
 import 'dart:io';
 
@@ -57,6 +57,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _canUseVerifiedOnlyMessages = false;
   bool _savingMessagingPrivacy = false;
 
+  // ----- إعدادات اللغة -----
+  String _selectedLanguage = 'ar';
+
   bool _sendingAiFeedback = false;
   bool _approvingAiFeedbackFix = false;
   Map<String, dynamic>? _latestAiFeedbackResult;
@@ -65,6 +68,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void initState() {
     super.initState();
     _loadSettingsBootstrap();
+    _loadLanguageSetting();
   }
 
   @override
@@ -86,6 +90,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _loadMessagingPrivacySettings(),
       _loadPhoneSecuritySettings(),
     ]);
+  }
+
+  Future<void> _loadLanguageSetting() async {
+    final prefs = await SharedPreferences.getInstance();
+    final languageCode = prefs.getString('language_code') ?? 'ar';
+    if (mounted) {
+      setState(() {
+        _selectedLanguage = languageCode;
+      });
+    }
+  }
+
+  Future<void> _changeLanguage(String languageCode) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('language_code', languageCode);
+    if (mounted) {
+      setState(() {
+        _selectedLanguage = languageCode;
+      });
+    }
+    // إعادة تشغيل التطبيق أو تحديث واجهة المستخدم
+    final themeProvider = Provider.of<ThemeProvider>(context, listen: false);
+    themeProvider.toggleTheme();
+    themeProvider.toggleTheme(); // تبديل مرة أخرى للعودة إلى نفس الوضع
   }
 
   Future<void> _loadPrivacySettings([SharedPreferences? cachedPrefs]) async {
@@ -564,14 +592,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       const SizedBox(height: 10),
                       Text('Pull Request: $prUrl', textDirection: TextDirection.ltr),
                     ],
-                    if (_canApproveAiFeedbackFix && status.toLowerCase() == 'analyzed') ...[
+                    if (_canApproveAiFeedbackFix && status.toLowerCase().trim() == 'analyzed') ...[
                       const SizedBox(height: 12),
-                      OutlinedButton.icon(
+                      FilledButton.icon(
                         onPressed: _approvingAiFeedbackFix ? null : _approveAiFeedbackFix,
                         icon: _approvingAiFeedbackFix
                             ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                             : const Icon(Icons.auto_fix_high_rounded),
-                        label: Text(_approvingAiFeedbackFix ? 'جاري التصحيح...' : 'الموافقة وبدء التصحيح'),
+                        label: Text(_approvingAiFeedbackFix ? 'جاري التنفيذ...' : 'الموافقة على التصحيح'),
                       ),
                     ],
                   ],
@@ -584,281 +612,227 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  // طبقة الخصوصية تغطي الشاشة كاملة مع تأثير جانبي
-  Widget _privacyOverlay() {
-    if (!_privacyModeEnabled) return const SizedBox.shrink();
-    return Positioned.fill(
-      child: IgnorePointer(
-        child: Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.centerLeft,
-              end: Alignment.centerRight,
-              colors: [
-                Colors.black.withValues(alpha: 0.8),
-                Colors.black.withValues(alpha: 0.5),
-                Colors.transparent,
-                Colors.black.withValues(alpha: 0.5),
-                Colors.black.withValues(alpha: 0.8),
-              ],
-              stops: const [0.0, 0.1, 0.5, 0.9, 1.0],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
-    final themeProvider = context.watch<ThemeProvider>();
     final isDark = Theme.of(context).brightness == Brightness.dark;
-
     return Scaffold(
-      appBar: null,
-      body: GestureDetector(
-        onLongPress: _handleLongPress,
-        behavior: HitTestBehavior.opaque,
-        child: Stack(
+      appBar: AppBar(
+        title: const Text('الإعدادات'),
+        backgroundColor: isDark ? AppColors.darkSurface : AppColors.lightSurface,
+        foregroundColor: isDark ? AppColors.darkOnSurface : AppColors.lightOnSurface,
+        surfaceTintColor: Colors.transparent,
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // المحتوى الأصلي
-            RefreshIndicator(
-              color: AppColors.purple,
-              onRefresh: _loadProfile,
-              child: ListView(
+            GlassCard(
+              child: Padding(
                 padding: const EdgeInsets.all(16),
-                children: [
-                  const SizedBox(height: 8),
-
-                  GlassCard(
-                    child: SwitchListTile(
-                      title: const Text('الوضع الداكن'),
-                      subtitle: Text(isDark ? 'مفعل حالياً' : 'معطل حالياً'),
-                      value: themeProvider.isDark,
-                      onChanged: (_) => themeProvider.toggle(),
-                      secondary: Icon(isDark ? Icons.dark_mode : Icons.light_mode, color: AppColors.purple),
-                      activeThumbColor: AppColors.purple,
+                child: Row(
+                  children: [
+                    CircleAvatar(
+                      radius: 32,
+                      backgroundImage: _getProfileImageProvider(),
+                      child: _getProfileImageProvider() == null
+                          ? const Icon(Icons.person_rounded, size: 32)
+                          : null,
                     ),
-                  ).animate().fadeIn(delay: 100.ms),
-
-                  const SizedBox(height: 12),
-
-                  GlassCard(
-                    child: SwitchListTile(
-                      title: const Text('وضع الخصوصية (تأثير جانبي)'),
-                      subtitle: const Text('يجعل الشاشة غير واضحة عند النظر من الجانب'),
-                      value: _privacyModeEnabled,
-                      onChanged: _togglePrivacyMode,
-                      secondary: const Icon(Icons.visibility_off_rounded, color: AppColors.purple),
-                      activeThumbColor: AppColors.purple,
-                    ),
-                  ).animate().fadeIn(delay: 150.ms),
-
-                  const SizedBox(height: 12),
-
-                  GlassCard(
-                    child: SwitchListTile(
-                      title: const Text('إخفاء سريع (الضغط 3 ثواني)'),
-                      subtitle: const Text('تفعيل ميزة تعتيم الشاشة بالضغط مع الاستمرار'),
-                      value: _quickHideEnabled,
-                      onChanged: _toggleQuickHide,
-                      secondary: const Icon(Icons.touch_app_rounded, color: AppColors.purple),
-                      activeThumbColor: AppColors.purple,
-                    ),
-                  ).animate().fadeIn(delay: 200.ms),
-
-                  const SizedBox(height: 12),
-
-                  _buildAiFeedbackCard().animate().fadeIn(delay: 220.ms),
-
-                  const SizedBox(height: 12),
-
-                  GlassCard(
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+                    const SizedBox(width: 16),
+                    Expanded(
                       child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          ListTile(
-                            contentPadding: EdgeInsets.zero,
-                            leading: Icon(_phoneVerified ? Icons.verified_user_rounded : Icons.phone_iphone_rounded, color: AppColors.purple),
-                            title: const Text('الأمان عبر رقم الجوال', style: TextStyle(fontWeight: FontWeight.w900)),
-                            subtitle: Text(_phoneVerified
-                                ? 'مفعل على الرقم $_phoneE164 ويمكن استخدام SMS لاستعادة الدخول'
-                                : 'أضف رقمك واستقبل رمز SMS لتفعيل حماية إضافية للحساب'),
+                          Text(
+                            _profileName,
+                            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                           ),
-                          const SizedBox(height: 8),
-                          Row(
-                            children: [
-                              SizedBox(
-                                width: 95,
-                                child: TextField(
-                                  controller: _phoneCountryCtrl,
-                                  keyboardType: TextInputType.phone,
-                                  decoration: InputDecoration(
-                                    labelText: 'الدولة',
-                                    hintText: '+961',
-                                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: TextField(
-                                  controller: _phoneCtrl,
-                                  keyboardType: TextInputType.phone,
-                                  decoration: InputDecoration(
-                                    labelText: 'رقم الجوال',
-                                    hintText: '70123456',
-                                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 10),
-                          FilledButton.icon(
-                            onPressed: _savingPhoneSecurity ? null : _sendPhoneSecurityCode,
-                            icon: _savingPhoneSecurity
-                                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                                : const Icon(Icons.sms_rounded),
-                            label: Text(_phoneVerified ? 'تغيير الرقم وإرسال رمز جديد' : 'إرسال رمز التحقق SMS'),
-                          ),
-                          if (_phoneCodeSent) ...[
-                            const SizedBox(height: 12),
-                            TextField(
-                              controller: _phoneCodeCtrl,
-                              keyboardType: TextInputType.number,
-                              textAlign: TextAlign.center,
-                              decoration: InputDecoration(
-                                labelText: 'رمز SMS',
-                                hintText: '000000',
-                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
-                              ),
+                          Text(
+                            _profileUsername,
+                            style: TextStyle(
+                              color: isDark ? AppColors.darkMuted : AppColors.lightMuted,
+                              fontSize: 14,
                             ),
-                            const SizedBox(height: 10),
-                            OutlinedButton.icon(
-                              onPressed: _savingPhoneSecurity ? null : _verifyPhoneSecurityCode,
-                              icon: const Icon(Icons.check_circle_rounded),
-                              label: const Text('تأكيد وتفعيل الأمان'),
-                            ),
-                          ],
+                          ),
                         ],
                       ),
                     ),
-                  ).animate().fadeIn(delay: 230.ms),
-
-                  const SizedBox(height: 12),
-
-                  GlassCard(
-                    child: Column(
-                      children: [
-                        ListTile(
-                          leading: const Icon(Icons.chat_bubble_outline_rounded, color: AppColors.purple),
-                          title: const Text('خصوصية الرسائل', style: TextStyle(fontWeight: FontWeight.w900)),
-                          subtitle: Text(_canUseVerifiedOnlyMessages
-                              ? 'يمكنك قفل الرسائل على الحسابات الموثقة فقط'
-                              : 'ميزة الموثقين فقط تحتاج الباقة الذهبية أو المميزة'),
-                        ),
-                        SwitchListTile(
-                          title: const Text('تفعيل الرسائل'),
-                          subtitle: const Text('عند الإيقاف لا أحد يستطيع إرسال رسالة جديدة لك'),
-                          value: _messagesEnabled,
-                          onChanged: (v) => setState(() => _messagesEnabled = v),
-                          activeThumbColor: AppColors.purple,
-                        ),
-                        SwitchListTile(
-                          title: const Text('استقبال الرسائل من الموثقين فقط'),
-                          subtitle: Text(_canUseVerifiedOnlyMessages
-                              ? 'غير الموثق سيُمنع من إرسال الرسالة'
-                              : 'مقفلة للحسابات الذهبية والمميزة فقط'),
-                          value: _verifiedOnlyMessages && _canUseVerifiedOnlyMessages,
-                          onChanged: _messagesEnabled && _canUseVerifiedOnlyMessages
-                              ? (v) => setState(() => _verifiedOnlyMessages = v)
-                              : null,
-                          activeThumbColor: AppColors.purple,
-                        ),
-                        SwitchListTile(
-                          title: const Text('طلب دردشة قبل أول رسالة'),
-                          subtitle: const Text('يفتح المحادثة بعد قبول الطلب'),
-                          value: _chatRequestsRequired,
-                          onChanged: _messagesEnabled ? (v) => setState(() => _chatRequestsRequired = v) : null,
-                          activeThumbColor: AppColors.purple,
-                        ),
-                        SwitchListTile(
-                          title: const Text('السماح بالمكالمات'),
-                          subtitle: const Text('عند الإيقاف لا أحد يستطيع الاتصال بك'),
-                          value: _callsEnabled,
-                          onChanged: (v) => setState(() => _callsEnabled = v),
-                          activeThumbColor: AppColors.purple,
-                        ),
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
-                          child: SizedBox(
-                            width: double.infinity,
-                            child: FilledButton.icon(
-                              onPressed: _savingMessagingPrivacy ? null : _saveMessagingPrivacySettings,
-                              icon: _savingMessagingPrivacy
-                                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                                  : const Icon(Icons.save_rounded),
-                              label: const Text('حفظ خصوصية الرسائل'),
-                            ),
-                          ),
-                        ),
-                      ],
+                    IconButton(
+                      onPressed: _logout,
+                      icon: const Icon(Icons.logout_rounded),
+                      tooltip: 'تسجيل الخروج',
                     ),
-                  ).animate().fadeIn(delay: 250.ms),
-
-                  const SizedBox(height: 12),
-
-                  GlassCard(
-                    child: ListTile(
-                      leading: const Icon(Icons.language, color: AppColors.purple),
-                      title: const Text('اللغة'),
-                      subtitle: const Text('العربية'),
-                      trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-                      onTap: () {},
-                    ),
-                  ).animate().fadeIn(delay: 200.ms),
-
-                  const SizedBox(height: 12),
-
-                  GlassCard(
-                    child: ListTile(
-                      leading: const Icon(Icons.info_outline, color: AppColors.purple),
-                      title: const Text('حول التطبيق'),
-                      subtitle: const Text('الإصدار 1.0.0'),
-                      onTap: () {},
-                    ),
-                  ).animate().fadeIn(delay: 300.ms),
-
-                  const SizedBox(height: 12),
-
-                  GlassCard(
-                    child: ListTile(
-                      leading: const Icon(Icons.logout_rounded, color: AppColors.danger),
-                      title: const Text('تسجيل الخروج', style: TextStyle(fontWeight: FontWeight.w900)),
-                      subtitle: const Text('العودة إلى صفحة تسجيل الدخول'),
-                      trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-                      onTap: _logout,
-                    ),
-                  ).animate().fadeIn(delay: 400.ms),
-                ],
-              ),
-            ),
-
-            // طبقة التعتيم الكامل (الشاشة السوداء)
-            if (_isScreenBlack)
-              Positioned.fill(
-                child: GestureDetector(
-                  onLongPress: _handleLongPress,
-                  behavior: HitTestBehavior.opaque,
-                  child: Container(color: Colors.black),
+                  ],
                 ),
               ),
-
-            // طبقة الخصوصية (تأثير الجوانب)
-            _privacyOverlay(),
+            ),
+            const SizedBox(height: 16),
+            GlassCard(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('الخصوصية', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                    const SizedBox(height: 12),
+                    SwitchListTile.adaptive(
+                      value: _privacyModeEnabled,
+                      onChanged: _togglePrivacyMode,
+                      title: const Text('وضع الخصوصية'),
+                      subtitle: const Text('إخفاء محتوى الشاشة عند التبديل بين التطبيقات'),
+                    ),
+                    SwitchListTile.adaptive(
+                      value: _quickHideEnabled,
+                      onChanged: _toggleQuickHide,
+                      title: const Text('إخفاء سريع'),
+                      subtitle: const Text('الضغط مطولًا على الشاشة لإخفائها مؤقتًا'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            GlassCard(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('الرسائل', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                    const SizedBox(height: 12),
+                    SwitchListTile.adaptive(
+                      value: _messagesEnabled,
+                      onChanged: (value) => setState(() => _messagesEnabled = value),
+                      title: const Text('السماح بالرسائل'),
+                      subtitle: const Text('السماح للمستخدمين بإرسال رسائل إليك'),
+                    ),
+                    if (_canUseVerifiedOnlyMessages)
+                      SwitchListTile.adaptive(
+                        value: _verifiedOnlyMessages,
+                        onChanged: (value) => setState(() => _verifiedOnlyMessages = value),
+                        title: const Text('الرسائل من المستخدمين المعتمدين فقط'),
+                        subtitle: const Text('السماح بالرسائل من المستخدمين المعتمدين فقط'),
+                      ),
+                    SwitchListTile.adaptive(
+                      value: _callsEnabled,
+                      onChanged: (value) => setState(() => _callsEnabled = value),
+                      title: const Text('السماح بالمكالمات'),
+                      subtitle: const Text('السماح للمستخدمين ببدء مكالمات معك'),
+                    ),
+                    SwitchListTile.adaptive(
+                      value: _chatRequestsRequired,
+                      onChanged: (value) => setState(() => _chatRequestsRequired = value),
+                      title: const Text('الموافقة على طلبات المحادثة'),
+                      subtitle: const Text('الموافقة على طلبات المحادثة قبل بدء المحادثة'),
+                    ),
+                    const SizedBox(height: 12),
+                    FilledButton(
+                      onPressed: _saveMessagingPrivacySettings,
+                      child: const Text('حفظ إعدادات الخصوصية'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            GlassCard(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('الأمان', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                    const SizedBox(height: 12),
+                    SwitchListTile.adaptive(
+                      value: _smsSecurityEnabled,
+                      onChanged: null,
+                      title: const Text('التحقق عبر الرسائل القصيرة'),
+                      subtitle: Text(_phoneVerified ? 'مفعل' : 'غير مفعل'),
+                    ),
+                    if (!_phoneVerified) ...[
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: _phoneCountryCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'رمز الدولة',
+                          prefixIcon: Icon(Icons.flag_rounded),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: _phoneCtrl,
+                        keyboardType: TextInputType.phone,
+                        decoration: const InputDecoration(
+                          labelText: 'رقم الهاتف',
+                          prefixIcon: Icon(Icons.phone_rounded),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      if (_phoneCodeSent) ...[
+                        TextField(
+                          controller: _phoneCodeCtrl,
+                          keyboardType: TextInputType.number,
+                          maxLength: 6,
+                          decoration: const InputDecoration(
+                            labelText: 'رمز التحقق',
+                            prefixIcon: Icon(Icons.code_rounded),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        FilledButton(
+                          onPressed: _verifyPhoneSecurityCode,
+                          child: const Text('تحقق من الرمز'),
+                        ),
+                      ],
+                      const SizedBox(height: 8),
+                      FilledButton(
+                        onPressed: _sendPhoneSecurityCode,
+                        child: const Text('إرسال رمز التحقق'),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            // إضافة قسم تغيير اللغة
+            GlassCard(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('اللغة', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      value: _selectedLanguage,
+                      decoration: const InputDecoration(
+                        labelText: 'اختر اللغة',
+                        border: OutlineInputBorder(),
+                      ),
+                      items: [
+                        const DropdownMenuItem(
+                          value: 'ar',
+                          child: Text('العربية'),
+                        ),
+                        const DropdownMenuItem(
+                          value: 'en',
+                          child: Text('الإنجليزية'),
+                        ),
+                      ],
+                      onChanged: (String? newValue) {
+                        if (newValue != null) {
+                          _changeLanguage(newValue);
+                        }
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            _buildAiFeedbackCard(),
           ],
         ),
       ),
