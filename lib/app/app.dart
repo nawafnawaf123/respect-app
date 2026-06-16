@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 
 import '../screens/home_screen.dart';
 import '../screens/feed_screen.dart';
@@ -37,6 +38,16 @@ class RPStreamHubApp extends StatelessWidget {
       navigatorKey: NotificationService.navigatorKey,
       debugShowCheckedModeBanner: false,
       title: 'Respect App',
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      supportedLocales: const [
+        Locale('ar', 'SA'), // العربية
+        Locale('en', 'US'), // الإنجليزية
+      ],
+      locale: _getLocale(),
       theme: AppTheme.lightTheme.copyWith(
         textTheme: GoogleFonts.cairoTextTheme(AppTheme.lightTheme.textTheme),
       ),
@@ -56,6 +67,12 @@ class RPStreamHubApp extends StatelessWidget {
         );
       },
     );
+  }
+
+  static Locale _getLocale() {
+    // يمكننا تحميل اللغة المحفوظة من SharedPreferences هنا
+    // لاحقًا سيتم تنفيذ هذا في ThemeProvider
+    return const Locale('ar', 'SA');
   }
 
   static Route<dynamic> _generateRoute(RouteSettings settings) {
