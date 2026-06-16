@@ -43,6 +43,105 @@ class SupabaseService {
 
   static SupabaseClient get client => Supabase.instance.client;
 
+
+  // ================= App Language / Notification Language =================
+  // هذا الجزء مهم جدًا للإشعارات الخارجية FCM:
+  // app_language.dart يستدعي updateCurrentUserLanguage عند تغيير اللغة،
+  // والسيرفر يقرأ app_language من جدول users حتى يرسل الإشعار بلغة مستقبل الإشعار.
+  static const Set<String> _supportedNotificationLanguages = <String>{
+    'ar', 'en', 'fr', 'es', 'de', 'tr', 'id', 'hi', 'ur', 'fa', 'ru', 'pt',
+  };
+
+  static String normalizeAppLanguageCode(String value) {
+    final clean = value.trim().toLowerCase().replaceAll('_', '-');
+    if (_supportedNotificationLanguages.contains(clean)) return clean;
+    if (clean.startsWith('ar')) return 'ar';
+    if (clean.startsWith('en')) return 'en';
+    if (clean.startsWith('fr')) return 'fr';
+    if (clean.startsWith('es')) return 'es';
+    if (clean.startsWith('de')) return 'de';
+    if (clean.startsWith('tr')) return 'tr';
+    if (clean.startsWith('id')) return 'id';
+    if (clean.startsWith('hi')) return 'hi';
+    if (clean.startsWith('ur')) return 'ur';
+    if (clean.startsWith('fa')) return 'fa';
+    if (clean.startsWith('ru')) return 'ru';
+    if (clean.startsWith('pt')) return 'pt';
+    return 'ar';
+  }
+
+  static Future<String> currentAppLanguageCode() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getString('respect_app_language_code_v2') ??
+          prefs.getString('respect_app_language_code_v1') ??
+          prefs.getString('app_language') ??
+          'ar';
+      return normalizeAppLanguageCode(saved);
+    } catch (_) {
+      return 'ar';
+    }
+  }
+
+  static Future<void> updateCurrentUserLanguage(String languageCode) async {
+    final safeLanguage = normalizeAppLanguageCode(languageCode);
+
+    // نخزنها محليًا أولًا حتى الإشعارات الداخلية تعمل حتى بدون اتصال.
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('respect_app_language_code_v2', safeLanguage);
+      await prefs.setString('respect_app_language_code_v1', safeLanguage);
+      await prefs.setString('app_language', safeLanguage);
+    } catch (_) {}
+
+    // ثم نرفعها إلى Supabase حتى السيرفر يرسل FCM حسب لغة المستخدم المستقبل.
+    try {
+      final id = await currentUserId();
+      Map<String, dynamic>? user;
+      try {
+        user = await currentUser();
+      } catch (e, st) {
+        _logIgnoredError(e, st);
+      }
+
+      final candidates = <String>{
+        if (id != null && id.trim().isNotEmpty) id.trim(),
+        if ((user?['id'] ?? '').toString().trim().isNotEmpty) (user?['id'] ?? '').toString().trim(),
+        if ((user?['username'] ?? '').toString().trim().isNotEmpty) (user?['username'] ?? '').toString().trim(),
+        if ((user?['email'] ?? '').toString().trim().isNotEmpty) (user?['email'] ?? '').toString().trim(),
+      };
+
+      final usernameCandidates = <String>{};
+      for (final value in candidates) {
+        final clean = normalizeUsername(value);
+        if (clean.isEmpty) continue;
+        usernameCandidates.add(clean);
+        usernameCandidates.add('@$clean');
+      }
+
+      Future<void> updateBy(String column, String value) async {
+        if (value.trim().isEmpty) return;
+        try {
+          await client.from('users').update({
+            'app_language': safeLanguage,
+          }).eq(column, value).timeout(const Duration(seconds: 6));
+        } catch (e, st) {
+          _logIgnoredError(e, st);
+        }
+      }
+
+      for (final value in usernameCandidates) {
+        await updateBy('username', value);
+      }
+      for (final value in candidates) {
+        await updateBy('id', value);
+        await updateBy('email', value);
+      }
+    } catch (e, st) {
+      _logIgnoredError(e, st);
+    }
+  }
+
   static String get _safeDevicePlatform {
     if (kIsWeb) return 'web';
     try {
@@ -7227,7 +7326,6 @@ $examples
       try { await channel.unsubscribe(); } catch (e, st) { _logIgnoredError(e, st); }
     }
   }
-
   static Future<void> updateCurrentUserFcmToken(String? token) async {
     final id = await currentUserId();
     if (id == null || id.trim().isEmpty) return;
@@ -7241,6 +7339,12 @@ $examples
       })
           .or('username.eq.${normalizeUsername(username)},username.eq.$username');
     } catch (e, st) { _logIgnoredError(e, st); }
+
+    // بعد تسجيل FCM Token نرسل لغة الجهاز الحالية للسيرفر،
+    // حتى الإشعارات الخارجية تصل بلغة المستخدم المستقبل.
+    if (token != null && token.trim().isNotEmpty) {
+      unawaited(updateCurrentUserLanguage(await currentAppLanguageCode()));
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -7267,6 +7371,8 @@ $examples
     final current = await currentUser();
     final senderUsername = displayUsername(((current == null ? null : current['username']) ?? '').toString());
     final senderName = ((current == null ? null : current['name']) ?? (current == null ? null : current['profileName']) ?? senderUsername).toString();
+    final language = await currentAppLanguageCode();
+    unawaited(updateCurrentUserLanguage(language));
 
     final response = await _postSignedJson(
       Uri.parse('$pushApiBaseUrl/send_general_push'),
@@ -7275,12 +7381,14 @@ $examples
         'body': cleanBody,
         'senderUsername': senderUsername,
         'senderName': senderName,
+        'language': language,
         'data': {
           'type': 'general_notification',
           'title': cleanTitle,
           'body': cleanBody,
           'senderUsername': senderUsername,
           'senderName': senderName,
+          'language': language,
         },
       },
       timeout: const Duration(seconds: 25),
@@ -7322,11 +7430,13 @@ $examples
           'type': type,
           'title': title,
           'body': body,
+          'language': await currentAppLanguageCode(),
           'data': {
             ...data,
             'type': type,
             'title': title,
             'body': body,
+            'language': await currentAppLanguageCode(),
           },
         },
         timeout: const Duration(seconds: 12),
@@ -7355,6 +7465,7 @@ $examples
           'messageId': messageId,
           'text': '',
           'privacy': 'metadata_only',
+          'language': await currentAppLanguageCode(),
         },
         timeout: const Duration(seconds: 12),
       );
@@ -7384,6 +7495,7 @@ $examples
           'callerAvatar': '',
           'video': video,
           'privacy': 'metadata_only',
+          'language': await currentAppLanguageCode(),
         },
         timeout: const Duration(seconds: 12),
       );

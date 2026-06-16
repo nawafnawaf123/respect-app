@@ -13,6 +13,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 import '../theme/app_theme.dart';
 import '../widgets/glass_card.dart';
 
+import '../app/app_language.dart';
 void _scannerSafeIgnore() {}
 
 
@@ -344,7 +345,7 @@ class _StreamersScreenState extends State<StreamersScreen> with SingleTickerProv
                   ),
                 ),
                 const SizedBox(height: 18),
-                const Text('اختر طريقة المشاهدة', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+                const AppText('اختر طريقة المشاهدة', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
                 const SizedBox(height: 14),
                 ListTile(
                   leading: Container(
@@ -356,8 +357,8 @@ class _StreamersScreenState extends State<StreamersScreen> with SingleTickerProv
                     ),
                     child: const Icon(Icons.open_in_browser_rounded, color: AppColors.purple),
                   ),
-                  title: const Text('فتح في المتصفح', style: TextStyle(fontWeight: FontWeight.w900)),
-                  subtitle: const Text('يفتح الرابط في تطبيق المتصفح الخارجي'),
+                  title: const AppText('فتح في المتصفح', style: TextStyle(fontWeight: FontWeight.w900)),
+                  subtitle: const AppText('يفتح الرابط في تطبيق المتصفح الخارجي'),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
                   onTap: () async {
                     Navigator.pop(context);
@@ -375,8 +376,8 @@ class _StreamersScreenState extends State<StreamersScreen> with SingleTickerProv
                     ),
                     child: const Icon(Icons.play_circle_fill_rounded, color: AppColors.purple),
                   ),
-                  title: const Text('تشغيل داخل التطبيق', style: TextStyle(fontWeight: FontWeight.w900)),
-                  subtitle: const Text('يفتح صفحة البث مباشرة (موصى به)'),
+                  title: const AppText('تشغيل داخل التطبيق', style: TextStyle(fontWeight: FontWeight.w900)),
+                  subtitle: const AppText('يفتح صفحة البث مباشرة (موصى به)'),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
                   onTap: () {
                     Navigator.pop(context);
@@ -476,12 +477,12 @@ class _StreamersScreenState extends State<StreamersScreen> with SingleTickerProv
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Text(
+                            const AppText(
                               'البث المباشر',
                               style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900, letterSpacing: -.6),
                             ),
                             if (live.isNotEmpty)
-                              Text(
+                              AppText(
                                 '${live.length} بث نشط الآن',
                                 style: TextStyle(
                                   fontSize: 12.5,
@@ -526,9 +527,9 @@ class _StreamersScreenState extends State<StreamersScreen> with SingleTickerProv
                       unselectedLabelColor: isDark ? Colors.white60 : const Color(0xFF6E6478),
                       labelStyle: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13),
                       unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
-                      tabs: const [
-                        Tab(text: 'مباشر الآن'),
-                        Tab(text: 'القنوات'),
+                      tabs: [
+                        Tab(child: AppText('مباشر الآن')),
+                        Tab(child: AppText('القنوات')),
                       ],
                     ),
                   ),
@@ -610,11 +611,11 @@ class _StreamersList extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 16),
-              Text(emptyTitle,
+              AppText(emptyTitle,
                   textAlign: TextAlign.center,
                   style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
               const SizedBox(height: 8),
-              Text(
+              AppText(
                 emptySubtitle,
                 textAlign: TextAlign.center,
                 style: TextStyle(
@@ -702,7 +703,7 @@ class _LiveStreamCard extends StatelessWidget {
                           backgroundColor: AppColors.purple,
                           backgroundImage: avatar,
                           child: avatar == null
-                              ? Text(streamer.name.characters.first,
+                              ? AppText(streamer.name.characters.first,
                               style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900))
                               : null,
                         ),
@@ -712,7 +713,7 @@ class _LiveStreamCard extends StatelessWidget {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Text(
+                              AppText(
                                 streamer.title.isEmpty ? 'بث مباشر الآن' : streamer.title,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
@@ -720,7 +721,7 @@ class _LiveStreamCard extends StatelessWidget {
                                     color: Colors.white, fontSize: 17, fontWeight: FontWeight.w900),
                               ),
                               const SizedBox(height: 2),
-                              Text('${streamer.name} · ${streamer.platform}',
+                              AppText('${streamer.name} · ${streamer.platform}',
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
@@ -741,7 +742,7 @@ class _LiveStreamCard extends StatelessWidget {
             child: Row(
               children: [
                 Expanded(
-                  child: Text(
+                  child: AppText(
                     streamer.title.isEmpty ? streamer.name : streamer.title,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -752,7 +753,7 @@ class _LiveStreamCard extends StatelessWidget {
                     ),
                   ),
                 ),
-                Text(
+                AppText(
                   '${_formatNumber(streamer.viewers)} مشاهد',
                   style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w900, fontSize: 13),
                 ),
@@ -792,7 +793,7 @@ class _ChannelCard extends StatelessWidget {
               backgroundColor: AppColors.purple.withValues(alpha: .15),
               backgroundImage: avatar,
               child: avatar == null
-                  ? Text(
+                  ? AppText(
                 streamer.name.characters.first,
                 style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 18),
               )
@@ -807,7 +808,7 @@ class _ChannelCard extends StatelessWidget {
                 Row(
                   children: [
                     Expanded(
-                      child: Text(
+                      child: AppText(
                         streamer.name,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -818,7 +819,7 @@ class _ChannelCard extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 3),
-                Text(
+                AppText(
                   streamer.platform,
                   style: TextStyle(color: muted, fontWeight: FontWeight.w700, fontSize: 12.5),
                 ),
@@ -859,13 +860,13 @@ class _LiveBadge extends StatelessWidget {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
           decoration: BoxDecoration(color: AppColors.danger, borderRadius: BorderRadius.circular(999)),
-          child: const Text('LIVE', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 12)),
+          child: const AppText('LIVE', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 12)),
         ),
         const SizedBox(width: 6),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
           decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.58), borderRadius: BorderRadius.circular(999)),
-          child: Text('${_formatNumber(viewers)} مشاهد',
+          child: AppText('${_formatNumber(viewers)} مشاهد',
               style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12)),
         ),
       ],
@@ -881,7 +882,7 @@ class _MiniLiveBadge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(color: AppColors.danger, borderRadius: BorderRadius.circular(999)),
-      child: const Text('LIVE', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w900)),
+      child: const AppText('LIVE', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w900)),
     );
   }
 }
@@ -1798,28 +1799,28 @@ iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:#000
       appBar: AppBar(
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
-        title: Text(
+        title: AppText(
           _currentMode == 'direct' ? 'صفحة البث' : (_currentMode == 'mobile' ? 'صفحة الموبايل' : 'المشغل الذكي'),
           style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14),
         ),
         actions: [
           IconButton(
-            tooltip: 'الصفحة المباشرة',
+            tooltip: context.tr('الصفحة المباشرة'),
             icon: const Icon(Icons.language),
             onPressed: _loadChannelPage,
           ),
           IconButton(
-            tooltip: 'المشغل الذكي',
+            tooltip: context.tr('المشغل الذكي'),
             icon: const Icon(Icons.smart_display_rounded),
             onPressed: _loadSmartPlayer,
           ),
           IconButton(
-            tooltip: 'صفحة الموبايل',
+            tooltip: context.tr('صفحة الموبايل'),
             icon: const Icon(Icons.phone_android_rounded),
             onPressed: _loadMobilePage,
           ),
           IconButton(
-            tooltip: 'فتح في المتصفح',
+            tooltip: context.tr('فتح في المتصفح'),
             icon: const Icon(Icons.open_in_browser_rounded),
             onPressed: _openExternal,
           ),
@@ -1856,11 +1857,11 @@ iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:#000
                     children: [
                       const Icon(Icons.warning_amber_rounded, color: AppColors.purple, size: 44),
                       const SizedBox(height: 12),
-                      const Text('تعذر تشغيل البث داخل التطبيق',
+                      const AppText('تعذر تشغيل البث داخل التطبيق',
                           textAlign: TextAlign.center,
                           style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
                       const SizedBox(height: 8),
-                      Text(
+                      AppText(
                         _errorMessage.trim().isEmpty
                             ? 'جرّب أحد الأزرار في الأعلى (الصفحة المباشرة أو الموبايل)'
                             : _errorMessage,
@@ -1875,7 +1876,7 @@ iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:#000
                             child: ElevatedButton.icon(
                               onPressed: _loadChannelPage,
                               icon: const Icon(Icons.refresh),
-                              label: const Text('إعادة المحاولة'),
+                              label: const AppText('إعادة المحاولة'),
                             ),
                           ),
                           const SizedBox(width: 10),
@@ -1883,7 +1884,7 @@ iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:#000
                             child: OutlinedButton.icon(
                               onPressed: _openExternal,
                               icon: const Icon(Icons.open_in_browser_rounded),
-                              label: const Text('متصفح'),
+                              label: const AppText('متصفح'),
                             ),
                           ),
                         ],

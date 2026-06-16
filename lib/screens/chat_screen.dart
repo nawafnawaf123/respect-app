@@ -26,6 +26,7 @@ import '../theme/app_theme.dart';
 import '../widgets/glass_card.dart';
 import 'package:flutter/foundation.dart';
 
+import '../app/app_language.dart';
 void _logIgnoredError(Object error, StackTrace stackTrace) {
   if (kDebugMode) {
     debugPrint('Ignored error: $error\n$stackTrace');
@@ -331,7 +332,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
-      NotificationService.showTopNotification('خطأ الاتصال بالسيرفر: $e');
+      NotificationService.showTopNotification(context.tr('خطأ الاتصال بالسيرفر: $e'));
     }
   }
 
@@ -652,21 +653,21 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                 children: [
                   Container(width: 46, height: 5, decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: .55), borderRadius: BorderRadius.circular(99))),
                   const SizedBox(height: 16),
-                  Row(children: const [Icon(Icons.privacy_tip_rounded, color: AppColors.purple), SizedBox(width: 8), Expanded(child: Text('إعدادات خصوصية الرسائل', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 19)))]),
+                  Row(children: const [Icon(Icons.privacy_tip_rounded, color: AppColors.purple), SizedBox(width: 8), Expanded(child: AppText('إعدادات خصوصية الرسائل', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 19)))]),
                   const SizedBox(height: 10),
                   SwitchListTile(
                     value: messagesEnabled,
                     onChanged: (v) => setSheet(() => messagesEnabled = v),
-                    title: const Text('تفعيل الرسائل', style: TextStyle(fontWeight: FontWeight.w900)),
-                    subtitle: const Text('عند الإيقاف لا أحد يستطيع إرسال رسالة جديدة لك'),
+                    title: const AppText('تفعيل الرسائل', style: TextStyle(fontWeight: FontWeight.w900)),
+                    subtitle: const AppText('عند الإيقاف لا أحد يستطيع إرسال رسالة جديدة لك'),
                   ),
                   SwitchListTile(
                     value: verifiedOnly && canUseVerifiedOnlyMessages,
                     onChanged: messagesEnabled && canUseVerifiedOnlyMessages
                         ? (v) => setSheet(() => verifiedOnly = v)
                         : null,
-                    title: const Text('استقبال الرسائل من الموثقين فقط', style: TextStyle(fontWeight: FontWeight.w900)),
-                    subtitle: Text(
+                    title: const AppText('استقبال الرسائل من الموثقين فقط', style: TextStyle(fontWeight: FontWeight.w900)),
+                    subtitle: AppText(
                       canUseVerifiedOnlyMessages
                           ? 'أي حساب غير موثق سيظهر له أن الرسائل مقفلة'
                           : 'هذه الميزة تعمل فقط مع الباقة الذهبية أو المميزة',
@@ -675,14 +676,14 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                   SwitchListTile(
                     value: requestsRequired,
                     onChanged: messagesEnabled ? (v) => setSheet(() => requestsRequired = v) : null,
-                    title: const Text('طلب دردشة قبل أول رسالة', style: TextStyle(fontWeight: FontWeight.w900)),
-                    subtitle: const Text('المستخدم يرسل طلب، وبعد موافقتك تفتح الدردشة'),
+                    title: const AppText('طلب دردشة قبل أول رسالة', style: TextStyle(fontWeight: FontWeight.w900)),
+                    subtitle: const AppText('المستخدم يرسل طلب، وبعد موافقتك تفتح الدردشة'),
                   ),
                   SwitchListTile(
                     value: callsEnabled,
                     onChanged: (v) => setSheet(() => callsEnabled = v),
-                    title: const Text('السماح بالمكالمات', style: TextStyle(fontWeight: FontWeight.w900)),
-                    subtitle: const Text('عند الإيقاف لا أحد يستطيع الاتصال بك'),
+                    title: const AppText('السماح بالمكالمات', style: TextStyle(fontWeight: FontWeight.w900)),
+                    subtitle: const AppText('عند الإيقاف لا أحد يستطيع الاتصال بك'),
                   ),
                   const SizedBox(height: 8),
                   SizedBox(
@@ -700,18 +701,17 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                         setState(() => _privacySettings = next);
                         Navigator.pop(ctx);
                         if (verifiedOnly && !canUseVerifiedOnlyMessages) {
-                          NotificationService.showTopNotification(
-                            'ميزة الموثقين فقط تحتاج الباقة الذهبية أو المميزة',
+                          NotificationService.showTopNotification(context.tr('ميزة الموثقين فقط تحتاج الباقة الذهبية أو المميزة'),
                             title: 'ميزة غير متاحة',
                             icon: Icons.workspace_premium_rounded,
                             accentColor: AppColors.purple,
                           );
                         } else {
-                          NotificationService.showTopSuccess('تم حفظ إعدادات الخصوصية');
+                          NotificationService.showTopSuccess(context.tr('تم حفظ إعدادات الخصوصية'));
                         }
                       },
                       icon: const Icon(Icons.save_rounded),
-                      label: const Text('حفظ الإعدادات'),
+                      label: const AppText('حفظ الإعدادات'),
                     ),
                   ),
                 ],
@@ -736,7 +736,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         child: SizedBox(
           height: MediaQuery.of(ctx).size.height * .70,
           child: _incomingChatRequests.isEmpty
-              ? const Center(child: Text('لا توجد طلبات دردشة حالياً'))
+              ? const Center(child: AppText('لا توجد طلبات دردشة حالياً'))
               : ListView.separated(
                   padding: const EdgeInsets.all(14),
                   itemCount: _incomingChatRequests.length,
@@ -751,14 +751,14 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                       child: Row(children: [
                         CircleAvatar(backgroundImage: avatar, child: avatar == null ? const Icon(Icons.person_rounded) : null),
                         const SizedBox(width: 10),
-                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(name, style: const TextStyle(fontWeight: FontWeight.w900)), Text(sender)])),
+                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [AppText(name, style: const TextStyle(fontWeight: FontWeight.w900)), AppText(sender)])),
                         IconButton(
-                          tooltip: 'رفض',
+                          tooltip: context.tr('رفض'),
                           onPressed: () async { await SupabaseService.respondChatRequest(requestId: (req['id'] ?? '').toString(), approve: false); if (ctx.mounted) Navigator.pop(ctx); await _loadPrivacyAndStoryData(); },
                           icon: const Icon(Icons.close_rounded, color: AppColors.danger),
                         ),
                         IconButton(
-                          tooltip: 'قبول',
+                          tooltip: context.tr('قبول'),
                           onPressed: () async { await SupabaseService.respondChatRequest(requestId: (req['id'] ?? '').toString(), approve: true); if (ctx.mounted) Navigator.pop(ctx); await _loadPrivacyAndStoryData(); },
                           icon: const Icon(Icons.check_rounded, color: AppColors.success),
                         ),
@@ -779,38 +779,38 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     final reason = (result['reason'] ?? '').toString();
     if (reason == 'request_required') {
       if (_pendingRequestPeers.contains(p)) {
-        NotificationService.showTopNotification('طلب الدردشة مرسل مسبقًا، انتظر موافقة الطرف الآخر');
+        NotificationService.showTopNotification(context.tr('طلب الدردشة مرسل مسبقًا، انتظر موافقة الطرف الآخر'));
         return false;
       }
       final sent = await showDialog<bool>(
         context: context,
         builder: (_) => AlertDialog(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
-          title: const Text('إرسال طلب دردشة؟', style: TextStyle(fontWeight: FontWeight.w900)),
-          content: Text('لا يمكنك مراسلة $p قبل أن يوافق على طلب الدردشة.'),
+          title: const AppText('إرسال طلب دردشة؟', style: TextStyle(fontWeight: FontWeight.w900)),
+          content: AppText('لا يمكنك مراسلة $p قبل أن يوافق على طلب الدردشة.'),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('إلغاء')),
-            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('إرسال الطلب')),
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const AppText('إلغاء')),
+            FilledButton(onPressed: () => Navigator.pop(context, true), child: const AppText('إرسال الطلب')),
           ],
         ),
       );
       if (sent == true) {
         await SupabaseService.createChatRequest(sender: _currentUsername, receiver: p);
         _pendingRequestPeers.add(p);
-        NotificationService.showTopSuccess('تم إرسال طلب الدردشة');
+        NotificationService.showTopSuccess(context.tr('تم إرسال طلب الدردشة'));
       }
       return false;
     }
-    if (reason == 'messages_disabled') NotificationService.showTopError('هذا المستخدم أوقف استقبال الرسائل');
-    else if (reason == 'verified_only') NotificationService.showTopError('هذا المستخدم يستقبل الرسائل من الحسابات الموثقة فقط');
-    else NotificationService.showTopError('لا يمكن إرسال الرسالة الآن');
+    if (reason == 'messages_disabled') NotificationService.showTopError(context.tr('هذا المستخدم أوقف استقبال الرسائل'));
+    else if (reason == 'verified_only') NotificationService.showTopError(context.tr('هذا المستخدم يستقبل الرسائل من الحسابات الموثقة فقط'));
+    else NotificationService.showTopError(context.tr('لا يمكن إرسال الرسالة الآن'));
     return false;
   }
 
   Future<bool> _ensureCallAllowed(String peer) async {
     final result = await SupabaseService.canCallUser(caller: _currentUsername, receiver: peer);
     if (result['allowed'] == true) return true;
-    NotificationService.showTopError('هذا المستخدم أغلق استقبال الاتصالات');
+    NotificationService.showTopError(context.tr('هذا المستخدم أغلق استقبال الاتصالات'));
     return false;
   }
 
@@ -1156,7 +1156,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                     ),
                   ),
                   const SizedBox(height: 5),
-                  Text(
+                  AppText(
                     displayName,
                     maxLines: 1,
                     softWrap: false,
@@ -1211,7 +1211,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     final row = await SupabaseService.sendMessage(sender: _currentUsername, receiver: owner, text: body, mediaType: 'story_reply', mediaUrl: jsonEncode(story));
     await SupabaseService.sendUserBroadcast(username: owner, event: 'new_message', payload: {'message': row});
     unawaited(SupabaseService.sendMessagePush(receiverUsername: owner, senderUsername: _currentUsername, senderName: _currentName, messageId: (row['id'] ?? '').toString(), text: preview));
-    NotificationService.showTopSuccess('تم إرسال الرد في الخاص');
+    NotificationService.showTopSuccess(context.tr('تم إرسال الرد في الخاص'));
     await _refreshThreadsOnly();
   }
 
@@ -1223,7 +1223,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     final row = await SupabaseService.sendMessage(sender: _currentUsername, receiver: owner, text: '❤️ أعجبني الستوري', mediaType: 'story_like', mediaUrl: jsonEncode(story));
     await SupabaseService.sendUserBroadcast(username: owner, event: 'new_message', payload: {'message': row});
     unawaited(SupabaseService.sendMessagePush(receiverUsername: owner, senderUsername: _currentUsername, senderName: _currentName, messageId: (row['id'] ?? '').toString(), text: '❤️ أعجبني الستوري'));
-    NotificationService.showTopSuccess('تم إرسال الإعجاب في الخاص');
+    NotificationService.showTopSuccess(context.tr('تم إرسال الإعجاب في الخاص'));
     await _refreshThreadsOnly();
   }
 
@@ -1516,10 +1516,10 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       });
       _msgCtrl.clear();
       await _refreshThreadsOnly();
-      NotificationService.showTopSuccess('تم تعديل الرسالة');
+      NotificationService.showTopSuccess(context.tr('تم تعديل الرسالة'));
       return true;
     } catch (e) {
-      if (mounted) NotificationService.showTopError('تعذر تعديل الرسالة: $e');
+      if (mounted) NotificationService.showTopError(context.tr('تعذر تعديل الرسالة: $e'));
       return true;
     } finally {
       if (mounted) setState(() => _sending = false);
@@ -1543,7 +1543,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     final messages = _activeMessages;
     final index = messages.indexWhere((m) => m.id == id);
     if (index < 0) {
-      NotificationService.showTopNotification('الرسالة الأصلية غير موجودة في هذه المحادثة');
+      NotificationService.showTopNotification(context.tr('الرسالة الأصلية غير موجودة في هذه المحادثة'));
       return;
     }
 
@@ -1623,7 +1623,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     if (text.trim().isEmpty) return;
     await Clipboard.setData(ClipboardData(text: text));
     _clearSelection();
-    NotificationService.showTopSuccess('تم نسخ الرسائل');
+    NotificationService.showTopSuccess(context.tr('تم نسخ الرسائل'));
   }
 
   String _safeDownloadName(_DirectMessage msg, Uri uri) {
@@ -1659,7 +1659,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         }
       }
 
-      NotificationService.showTopNotification('بدأ التحميل...', icon: Icons.download_rounded);
+      NotificationService.showTopNotification(context.tr('بدأ التحميل...'), icon: Icons.download_rounded);
       final res = await http.get(uri);
       if (res.statusCode < 200 || res.statusCode >= 300) {
         throw Exception('HTTP ${res.statusCode}');
@@ -1669,16 +1669,16 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       if (!await dir.exists()) await dir.create(recursive: true);
       final file = File('${dir.path}/${_safeDownloadName(msg, uri)}');
       await file.writeAsBytes(res.bodyBytes, flush: true);
-      NotificationService.showTopSuccess('تم الحفظ في Downloads');
+      NotificationService.showTopSuccess(context.tr('تم الحفظ في Downloads'));
     } catch (e) {
-      NotificationService.showTopError('تعذر تنزيل الملف: $e');
+      NotificationService.showTopError(context.tr('تعذر تنزيل الملف: $e'));
     }
   }
 
   Future<void> _downloadSelectedMedia() async {
     final selected = _activeMessages.where((m) => _selectedMessageIds.contains(m.id) && (m.mediaUrl?.trim().isNotEmpty ?? false)).toList();
     if (selected.isEmpty) {
-      NotificationService.showTopNotification('حدد صورة أو فيديو أو صوت للتحميل');
+      NotificationService.showTopNotification(context.tr('حدد صورة أو فيديو أو صوت للتحميل'));
       return;
     }
     await _downloadMessageMedia(selected.first);
@@ -1696,7 +1696,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     await _saveLocallyDeletedMessages();
     await _purgeMessagesFromDeviceFiles(selectedIds, deleteMedia: false);
     await _refreshThreadsOnly();
-    NotificationService.showTopSuccess('تم الحذف لديك فقط');
+    NotificationService.showTopSuccess(context.tr('تم الحذف لديك فقط'));
   }
 
   Future<void> _deleteSelectedForEveryone() async {
@@ -1704,7 +1704,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     if (selected.isEmpty) return;
     final allowed = selected.every((m) => m.senderUsername == _currentUsername || (_isGroup && (_activeGroupAdmin || _activeGroupFounder)));
     if (!allowed) {
-      NotificationService.showTopError('حذف عند الجميع متاح لرسائلك فقط');
+      NotificationService.showTopError(context.tr('حذف عند الجميع متاح لرسائلك فقط'));
       return;
     }
     final selectedIds = selected.map((m) => m.id).where((id) => id.trim().isNotEmpty).toSet();
@@ -1723,7 +1723,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     });
     await _saveLocallyDeletedMessages();
     await _refreshThreadsOnly();
-    NotificationService.showTopSuccess('تم الحذف عند الجميع وحذف الوسائط المحلية');
+    NotificationService.showTopSuccess(context.tr('تم الحذف عند الجميع وحذف الوسائط المحلية'));
   }
 
   Future<void> _showDeleteSelectionSheet() async {
@@ -1739,12 +1739,12 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             ListTile(
               leading: const Icon(Icons.person_remove_rounded, color: AppColors.purple),
-              title: const Text('حذف لدي فقط', style: TextStyle(fontWeight: FontWeight.w900)),
+              title: const AppText('حذف لدي فقط', style: TextStyle(fontWeight: FontWeight.w900)),
               onTap: () { Navigator.pop(context); _deleteSelectedForMe(); },
             ),
             ListTile(
               leading: const Icon(Icons.delete_forever_rounded, color: AppColors.danger),
-              title: const Text('حذف عند الجميع', style: TextStyle(fontWeight: FontWeight.w900)),
+              title: const AppText('حذف عند الجميع', style: TextStyle(fontWeight: FontWeight.w900)),
               onTap: () { Navigator.pop(context); _deleteSelectedForEveryone(); },
             ),
           ]),
@@ -1783,7 +1783,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     if (isReceiver && maxViews > 0) {
       final viewed = await _limitedMediaViewedCount(msg);
       if (viewed >= maxViews) {
-        NotificationService.showTopError('انتهت صلاحية عرض هذه الصورة');
+        NotificationService.showTopError(context.tr('انتهت صلاحية عرض هذه الصورة'));
         if (mounted) setState(() {});
         return;
       }
@@ -1864,7 +1864,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
     } catch (e) {
       if (!mounted) return;
-      NotificationService.showTopNotification('فشل إرسال الرسالة: $e');
+      NotificationService.showTopNotification(context.tr('فشل إرسال الرسالة: $e'));
     } finally {
       if (mounted) setState(() => _sending = false);
     }
@@ -1876,7 +1876,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       final hasPermission = await _voiceRecorder.hasPermission();
       if (!hasPermission) {
         if (!mounted) return;
-        NotificationService.showTopNotification('اسمح للمايك لإرسال رسالة صوتية');
+        NotificationService.showTopNotification(context.tr('اسمح للمايك لإرسال رسالة صوتية'));
         return;
       }
 
@@ -1900,7 +1900,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       _startVoiceTypingBroadcast();
     } catch (e) {
       if (!mounted) return;
-      NotificationService.showTopNotification('فشل بدء التسجيل: $e');
+      NotificationService.showTopNotification(context.tr('فشل بدء التسجيل: $e'));
     }
   }
 
@@ -1969,7 +1969,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     if (details.localPosition.dy < -34 || details.delta.dy < -8) {
       HapticFeedback.heavyImpact();
       setState(() => _lockedVoiceRecording = true);
-      NotificationService.showTopNotification('تم تثبيت التسجيل، اضغط إرسال عند الانتهاء', icon: Icons.lock_rounded);
+      NotificationService.showTopNotification(context.tr('تم تثبيت التسجيل، اضغط إرسال عند الانتهاء'), icon: Icons.lock_rounded);
     }
   }
 
@@ -2006,7 +2006,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       }
       if (mounted) setState(() => _voicePaused = !_voicePaused);
     } catch (e) {
-      NotificationService.showTopError('تعذر إيقاف/استكمال التسجيل: $e');
+      NotificationService.showTopError(context.tr('تعذر إيقاف/استكمال التسجيل: $e'));
     }
   }
 
@@ -2052,7 +2052,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         _pendingVoiceWaveform = waveform;
       });
     } catch (e) {
-      if (mounted) NotificationService.showTopError('تعذر تجهيز المعاينة: $e');
+      if (mounted) NotificationService.showTopError(context.tr('تعذر تجهيز المعاينة: $e'));
     } finally {
       _recordingFinishingForPreview = false;
     }
@@ -2127,7 +2127,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       });
       _voiceAmplitudeTimer?.cancel();
       _stopVoiceTypingBroadcast();
-      NotificationService.showTopNotification('فشل إرسال الصوت: $e');
+      NotificationService.showTopNotification(context.tr('فشل إرسال الصوت: $e'));
     }
   }
 
@@ -2189,7 +2189,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
     } catch (e) {
       if (!mounted) return;
-      NotificationService.showTopNotification('فشل إرسال الرسالة الصوتية: $e');
+      NotificationService.showTopNotification(context.tr('فشل إرسال الرسالة الصوتية: $e'));
     } finally {
       _stopVoiceTypingBroadcast();
       if (mounted) setState(() => _sendingVoice = false);
@@ -2299,7 +2299,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text('إرسال مرفق', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+              const AppText('إرسال مرفق', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
               const SizedBox(height: 16),
               Row(
                 children: [
@@ -2375,7 +2375,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       ]);
     } catch (e) {
       if (!mounted) return;
-      NotificationService.showTopNotification('تعذر فتح كاميرا التطبيق: $e');
+      NotificationService.showTopNotification(context.tr('تعذر فتح كاميرا التطبيق: $e'));
     }
   }
 
@@ -2390,7 +2390,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       _setPendingMedia(picked.map((x) => _PendingChatMedia(path: x.path, type: 'image')).toList());
     } catch (e) {
       if (!mounted) return;
-      NotificationService.showTopNotification('تعذر اختيار الصور: $e');
+      NotificationService.showTopNotification(context.tr('تعذر اختيار الصور: $e'));
     }
   }
 
@@ -2405,7 +2405,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       _setPendingMedia(picked.map((x) => _PendingChatMedia(path: x.path, type: _looksLikeVideoPath(x.path) ? 'video' : 'image')).toList());
     } catch (e) {
       if (!mounted) return;
-      NotificationService.showTopNotification('تعذر اختيار الملفات: $e');
+      NotificationService.showTopNotification(context.tr('تعذر اختيار الملفات: $e'));
     }
   }
 
@@ -2454,7 +2454,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       _setPendingMedia([_PendingChatMedia(path: picked.path, type: 'image')]);
     } catch (e) {
       if (!mounted) return;
-      NotificationService.showTopNotification('تعذر اختيار/تصوير الصورة: $e');
+      NotificationService.showTopNotification(context.tr('تعذر اختيار/تصوير الصورة: $e'));
     }
   }
 
@@ -2468,7 +2468,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       _setPendingMedia([_PendingChatMedia(path: picked.path, type: 'video')]);
     } catch (e) {
       if (!mounted) return;
-      NotificationService.showTopNotification('تعذر اختيار/تصوير الفيديو: $e');
+      NotificationService.showTopNotification(context.tr('تعذر اختيار/تصوير الفيديو: $e'));
     }
   }
 
@@ -2560,7 +2560,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
     } catch (e) {
       if (!mounted) return;
-      NotificationService.showTopNotification('فشل إرسال المرفق: $e');
+      NotificationService.showTopNotification(context.tr('فشل إرسال المرفق: $e'));
     } finally {
       if (mounted) setState(() => _sendingMedia = false);
     }
@@ -2595,7 +2595,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     } catch (e) {
       if (mounted) {
         setState(() => _playingVoiceUrl = null);
-        NotificationService.showTopNotification('تعذر تشغيل الصوت: $e');
+        NotificationService.showTopNotification(context.tr('تعذر تشغيل الصوت: $e'));
       }
     }
   }
@@ -2655,14 +2655,14 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('الخروج من المجموعة'),
-        content: Text('هل تريد الخروج من "${_activeGroupName ?? 'المجموعة'}"؟'),
+        title: const AppText('الخروج من المجموعة'),
+        content: AppText('هل تريد الخروج من "${_activeGroupName ?? 'المجموعة'}"؟'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const AppText('إلغاء')),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('خروج'),
+            child: const AppText('خروج'),
           ),
         ],
       ),
@@ -2684,12 +2684,12 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         _replyToMessage = null;
         _editingMessage = null;
       });
-      NotificationService.showTopSuccess('تم الخروج من المجموعة');
+      NotificationService.showTopSuccess(context.tr('تم الخروج من المجموعة'));
       await _refreshThreadsOnly();
       _syncConversationActiveState();
     } catch (e) {
       if (!mounted) return;
-      NotificationService.showTopError('تعذر الخروج من المجموعة: $e');
+      NotificationService.showTopError(context.tr('تعذر الخروج من المجموعة: $e'));
     }
   }
 
@@ -2724,10 +2724,10 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       final url = await _uploadGroupAvatar(picked.path);
       await _updateActiveGroupInfo(avatarUrl: url);
       if (!mounted) return;
-      NotificationService.showTopNotification('تم تحديث صورة المجموعة');
+      NotificationService.showTopNotification(context.tr('تم تحديث صورة المجموعة'));
     } catch (e) {
       if (!mounted) return;
-      NotificationService.showTopNotification('فشل تحديث الصورة: $e');
+      NotificationService.showTopNotification(context.tr('فشل تحديث الصورة: $e'));
     }
   }
 
@@ -2745,23 +2745,23 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         context: pageContext,
         useRootNavigator: true,
         builder: (dialogCtx) => AlertDialog(
-          title: const Text('تغيير اسم المجموعة'),
+          title: const AppText('تغيير اسم المجموعة'),
           content: TextField(
             controller: ctrl,
             autofocus: true,
             maxLength: 40,
             textInputAction: TextInputAction.done,
-            decoration: const InputDecoration(labelText: 'اسم المجموعة'),
+            decoration: InputDecoration(labelText: context.tr('اسم المجموعة')),
             onSubmitted: (v) => Navigator.of(dialogCtx, rootNavigator: true).pop(v.trim()),
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(dialogCtx, rootNavigator: true).pop(),
-              child: const Text('إلغاء'),
+              child: const AppText('إلغاء'),
             ),
             ElevatedButton(
               onPressed: () => Navigator.of(dialogCtx, rootNavigator: true).pop(ctrl.text.trim()),
-              child: const Text('حفظ'),
+              child: const AppText('حفظ'),
             ),
           ],
         ),
@@ -2772,10 +2772,10 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       await _updateActiveGroupInfo(name: clean);
 
       if (!mounted) return;
-      NotificationService.showTopNotification('تم تغيير اسم المجموعة');
+      NotificationService.showTopNotification(context.tr('تم تغيير اسم المجموعة'));
     } catch (e) {
       if (!mounted) return;
-      NotificationService.showTopNotification('فشل تغيير اسم المجموعة: $e');
+      NotificationService.showTopNotification(context.tr('فشل تغيير اسم المجموعة: $e'));
     } finally {
       ctrl.dispose();
     }
@@ -2843,7 +2843,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
               ),
               const SizedBox(height: 12),
               Center(
-                child: Text(
+                child: AppText(
                   _activeGroupName ?? 'مجموعة',
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900),
@@ -2851,7 +2851,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
               ),
               const SizedBox(height: 4),
               Center(
-                child: Text(
+                child: AppText(
                   _activeGroupFounder ? 'أنت مؤسس المجموعة' : (_activeGroupAdmin ? 'أنت مشرف' : 'عضو في المجموعة'),
                   style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w800),
                 ),
@@ -2860,7 +2860,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
               if (_activeGroupAdmin || _activeGroupFounder) ...[
                 ListTile(
                   leading: const Icon(Icons.edit_rounded, color: AppColors.purple),
-                  title: const Text('تغيير اسم المجموعة'),
+                  title: const AppText('تغيير اسم المجموعة'),
                   onTap: () async {
                     Navigator.of(context).pop();
                     await Future<void>.delayed(const Duration(milliseconds: 280));
@@ -2870,7 +2870,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                 ),
                 ListTile(
                   leading: const Icon(Icons.image_rounded, color: AppColors.purple),
-                  title: const Text('تغيير صورة المجموعة'),
+                  title: const AppText('تغيير صورة المجموعة'),
                   onTap: () async {
                     Navigator.of(context).pop();
                     await Future<void>.delayed(const Duration(milliseconds: 280));
@@ -2880,8 +2880,8 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                 ),
                 ListTile(
                   leading: Icon(_activeGroupLocked ? Icons.lock_open_rounded : Icons.lock_rounded, color: AppColors.purple),
-                  title: Text(_activeGroupLocked ? 'فتح الدردشة للجميع' : 'قفل الدردشة للمشرفين فقط'),
-                  subtitle: const Text('عند القفل، المؤسس والمشرفون فقط يقدرون يرسلون'),
+                  title: AppText(_activeGroupLocked ? 'فتح الدردشة للجميع' : 'قفل الدردشة للمشرفين فقط'),
+                  subtitle: const AppText('عند القفل، المؤسس والمشرفون فقط يقدرون يرسلون'),
                   onTap: () async {
                     Navigator.of(context).pop();
                     await Future<void>.delayed(const Duration(milliseconds: 280));
@@ -2891,7 +2891,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                 ),
                 const Divider(),
               ],
-              Text('الأعضاء', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w900)),
+              AppText('الأعضاء', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w900)),
               const SizedBox(height: 8),
               ...members.map((m) {
                 final username = SupabaseService.displayUsername((m['username'] ?? '').toString());
@@ -2904,8 +2904,8 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                   margin: const EdgeInsets.only(bottom: 8),
                   child: ListTile(
                     leading: CircleAvatar(backgroundImage: avatar, child: avatar == null ? const Icon(Icons.person_rounded) : null),
-                    title: Text((user?['name'] ?? user?['profileName'] ?? username).toString(), style: const TextStyle(fontWeight: FontWeight.w800)),
-                    subtitle: Text(role == 'founder' ? 'المؤسس' : role == 'admin' ? 'مشرف' : 'عضو'),
+                    title: AppText((user?['name'] ?? user?['profileName'] ?? username).toString(), style: const TextStyle(fontWeight: FontWeight.w800)),
+                    subtitle: AppText(role == 'founder' ? 'المؤسس' : role == 'admin' ? 'مشرف' : 'عضو'),
                     trailing: canManageMember
                         ? PopupMenuButton<String>(
                       onSelected: (v) async {
@@ -2926,8 +2926,8 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                         }
                       },
                       itemBuilder: (_) => [
-                        PopupMenuItem(value: 'admin', child: Text(role == 'admin' ? 'إزالة الإشراف' : 'جعله مشرف')),
-                        const PopupMenuItem(value: 'remove', child: Text('طرد من المجموعة')),
+                        PopupMenuItem(value: 'admin', child: AppText(role == 'admin' ? 'إزالة الإشراف' : 'جعله مشرف')),
+                        const PopupMenuItem(value: 'remove', child: AppText('طرد من المجموعة')),
                       ],
                     )
                         : null,
@@ -2951,17 +2951,17 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setLocal) => AlertDialog(
-          title: const Text('إنشاء مجموعة'),
+          title: const AppText('إنشاء مجموعة'),
           content: SizedBox(
             width: double.maxFinite,
             height: 430,
             child: Column(
               children: [
-                TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'اسم المجموعة')),
+                TextField(controller: nameCtrl, decoration: InputDecoration(labelText: context.tr('اسم المجموعة'))),
                 const SizedBox(height: 8),
                 TextField(
                   controller: queryCtrl,
-                  decoration: const InputDecoration(prefixIcon: Icon(Icons.search_rounded), hintText: 'ابحث عن عضو'),
+                  decoration: InputDecoration(prefixIcon: Icon(Icons.search_rounded), hintText: context.tr('ابحث عن عضو')),
                   onChanged: (v) => setLocal(() {
                     final q = v.trim().toLowerCase();
                     visible = _users.where((u) {
@@ -2983,8 +2983,8 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                       return CheckboxListTile(
                         value: selected.contains(username),
                         onChanged: (v) => setLocal(() => v == true ? selected.add(username) : selected.remove(username)),
-                        title: Text((u['name'] ?? u['profileName'] ?? username).toString()),
-                        subtitle: Text(username),
+                        title: AppText((u['name'] ?? u['profileName'] ?? username).toString()),
+                        subtitle: AppText(username),
                         secondary: CircleAvatar(backgroundImage: avatar, child: avatar == null ? const Icon(Icons.person_rounded) : null),
                       );
                     },
@@ -2994,7 +2994,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
             ),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const AppText('إلغاء')),
             ElevatedButton(
               onPressed: () async {
                 if (selected.isEmpty) return;
@@ -3007,7 +3007,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                 await _refreshThreadsOnly();
                 await _openGroupById((group['id'] ?? '').toString(), setLoading: true);
               },
-              child: const Text('إنشاء'),
+              child: const AppText('إنشاء'),
             ),
           ],
         ),
@@ -3110,7 +3110,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       await _refreshThreadsOnly();
       WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
     } catch (e) {
-      if (mounted) NotificationService.showTopNotification('تم إنهاء المكالمة، لكن تعذر حفظ سجل المكالمة: $e');
+      if (mounted) NotificationService.showTopNotification(context.tr('تم إنهاء المكالمة، لكن تعذر حفظ سجل المكالمة: $e'));
     }
   }
 
@@ -3159,7 +3159,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       members = await SupabaseService.getChatGroupMembers(_activeGroupId!);
     } catch (e) {
       if (!mounted) return;
-      NotificationService.showTopNotification('تعذر تحميل أعضاء المجموعة: $e');
+      NotificationService.showTopNotification(context.tr('تعذر تحميل أعضاء المجموعة: $e'));
       return;
     }
 
@@ -3170,7 +3170,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
     if (candidates.isEmpty) {
       if (!mounted) return;
-      NotificationService.showTopNotification('لا يوجد أعضاء آخرين للاتصال بهم');
+      NotificationService.showTopNotification(context.tr('لا يوجد أعضاء آخرين للاتصال بهم'));
       return;
     }
 
@@ -3199,9 +3199,9 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(video ? 'مكالمة فيديو جماعية' : 'مكالمة صوتية جماعية', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 17)),
+                            AppText(video ? 'مكالمة فيديو جماعية' : 'مكالمة صوتية جماعية', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 17)),
                             const SizedBox(height: 2),
-                            Text('اختر أعضاء المجموعة الذين تريد الاتصال بهم', style: TextStyle(color: Theme.of(ctx).hintColor, fontSize: 12)),
+                            AppText('اختر أعضاء المجموعة الذين تريد الاتصال بهم', style: TextStyle(color: Theme.of(ctx).hintColor, fontSize: 12)),
                           ],
                         ),
                       ),
@@ -3219,13 +3219,13 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                             ..addAll(candidates.map((m) => SupabaseService.displayUsername((m['username'] ?? '').toString())));
                         }),
                         icon: const Icon(Icons.done_all_rounded),
-                        label: const Text('تحديد الكل'),
+                        label: const AppText('تحديد الكل'),
                       ),
                       const Spacer(),
                       TextButton.icon(
                         onPressed: () => setLocal(selected.clear),
                         icon: const Icon(Icons.clear_rounded),
-                        label: const Text('إلغاء التحديد'),
+                        label: const AppText('إلغاء التحديد'),
                       ),
                     ],
                   ),
@@ -3251,8 +3251,8 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                           }
                         }),
                         secondary: CircleAvatar(backgroundImage: avatar, child: avatar == null ? const Icon(Icons.person_rounded) : null),
-                        title: Text(name, style: const TextStyle(fontWeight: FontWeight.w800)),
-                        subtitle: Text(username),
+                        title: AppText(name, style: const TextStyle(fontWeight: FontWeight.w800)),
+                        subtitle: AppText(username),
                       );
                     },
                   ),
@@ -3264,7 +3264,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                       Expanded(
                         child: OutlinedButton(
                           onPressed: () => Navigator.pop(ctx),
-                          child: const Text('إلغاء'),
+                          child: const AppText('إلغاء'),
                         ),
                       ),
                       const SizedBox(width: 10),
@@ -3273,7 +3273,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                         child: ElevatedButton.icon(
                           onPressed: selected.isEmpty ? null : () => Navigator.pop(ctx, Set<String>.from(selected)),
                           icon: Icon(video ? Icons.videocam_rounded : Icons.call_rounded),
-                          label: Text('اتصال (${selected.length})'),
+                          label: AppText('اتصال (${selected.length})'),
                         ),
                       ),
                     ],
@@ -3314,7 +3314,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     }
 
     if (!mounted) return;
-    NotificationService.showTopNotification('تم إرسال دعوة المكالمة إلى ${selectedUsernames.length} عضو');
+    NotificationService.showTopNotification(context.tr('تم إرسال دعوة المكالمة إلى ${selectedUsernames.length} عضو'));
 
     final participants = <GroupCallParticipant>[];
     for (final username in selectedUsernames) {
@@ -3371,7 +3371,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
               ),
               child: Row(
                 children: [
-                  const Text(
+                  const AppText(
                     'الرسائل',
                     style: TextStyle(fontWeight: FontWeight.w900, fontSize: 20),
                   ),
@@ -3380,16 +3380,16 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                     Padding(
                       padding: const EdgeInsetsDirectional.only(end: 8),
                       child: Badge(
-                        label: Text('${_incomingChatRequests.length}'),
+                        label: AppText('${_incomingChatRequests.length}'),
                         child: IconButton(
-                          tooltip: 'طلبات الدردشة',
+                          tooltip: context.tr('طلبات الدردشة'),
                           onPressed: _showIncomingChatRequests,
                           icon: const Icon(Icons.person_add_alt_1_rounded, color: AppColors.purple),
                         ),
                       ),
                     ),
                   IconButton(
-                    tooltip: 'إعدادات الخصوصية',
+                    tooltip: context.tr('إعدادات الخصوصية'),
                     onPressed: _openPrivacySettings,
                     icon: const Icon(Icons.privacy_tip_rounded, color: AppColors.purple),
                   ),
@@ -3422,7 +3422,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                   Icon(Icons.forum_rounded, size: 70, color: AppColors.purple.withValues(alpha: .55)),
                   const SizedBox(height: 12),
                   Center(
-                    child: Text(
+                    child: AppText(
                       'لا توجد محادثات بعد',
                       style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted),
                     ),
@@ -3454,14 +3454,14 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(t.peerName, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+                                AppText(t.peerName, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
                                 const SizedBox(height: 3),
-                                Text(
+                                AppText(
                                   t.isGroup ? 'مجموعة' : t.peerUsername,
                                   style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, fontSize: 12),
                                 ),
                                 const SizedBox(height: 5),
-                                Text(t.lastMessage, maxLines: 1, overflow: TextOverflow.ellipsis),
+                                AppText(t.lastMessage, maxLines: 1, overflow: TextOverflow.ellipsis),
                               ],
                             ),
                           ),
@@ -3490,7 +3490,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         _buildConversationHeader(context, avatar),
         Expanded(
           child: messages.isEmpty
-              ? Center(child: Text('ابدأ أول رسالة الآن', style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted)))
+              ? Center(child: AppText('ابدأ أول رسالة الآن', style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted)))
               : ListView.builder(
             controller: _scrollCtrl,
             padding: const EdgeInsets.fromLTRB(12, 14, 12, 10),
@@ -3513,7 +3513,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
               : const SizedBox(key: ValueKey('no_typing_indicator'), height: 0),
         ),
         if (!_canSend)
-          Container(width: double.infinity, padding: const EdgeInsets.all(12), color: AppColors.danger.withValues(alpha: .10), child: const Text('الدردشة مقفلة، الإرسال متاح للمشرفين فقط', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w800))),
+          Container(width: double.infinity, padding: const EdgeInsets.all(12), color: AppColors.danger.withValues(alpha: .10), child: const AppText('الدردشة مقفلة، الإرسال متاح للمشرفين فقط', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w800))),
         if (_editingMessage != null)
           _EditPreviewBar(
             text: _editingMessage?.text ?? '',
@@ -3577,7 +3577,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
             CircleAvatar(
               backgroundColor: _canSend ? AppColors.purple.withValues(alpha: .16) : Colors.grey.withValues(alpha: .20),
               child: IconButton(
-                tooltip: 'إرسال صورة أو فيديو',
+                tooltip: context.tr('إرسال صورة أو فيديو'),
                 icon: _sendingMedia
                     ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.purple))
                     : const Icon(Icons.attach_file_rounded, color: AppColors.purple),
@@ -3591,7 +3591,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
               textInputAction: TextInputAction.send,
               onSubmitted: (_) => _sendMessage(),
               decoration: InputDecoration(
-                hintText: _editingMessage != null ? 'عدّل رسالتك...' : (_canSend ? 'اكتب رسالة...' : 'الدردشة مقفلة'),
+                hintText: _editingMessage != null ? context.tr('عدّل رسالتك...') : (_canSend ? context.tr('اكتب رسالة...') : context.tr('الدردشة مقفلة')),
                 filled: true,
                 fillColor: isDark ? AppColors.darkCard2 : AppColors.lightCard2,
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(30), borderSide: BorderSide.none),
@@ -3636,37 +3636,37 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
           child: Row(
             children: [
               IconButton(
-                tooltip: 'إلغاء التحديد',
+                tooltip: context.tr('إلغاء التحديد'),
                 onPressed: _clearSelection,
                 icon: const Icon(Icons.close_rounded),
               ),
-              Text(
+              AppText(
                 '${_selectedMessageIds.length}',
                 style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18),
               ),
               const Spacer(),
               IconButton(
-                tooltip: 'رد',
+                tooltip: context.tr('رد'),
                 onPressed: _selectedMessages.length == 1 ? () => _startReplyTo(_selectedMessages.first) : null,
                 icon: const Icon(Icons.reply_rounded),
               ),
               IconButton(
-                tooltip: 'نسخ',
+                tooltip: context.tr('نسخ'),
                 onPressed: _copySelectedMessages,
                 icon: const Icon(Icons.copy_rounded),
               ),
               IconButton(
-                tooltip: 'تعديل',
+                tooltip: context.tr('تعديل'),
                 onPressed: _canEditSelectedMessage ? _startEditSelectedMessage : null,
                 icon: const Icon(Icons.edit_rounded),
               ),
               IconButton(
-                tooltip: 'تحميل',
+                tooltip: context.tr('تحميل'),
                 onPressed: _downloadSelectedMedia,
                 icon: const Icon(Icons.download_rounded),
               ),
               IconButton(
-                tooltip: 'حذف',
+                tooltip: context.tr('حذف'),
                 onPressed: _showDeleteSelectionSheet,
                 icon: const Icon(Icons.delete_rounded, color: AppColors.danger),
               ),
@@ -3694,7 +3694,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         child: Row(
           children: [
             IconButton(
-              tooltip: 'رجوع',
+              tooltip: context.tr('رجوع'),
               onPressed: _handleConversationBack,
               icon: const Icon(Icons.arrow_back_rounded),
             ),
@@ -3712,7 +3712,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(
+                  AppText(
                     title,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -3721,7 +3721,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                   if (subtitle.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(top: 2),
-                      child: Text(
+                      child: AppText(
                         subtitle,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -3737,31 +3737,31 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
             ),
             if (!_isGroup) ...[
               _HeaderActionButton(
-                tooltip: 'اتصال صوتي',
+                tooltip: context.tr('اتصال صوتي'),
                 icon: Icons.call_rounded,
                 onTap: () => _startCall(video: false),
               ),
               const SizedBox(width: 6),
               _HeaderActionButton(
-                tooltip: 'مكالمة فيديو',
+                tooltip: context.tr('مكالمة فيديو'),
                 icon: Icons.videocam_rounded,
                 onTap: () => _startCall(video: true),
               ),
             ] else ...[
               _HeaderActionButton(
-                tooltip: 'اتصال جماعي',
+                tooltip: context.tr('اتصال جماعي'),
                 icon: Icons.call_rounded,
                 onTap: () => _startCall(video: false),
               ),
               const SizedBox(width: 6),
               _HeaderActionButton(
-                tooltip: 'فيديو جماعي',
+                tooltip: context.tr('فيديو جماعي'),
                 icon: Icons.videocam_rounded,
                 onTap: () => _startCall(video: true),
               ),
               const SizedBox(width: 6),
               PopupMenuButton<String>(
-                tooltip: 'خيارات المجموعة',
+                tooltip: context.tr('خيارات المجموعة'),
                 icon: const Icon(Icons.more_vert_rounded),
                 onSelected: (value) {
                   if (value == 'leave') _leaveCurrentGroup();
@@ -3769,8 +3769,8 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                 },
                 itemBuilder: (ctx) => [
                   if (_activeGroupAdmin || _activeGroupFounder)
-                    const PopupMenuItem(value: 'settings', child: ListTile(leading: Icon(Icons.settings_rounded), title: Text('إعدادات المجموعة'))),
-                  const PopupMenuItem(value: 'leave', child: ListTile(leading: Icon(Icons.logout_rounded, color: AppColors.danger), title: Text('الخروج من المجموعة'))),
+                    const PopupMenuItem(value: 'settings', child: ListTile(leading: Icon(Icons.settings_rounded), title: AppText('إعدادات المجموعة'))),
+                  const PopupMenuItem(value: 'leave', child: ListTile(leading: Icon(Icons.logout_rounded, color: AppColors.danger), title: AppText('الخروج من المجموعة'))),
                 ],
               ),
             ],
@@ -3846,7 +3846,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                     ),
                   ),
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(name, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: isMe ? Colors.white70 : AppColors.purple)),
+                    AppText(name, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: isMe ? Colors.white70 : AppColors.purple)),
                     if ((msg.replyText ?? '').trim().isNotEmpty) ...[
                       const SizedBox(height: 5),
                       _InlineReplyPreview(sender: msg.replySender ?? '', text: msg.replyText ?? '', isMe: isMe, onTap: () => _jumpToRepliedMessage(msg.replyToId)),
@@ -3882,10 +3882,10 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                           else if (msg.isStoryReply || msg.isStoryLike)
                             _StoryReferenceMessage(message: msg, isMe: isMe, onOpen: () => _openStoryFromMessageReference(msg))
                           else
-                            Text(msg.text, style: TextStyle(color: isMe ? Colors.white : null, height: 1.35)),
+                            AppText(msg.text, style: TextStyle(color: isMe ? Colors.white : null, height: 1.35)),
                     const SizedBox(height: 4),
                     Row(mainAxisSize: MainAxisSize.min, children: [
-                      Text(_formatTime(msg.createdAt), style: TextStyle(fontSize: 10.5, color: isMe ? Colors.white70 : (isDark ? AppColors.darkMuted : AppColors.lightMuted))),
+                      AppText(_formatTime(msg.createdAt), style: TextStyle(fontSize: 10.5, color: isMe ? Colors.white70 : (isDark ? AppColors.darkMuted : AppColors.lightMuted))),
                       if (isMe) ...[
                         const SizedBox(width: 5),
                         _MessageStatusIcon(status: msg.status),
@@ -3904,7 +3904,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                         bottom: -13,
                         end: isMe ? 12 : null,
                         start: isMe ? null : 12,
-                        child: const Text('❤️', style: TextStyle(fontSize: 15, shadows: [Shadow(color: Colors.black26, blurRadius: 7, offset: Offset(0, 2))])),
+                        child: const AppText('❤️', style: TextStyle(fontSize: 15, shadows: [Shadow(color: Colors.black26, blurRadius: 7, offset: Offset(0, 2))])),
                       ),
                   ],
                 ),
@@ -4072,7 +4072,7 @@ class _MessageStoryViewerPageState extends State<_MessageStoryViewerPage> {
         children: [
           Icon(Icons.lock_rounded, color: Colors.white70, size: 74),
           SizedBox(height: 12),
-          Text('هذا الستوري مشفر وغير متاح لهذا الحساب', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w800)),
+          AppText('هذا الستوري مشفر وغير متاح لهذا الحساب', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w800)),
         ],
       );
     }
@@ -4189,8 +4189,8 @@ class _MessageStoryViewerPageState extends State<_MessageStoryViewerPage> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 15)),
-                              Text(username, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: Colors.white.withValues(alpha: .65), fontWeight: FontWeight.w700, fontSize: 12)),
+                              AppText(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 15)),
+                              AppText(username, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: Colors.white.withValues(alpha: .65), fontWeight: FontWeight.w700, fontSize: 12)),
                             ],
                           ),
                         ),
@@ -4221,7 +4221,7 @@ class _MessageStoryViewerPageState extends State<_MessageStoryViewerPage> {
                           maxLines: 3,
                           style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
                           decoration: InputDecoration(
-                            hintText: 'رد على الستوري...',
+                            hintText: context.tr('رد على الستوري...'),
                             hintStyle: TextStyle(color: Colors.white.withValues(alpha: .58)),
                             border: InputBorder.none,
                             contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -4322,8 +4322,8 @@ class _EditPreviewBar extends StatelessWidget {
         const Icon(Icons.edit_rounded, color: AppColors.purple, size: 18),
         const SizedBox(width: 8),
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('تعديل الرسالة', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: AppColors.purple)),
-          Text(text, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: isDark ? Colors.white70 : Colors.black87)),
+          const AppText('تعديل الرسالة', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: AppColors.purple)),
+          AppText(text, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: isDark ? Colors.white70 : Colors.black87)),
         ])),
         IconButton(onPressed: onClose, icon: const Icon(Icons.close_rounded, size: 18)),
       ]),
@@ -4352,8 +4352,8 @@ class _ReplyPreviewBar extends StatelessWidget {
         const Icon(Icons.reply_rounded, color: AppColors.purple, size: 18),
         const SizedBox(width: 8),
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(sender, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: AppColors.purple)),
-          Text(text, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: isDark ? Colors.white70 : Colors.black87)),
+          AppText(sender, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: AppColors.purple)),
+          AppText(text, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: isDark ? Colors.white70 : Colors.black87)),
         ])),
         IconButton(onPressed: onClose, icon: const Icon(Icons.close_rounded, size: 18)),
       ]),
@@ -4396,13 +4396,13 @@ class _PendingMediaPreviewBar extends StatelessWidget {
             const Icon(Icons.collections_rounded, size: 18, color: AppColors.purple),
             const SizedBox(width: 7),
             Expanded(
-              child: Text(
+              child: AppText(
                 items.length == 1 ? 'جاهز للإرسال' : '${items.length} ملفات في رسالة واحدة',
                 style: const TextStyle(fontWeight: FontWeight.w900),
               ),
             ),
             IconButton(
-              tooltip: 'إلغاء',
+              tooltip: context.tr('إلغاء'),
               onPressed: onClear,
               icon: const Icon(Icons.close_rounded, size: 20),
             ),
@@ -4412,7 +4412,7 @@ class _PendingMediaPreviewBar extends StatelessWidget {
             const Icon(Icons.visibility_rounded, color: AppColors.purple, size: 17),
             const SizedBox(width: 7),
             Expanded(
-              child: Text(
+              child: AppText(
                 maxViews == 0 ? 'عرض عادي' : (maxViews == 1 ? 'عرض مرة واحدة للمستلم' : 'عرض مرتين للمستلم'),
                 style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: isDark ? Colors.white70 : Colors.black87),
               ),
@@ -4499,7 +4499,7 @@ class _MediaViewLimitChip extends StatelessWidget {
           borderRadius: BorderRadius.circular(999),
           border: Border.all(color: selected ? AppColors.purple : Colors.white.withValues(alpha: .12)),
         ),
-        child: Text(label, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 11)),
+        child: AppText(label, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 11)),
       ),
     );
   }
@@ -4637,9 +4637,9 @@ class _InlineReplyPreview extends StatelessWidget {
           border: Border(right: BorderSide(color: isMe ? Colors.white70 : AppColors.purple, width: 3)),
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(sender.isEmpty ? 'رد' : sender, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10.5, color: isMe ? Colors.white : AppColors.purple)),
+          AppText(sender.isEmpty ? 'رد' : sender, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10.5, color: isMe ? Colors.white : AppColors.purple)),
           const SizedBox(height: 2),
-          Text(text, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 11, color: isMe ? Colors.white70 : null)),
+          AppText(text, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 11, color: isMe ? Colors.white70 : null)),
         ]),
       ),
     );
@@ -4780,7 +4780,7 @@ class _MediaViewerPageState extends State<_MediaViewerPage> {
       return Column(mainAxisSize: MainAxisSize.min, children: const [
         Icon(Icons.error_outline_rounded, color: Colors.white70, size: 46),
         SizedBox(height: 10),
-        Text('تعذر تشغيل الفيديو', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
+        AppText('تعذر تشغيل الفيديو', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
       ]);
     }
     if (!_videoReady || c == null || !c.value.isInitialized || _videoUrl != item.url) {
@@ -4811,12 +4811,12 @@ class _MediaViewerPageState extends State<_MediaViewerPage> {
             ? Image.network(
                 item.url,
                 fit: BoxFit.contain,
-                errorBuilder: (_, __, ___) => const Text('تعذر عرض الصورة', style: TextStyle(color: Colors.white)),
+                errorBuilder: (_, __, ___) => const AppText('تعذر عرض الصورة', style: TextStyle(color: Colors.white)),
               )
             : Image.file(
                 File(item.url),
                 fit: BoxFit.contain,
-                errorBuilder: (_, __, ___) => const Text('تعذر عرض الصورة', style: TextStyle(color: Colors.white)),
+                errorBuilder: (_, __, ___) => const AppText('تعذر عرض الصورة', style: TextStyle(color: Colors.white)),
               ),
       ),
     );
@@ -4836,7 +4836,7 @@ class _MediaViewerPageState extends State<_MediaViewerPage> {
       appBar: AppBar(
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
-        title: Text(items.length > 1 ? '${_index + 1} / ${items.length}' : widget.title),
+        title: AppText(items.length > 1 ? '${_index + 1} / ${items.length}' : widget.title),
         actions: [IconButton(onPressed: widget.onDownload, icon: const Icon(Icons.download_rounded))],
       ),
       body: Stack(
@@ -4860,7 +4860,7 @@ class _MediaViewerPageState extends State<_MediaViewerPage> {
                 decoration: BoxDecoration(color: Colors.black.withValues(alpha: .55), borderRadius: BorderRadius.circular(16)),
                 child: Row(children: [
                   IconButton(onPressed: _togglePlay, icon: Icon(_controller?.value.isPlaying == true ? Icons.pause_rounded : Icons.play_arrow_rounded, color: Colors.white)),
-                  Text(_fmt(_position), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                  AppText(_fmt(_position), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
                   Expanded(
                     child: Slider(
                       value: _position.inMilliseconds.toDouble().clamp(0, math.max(1, _duration.inMilliseconds).toDouble()).toDouble(),
@@ -4887,7 +4887,7 @@ class _MediaViewerPageState extends State<_MediaViewerPage> {
               left: 18,
               right: 18,
               bottom: items.length > 1 ? 160 : 96,
-              child: Text(caption, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
+              child: AppText(caption, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
             ),
           if (items.length > 1)
             Positioned(
@@ -4994,7 +4994,7 @@ class _TypingBubbleState extends State<_TypingBubble> with SingleTickerProviderS
             children: [
               Icon(widget.mode == 'voice' ? Icons.mic_rounded : Icons.edit_rounded, size: 15, color: accent),
               const SizedBox(width: 6),
-              Text(
+              AppText(
                 widget.mode == 'voice' ? '${widget.name} يسجل رسالة صوتية...' : '${widget.name} يكتب الآن...',
                 style: const TextStyle(color: accent, fontWeight: FontWeight.w800, fontSize: 12),
               ),
@@ -5133,9 +5133,9 @@ class _VoiceMessagePlayer extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Row(children: [
-              Text(_fmt(isPlaying ? position : Duration.zero), style: TextStyle(color: accent.withValues(alpha: .76), fontWeight: FontWeight.w800, fontSize: 10.5)),
+              AppText(_fmt(isPlaying ? position : Duration.zero), style: TextStyle(color: accent.withValues(alpha: .76), fontWeight: FontWeight.w800, fontSize: 10.5)),
               const Spacer(),
-              Text(_fmt(total), style: TextStyle(color: accent.withValues(alpha: .76), fontWeight: FontWeight.w800, fontSize: 10.5)),
+              AppText(_fmt(total), style: TextStyle(color: accent.withValues(alpha: .76), fontWeight: FontWeight.w800, fontSize: 10.5)),
             ]),
           ]),
         ),
@@ -5150,7 +5150,7 @@ class _VoiceMessagePlayer extends StatelessWidget {
               borderRadius: BorderRadius.circular(12),
               border: Border.all(color: accent.withValues(alpha: .15)),
             ),
-            child: Text('${speed.toStringAsFixed(speed == speed.roundToDouble() ? 0 : 2)}x', style: TextStyle(color: accent, fontWeight: FontWeight.w900, fontSize: 11)),
+            child: AppText('${speed.toStringAsFixed(speed == speed.roundToDouble() ? 0 : 2)}x', style: TextStyle(color: accent, fontWeight: FontWeight.w900, fontSize: 11)),
           ),
         ),
       ]),
@@ -5595,7 +5595,7 @@ class _InstagramLikeBurst extends StatelessWidget {
             angle: rotate,
             child: Transform.scale(
               scale: scale.clamp(0.0, 1.22),
-              child: const Text(
+              child: const AppText(
                 '❤️',
                 style: TextStyle(
                   fontSize: 92,
@@ -5687,7 +5687,7 @@ class _StoryReferenceMessage extends StatelessWidget {
                         CircleAvatar(radius: 9, backgroundImage: avatar, child: avatar == null ? const Icon(Icons.person_rounded, size: 10) : null),
                         const SizedBox(width: 5),
                         Flexible(
-                          child: Text(
+                          child: AppText(
                             owner,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -5697,7 +5697,7 @@ class _StoryReferenceMessage extends StatelessWidget {
                       ],
                     ),
                     const SizedBox(height: 4),
-                    Text(
+                    AppText(
                       message.isStoryLike ? 'إعجاب على الستوري' : 'رد على الستوري',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -5711,7 +5711,7 @@ class _StoryReferenceMessage extends StatelessWidget {
         )),
         if (replyText.isNotEmpty) ...[
           const SizedBox(height: 7),
-          Text(replyText, style: TextStyle(color: isMe ? Colors.white : null, height: 1.35, fontWeight: FontWeight.w700)),
+          AppText(replyText, style: TextStyle(color: isMe ? Colors.white : null, height: 1.35, fontWeight: FontWeight.w700)),
         ],
       ],
     );
@@ -5753,7 +5753,7 @@ class _CallHistoryMessage extends StatelessWidget {
           ),
           const SizedBox(width: 9),
           Flexible(
-            child: Text(
+            child: AppText(
               title,
               style: TextStyle(
                 color: isMe ? Colors.white : (isDark ? Colors.white : Colors.black87),
@@ -5815,7 +5815,7 @@ class _AttachmentActionButton extends StatelessWidget {
               child: Icon(icon, color: accent, size: 24),
             ),
             const SizedBox(height: 9),
-            Text(
+            AppText(
               title,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
@@ -5827,7 +5827,7 @@ class _AttachmentActionButton extends StatelessWidget {
             ),
             if ((subtitle ?? '').trim().isNotEmpty) ...[
               const SizedBox(height: 4),
-              Text(
+              AppText(
                 subtitle!,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
@@ -5903,7 +5903,7 @@ class _LockedVoiceRecorderBar extends StatelessWidget {
         children: [
           Icon(Icons.fiber_manual_record_rounded, color: paused ? Colors.orangeAccent : Colors.redAccent, size: 18),
           const SizedBox(width: 8),
-          Text(
+          AppText(
             _time,
             style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
           ),
@@ -5929,23 +5929,23 @@ class _LockedVoiceRecorderBar extends StatelessWidget {
             ),
           ),
           IconButton(
-            tooltip: paused ? 'متابعة' : 'إيقاف مؤقت',
+            tooltip: paused ? context.tr('متابعة') : context.tr('إيقاف مؤقت'),
             onPressed: onPauseResume,
             icon: Icon(paused ? Icons.play_arrow_rounded : Icons.pause_rounded, color: Colors.white),
           ),
           IconButton(
-            tooltip: 'إلغاء',
+            tooltip: context.tr('إلغاء'),
             onPressed: onCancel,
             icon: const Icon(Icons.delete_outline_rounded, color: Colors.redAccent),
           ),
           if (onPreview != null)
             IconButton(
-              tooltip: 'معاينة',
+              tooltip: context.tr('معاينة'),
               onPressed: onPreview,
               icon: const Icon(Icons.check_circle_outline_rounded, color: Color(0xFF38BDF8)),
             ),
           IconButton(
-            tooltip: 'إرسال',
+            tooltip: context.tr('إرسال'),
             onPressed: onSend ?? onStop,
             icon: const Icon(Icons.send_rounded, color: Color(0xFF22C55E)),
           ),
@@ -6051,14 +6051,14 @@ class _PendingVoicePreviewBar extends StatelessWidget {
                 color: Colors.white.withValues(alpha: 0.08),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: Text(
+              child: AppText(
                 '${speed.toStringAsFixed(speed % 1 == 0 ? 0 : 2)}x',
                 style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 11),
               ),
             ),
           ),
           const SizedBox(width: 6),
-          Text(
+          AppText(
             _fmt(shownSeconds),
             style: TextStyle(color: Colors.white.withValues(alpha: 0.75), fontWeight: FontWeight.w700),
           ),
@@ -6093,7 +6093,7 @@ class _LimitedMediaBadge extends StatelessWidget {
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         const Icon(Icons.visibility_rounded, color: Colors.white, size: 14),
         const SizedBox(width: 4),
-        Text(maxViews == 1 ? 'مرة' : 'مرتين', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 10)),
+        AppText(maxViews == 1 ? 'مرة' : 'مرتين', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 10)),
       ]),
     );
   }
@@ -6133,9 +6133,9 @@ class _ChatImageMessage extends StatelessWidget {
                     child: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
                       const Icon(Icons.visibility_off_rounded, color: Colors.white, size: 48),
                       const SizedBox(height: 8),
-                      Text(limitedMaxViews == 1 ? 'صورة للعرض مرة واحدة' : 'صورة للعرض مرتين', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
+                      AppText(limitedMaxViews == 1 ? 'صورة للعرض مرة واحدة' : 'صورة للعرض مرتين', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
                       const SizedBox(height: 4),
-                      const Text('اضغط للفتح', style: TextStyle(color: Colors.white70)),
+                      const AppText('اضغط للفتح', style: TextStyle(color: Colors.white70)),
                     ])),
                   )
                 else
@@ -6177,7 +6177,7 @@ class _ChatImageMessage extends StatelessWidget {
         if ((caption ?? '').trim().isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(top: 8),
-            child: Text(
+            child: AppText(
               caption!,
               style: const TextStyle(color: Colors.white),
             ),
@@ -6222,7 +6222,7 @@ class _ChatVideoMessage extends StatelessWidget {
                 Icon(limitedMaxViews > 0 ? Icons.visibility_off_rounded : Icons.videocam_rounded, color: Colors.white.withValues(alpha: 0.28), size: 72),
                 Icon(limitedMaxViews > 0 ? Icons.lock_open_rounded : Icons.play_circle_fill_rounded, color: Colors.white, size: 62),
                 if (limitedMaxViews > 0)
-                  const Positioned(bottom: 52, child: Text('اضغط للفتح', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900))),
+                  const Positioned(bottom: 52, child: AppText('اضغط للفتح', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900))),
                 if (limitedMaxViews > 0)
                   Positioned(
                     top: 8,
@@ -6236,7 +6236,7 @@ class _ChatVideoMessage extends StatelessWidget {
         if ((caption ?? '').trim().isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(top: 8),
-            child: Text(
+            child: AppText(
               caption!,
               style: const TextStyle(color: Colors.white),
             ),
@@ -6337,7 +6337,7 @@ class _ChatMediaGalleryMessage extends StatelessWidget {
               Container(
                 color: Colors.black.withValues(alpha: 0.60),
                 child: Center(
-                  child: Text(
+                  child: AppText(
                     '+$hidden',
                     style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.w900),
                   ),
@@ -6426,7 +6426,7 @@ class _ChatMediaGalleryMessage extends StatelessWidget {
         .toList();
 
     if (media.isEmpty) {
-      return const Text('تعذر عرض الملف', style: TextStyle(color: Colors.white70));
+      return const AppText('تعذر عرض الملف', style: TextStyle(color: Colors.white70));
     }
 
     final cleanCaption = (caption ?? '').trim();
@@ -6447,7 +6447,7 @@ class _ChatMediaGalleryMessage extends StatelessWidget {
           const SizedBox(height: 7),
           ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 218),
-            child: Text(
+            child: AppText(
               cleanCaption,
               style: TextStyle(color: isMe ? Colors.white : null, height: 1.35),
             ),
@@ -6838,7 +6838,7 @@ class _InAppChatCameraPageState extends State<_InAppChatCameraPage> with Widgets
       Navigator.pop(context, _CapturedChatMedia(path: file.path, isVideo: false));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('تعذر التقاط الصورة: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: AppText('تعذر التقاط الصورة: $e')));
     }
   }
 
@@ -6926,7 +6926,7 @@ class _InAppChatCameraPageState extends State<_InAppChatCameraPage> with Widgets
         _recordStartedAt = null;
         _recordElapsed = Duration.zero;
       });
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('تعذر تصوير الفيديو: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: AppText('تعذر تصوير الفيديو: $e')));
     }
   }
 
@@ -6994,7 +6994,7 @@ class _InAppChatCameraPageState extends State<_InAppChatCameraPage> with Widgets
         _recordStartedAt = null;
         _recordElapsed = Duration.zero;
       });
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('تم إلغاء التسجيل')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: AppText('تم إلغاء التسجيل')));
     }
   }
 
@@ -7042,7 +7042,7 @@ class _InAppChatCameraPageState extends State<_InAppChatCameraPage> with Widgets
     } catch (e) {
       if (!mounted) return;
       setState(() => _recordBusy = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('تعذر إيقاف/استكمال التسجيل مؤقتًا: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: AppText('تعذر إيقاف/استكمال التسجيل مؤقتًا: $e')));
     }
   }
 
@@ -7158,7 +7158,7 @@ class _InAppChatCameraPageState extends State<_InAppChatCameraPage> with Widgets
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
                         decoration: BoxDecoration(color: Colors.black.withValues(alpha: .48), borderRadius: BorderRadius.circular(99), border: Border.all(color: _cameraPurple.withValues(alpha: .35))),
-                        child: Text('${_currentZoom.toStringAsFixed(1)}x', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
+                        child: AppText('${_currentZoom.toStringAsFixed(1)}x', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
                       ),
                     ),
                   ),
@@ -7187,7 +7187,7 @@ class _InAppChatCameraPageState extends State<_InAppChatCameraPage> with Widgets
                   ? _CameraErrorView(message: _error!, onRetry: () => _initializeCamera(keepIndex: true))
                   : ready
                   ? _buildInteractiveCameraPreview(controller)
-                  : const Center(child: Text('الكاميرا غير جاهزة', style: TextStyle(color: Colors.white))),
+                  : const Center(child: AppText('الكاميرا غير جاهزة', style: TextStyle(color: Colors.white))),
             ),
             Positioned(
               top: 12,
@@ -7209,7 +7209,7 @@ class _InAppChatCameraPageState extends State<_InAppChatCameraPage> with Widgets
                         children: [
                           Icon(_recordPaused ? Icons.pause_rounded : Icons.fiber_manual_record_rounded, color: Colors.white, size: 14),
                           const SizedBox(width: 6),
-                          Text(_recordPaused ? 'متوقف ${_formatElapsed(_recordElapsed)}' : _formatElapsed(_recordElapsed), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
+                          AppText(_recordPaused ? 'متوقف ${_formatElapsed(_recordElapsed)}' : _formatElapsed(_recordElapsed), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
                         ],
                       ),
                     ),
@@ -7307,7 +7307,7 @@ class _InAppChatCameraPageState extends State<_InAppChatCameraPage> with Widgets
                     ],
                   ),
                   const SizedBox(height: 12),
-                  Text(
+                  AppText(
                     _videoMode
                         ? (_recording
                         ? (_recordBusy ? 'جاري تنفيذ العملية...' : (_recordPaused ? 'متوقف مؤقتًا - تشغيل للإكمال، الأحمر للحفظ، والإكس للإلغاء' : 'تقدر تعمل فوكس أثناء التصوير، البنفسجي إيقاف مؤقت، والإكس إلغاء'))
@@ -7378,7 +7378,7 @@ class _CameraExposureSlider extends StatelessWidget {
               ),
             ),
           ),
-          Text(value.toStringAsFixed(1), style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800)),
+          AppText(value.toStringAsFixed(1), style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800)),
         ],
       ),
     );
@@ -7414,7 +7414,7 @@ class _CameraResolutionChip extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(title, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w900)),
+            AppText(title, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w900)),
             if (active) ...[
               const SizedBox(width: 5),
               const Icon(Icons.check_circle_rounded, color: Colors.white, size: 14),
@@ -7442,13 +7442,13 @@ class _CameraErrorView extends StatelessWidget {
           children: [
             const Icon(Icons.no_photography_rounded, color: Colors.white, size: 48),
             const SizedBox(height: 14),
-            Text(message, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
+            AppText(message, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
             const SizedBox(height: 16),
             ElevatedButton.icon(
               onPressed: onRetry,
               style: ElevatedButton.styleFrom(backgroundColor: AppColors.purple, foregroundColor: Colors.white),
               icon: const Icon(Icons.refresh_rounded),
-              label: const Text('إعادة المحاولة'),
+              label: const AppText('إعادة المحاولة'),
             ),
           ],
         ),
@@ -7519,7 +7519,7 @@ class _CameraModePill extends StatelessWidget {
           color: active ? _InAppChatCameraPageState._cameraPurple : Colors.transparent,
           borderRadius: BorderRadius.circular(99),
         ),
-        child: Text(
+        child: AppText(
           title,
           style: TextStyle(
             color: Colors.white,

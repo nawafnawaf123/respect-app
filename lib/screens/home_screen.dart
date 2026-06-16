@@ -22,6 +22,7 @@ import 'settings_screen.dart';
 import 'saved_posts_screen.dart';
 import 'admin_screen.dart';
 
+import '../app/app_language.dart';
 void _scannerSafeIgnore([Object? error, StackTrace? stackTrace]) {}
 
 
@@ -213,14 +214,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
 
     if (showToast && !wasAdmin && isAdmin) {
-      NotificationService.showTopNotification(
-        'تم تفعيل صلاحية الأدمن لحسابك',
+      NotificationService.showTopNotification(context.tr('تم تفعيل صلاحية الأدمن لحسابك'),
         title: 'Respect Admin',
         icon: Icons.admin_panel_settings_rounded,
       );
     } else if (showToast && wasAdmin && !isAdmin) {
-      NotificationService.showTopNotification(
-        'تم إلغاء صلاحية الأدمن من حسابك',
+      NotificationService.showTopNotification(context.tr('تم إلغاء صلاحية الأدمن من حسابك'),
         title: 'Respect Admin',
         icon: Icons.lock_rounded,
       );
@@ -361,8 +360,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
 
     if (silent && mounted && !previousAdminState && isAdmin) {
-      NotificationService.showTopNotification(
-        'تم تفعيل صلاحية الأدمن لحسابك',
+      NotificationService.showTopNotification(context.tr('تم تفعيل صلاحية الأدمن لحسابك'),
         title: 'Respect Admin',
         icon: Icons.admin_panel_settings_rounded,
       );
@@ -583,7 +581,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   void _changePage(int newIndex) {
     if (newIndex == 6 && !_isAdmin) {
-      NotificationService.showTopNotification('صفحة الإدارة متاحة للأدمن فقط');
+      NotificationService.showTopNotification(context.tr('صفحة الإدارة متاحة للأدمن فقط'));
       return;
     }
     if (newIndex != 2 && _chatConversationActive) {
@@ -646,7 +644,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     mainAxisAlignment: MainAxisAlignment.center,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
+                      AppText(
                         _profileName,
                         style: TextStyle(
                           fontSize: 13,
@@ -655,7 +653,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         ),
                         overflow: TextOverflow.ellipsis,
                       ),
-                      Text(
+                      AppText(
                         _profileUsername,
                         style: TextStyle(
                           fontSize: 11,
@@ -882,7 +880,7 @@ class _BottomNavBarState extends State<_BottomNavBar> {
         child: Stack(
           children: [
             Directionality(
-              textDirection: TextDirection.rtl,
+              textDirection: context.appTextDirection,
               child: ListView.separated(
                 controller: _scrollController,
                 scrollDirection: Axis.horizontal,
@@ -922,7 +920,7 @@ class _BottomNavBarState extends State<_BottomNavBar> {
                               isDark: isDark,
                             ),
                             const SizedBox(height: 3),
-                            Text(
+                            AppText(
                               item.title,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
@@ -998,7 +996,7 @@ class _BottomIconWithBadge extends StatelessWidget {
                 borderRadius: BorderRadius.circular(999),
                 border: Border.all(color: isDark ? AppColors.darkCard : AppColors.lightCard, width: 2),
               ),
-              child: Text(
+              child: AppText(
                 count > 99 ? '99+' : '$count',
                 textAlign: TextAlign.center,
                 style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w900, height: 1),
@@ -1017,7 +1015,7 @@ class _AdminAccessDeniedScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     return Scaffold(
-      appBar: AppBar(title: const Text('الإدارة', style: TextStyle(fontWeight: FontWeight.w900))),
+      appBar: AppBar(title: const AppText('الإدارة', style: TextStyle(fontWeight: FontWeight.w900))),
       body: Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -1026,9 +1024,9 @@ class _AdminAccessDeniedScreen extends StatelessWidget {
             children: [
               const Icon(Icons.lock_rounded, color: AppColors.purple, size: 72),
               const SizedBox(height: 14),
-              const Text('هذه الصفحة للأدمن فقط', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
+              const AppText('هذه الصفحة للأدمن فقط', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
               const SizedBox(height: 8),
-              Text(
+              AppText(
                 'يجب ترقية حسابك من لوحة الإدارة حتى تظهر لك هذه الصفحة.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted),
@@ -1066,7 +1064,7 @@ class _AppSideBar extends StatelessWidget {
     final width = MediaQuery.of(context).size.width;
 
     return Directionality(
-      textDirection: TextDirection.rtl,
+      textDirection: context.appTextDirection,
       child: Drawer(
         width: width > 420 ? 330 : width * 0.82,
         backgroundColor: Colors.transparent,
@@ -1114,7 +1112,7 @@ class _AppSideBar extends StatelessWidget {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(
+                              AppText(
                                 profileName,
                                 style: TextStyle(
                                   fontSize: 20,
@@ -1123,7 +1121,7 @@ class _AppSideBar extends StatelessWidget {
                                 ),
                               ),
                               const SizedBox(height: 2),
-                              Text(
+                              AppText(
                                 profileUsername,
                                 style: TextStyle(
                                   fontSize: 13,
@@ -1225,7 +1223,7 @@ class _SideBarTile extends StatelessWidget {
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: Text(
+              child: AppText(
                 item.title,
                 style: TextStyle(
                   color: selected ? Colors.white : (isDark ? Colors.white : Colors.black87),

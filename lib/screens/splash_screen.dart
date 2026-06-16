@@ -7,6 +7,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 
 import '../theme/app_theme.dart';
 
+import '../app/app_language.dart';
 class SplashScreen<T> extends StatefulWidget {
   final Future<T> Function() onInitialize;
   final Widget Function(BuildContext context, T result) destinationBuilder;
@@ -191,7 +192,7 @@ class _SplashScreenState<T> extends State<SplashScreen<T>> with TickerProviderSt
                         coverController: _coverController,
                       ),
                       const SizedBox(height: 28),
-                      Text(
+                      AppText(
                         widget.title,
                         textAlign: TextAlign.center,
                         style: const TextStyle(
@@ -203,7 +204,7 @@ class _SplashScreenState<T> extends State<SplashScreen<T>> with TickerProviderSt
                         ),
                       ).animate().fadeIn(delay: 280.ms, duration: 520.ms).slideY(begin: 0.14, end: 0),
                       const SizedBox(height: 10),
-                      Text(
+                      AppText(
                         widget.subtitle,
                         textAlign: TextAlign.center,
                         style: TextStyle(
@@ -235,7 +236,7 @@ class _SplashScreenState<T> extends State<SplashScreen<T>> with TickerProviderSt
                             const SizedBox(height: 12),
                             AnimatedSwitcher(
                               duration: const Duration(milliseconds: 260),
-                              child: Text(
+                              child: AppText(
                                 _status,
                                 key: ValueKey(_status),
                                 textAlign: TextAlign.center,

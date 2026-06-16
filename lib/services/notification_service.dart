@@ -12,6 +12,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../screens/chat_screen.dart';
 import '../screens/feed_screen.dart';
 import '../theme/app_theme.dart';
+import '../app/app_language.dart';
 import 'supabase_service.dart';
 
 void _scannerSafeIgnore() {}
@@ -240,6 +241,54 @@ class NotificationService {
     return max(1, hash);
   }
 
+
+  static String _normalizeLanguageCode(String value) {
+    final clean = value.trim().toLowerCase();
+    if (clean.startsWith('ar')) return 'ar';
+    if (clean.startsWith('en')) return 'en';
+    if (clean.startsWith('fr')) return 'fr';
+    if (clean.startsWith('es')) return 'es';
+    if (clean.startsWith('de')) return 'de';
+    if (clean.startsWith('tr')) return 'tr';
+    if (clean.startsWith('id')) return 'id';
+    if (clean.startsWith('hi')) return 'hi';
+    if (clean.startsWith('ur')) return 'ur';
+    if (clean.startsWith('fa')) return 'fa';
+    if (clean.startsWith('ru')) return 'ru';
+    if (clean.startsWith('pt')) return 'pt';
+    return 'ar';
+  }
+
+  static Future<String> _currentLanguageCode() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getString('respect_app_language_code_v2') ??
+          prefs.getString('respect_app_language_code_v1') ??
+          'ar';
+      return _normalizeLanguageCode(saved);
+    } catch (_) {
+      return 'ar';
+    }
+  }
+
+  static String _translateSync(String text, String languageCode) {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return text;
+    return RespectTranslations.translate(text, _normalizeLanguageCode(languageCode));
+  }
+
+  static Future<String> _translate(String text) async {
+    return _translateSync(text, await _currentLanguageCode());
+  }
+
+  static String _firstNonEmpty(List<dynamic> values, {String fallback = ''}) {
+    for (final value in values) {
+      final text = (value ?? '').toString().trim();
+      if (text.isNotEmpty) return text;
+    }
+    return fallback;
+  }
+
   static Future<void> showMessageNotification({
     required String messageId,
     required String senderUsername,
@@ -250,34 +299,42 @@ class NotificationService {
     if (_shownIds.contains('msg_$messageId')) return;
     _shownIds.add('msg_$messageId');
 
+    final language = await _currentLanguageCode();
+    final cleanSenderName = senderName.trim().isEmpty
+        ? SupabaseService.displayUsername(senderUsername)
+        : senderName.trim();
+    final bodyText = _translateSync('أرسل لك رسالة جديدة', language);
+    final tickerText = _translateSync('رسالة جديدة', language);
+
     final payload = jsonEncode({
       'type': 'message',
       'peerUsername': SupabaseService.displayUsername(senderUsername),
-      'peerName': senderName.trim().isEmpty ? SupabaseService.displayUsername(senderUsername) : senderName.trim(),
+      'peerName': cleanSenderName,
+      'language': language,
     });
 
-    const androidDetails = AndroidNotificationDetails(
+    final androidDetails = AndroidNotificationDetails(
       'respect_messages_channel',
       'Respect Messages',
-      channelDescription: 'إشعارات الرسائل الخاصة',
+      channelDescription: _translateSync('إشعارات الرسائل الخاصة', language),
       importance: Importance.high,
       priority: Priority.high,
       category: AndroidNotificationCategory.message,
-      ticker: 'رسالة جديدة',
+      ticker: tickerText,
       autoCancel: true,
     );
 
     await _plugin.show(
       _stableId('msg_$messageId'),
-      senderName.trim().isEmpty ? SupabaseService.displayUsername(senderUsername) : senderName.trim(),
-      'أرسل لك رسالة جديدة',
-      const NotificationDetails(android: androidDetails, iOS: _iosMessageDetails),
+      cleanSenderName,
+      bodyText,
+      NotificationDetails(android: androidDetails, iOS: _iosMessageDetails),
       payload: payload,
     );
 
     showTopNotification(
-      'أرسل لك رسالة جديدة',
-      title: senderName.trim().isEmpty ? SupabaseService.displayUsername(senderUsername) : senderName.trim(),
+      bodyText,
+      title: cleanSenderName,
       icon: Icons.chat_bubble_rounded,
       accentColor: AppColors.purpleLight,
       duration: const Duration(milliseconds: 4200),
@@ -321,35 +378,42 @@ class NotificationService {
     if (_shownIds.contains('call_$callId')) return;
     _shownIds.add('call_$callId');
 
+    final language = await _currentLanguageCode();
+    final titleText = video
+        ? _translateSync('مكالمة فيديو واردة', language)
+        : _translateSync('مكالمة صوتية واردة', language);
+    final cleanCallerName = callerName.trim().isEmpty
+        ? SupabaseService.displayUsername(callerUsername)
+        : callerName.trim();
+
     final payload = jsonEncode({
       'type': 'call',
       'callId': callId,
       'callerUsername': SupabaseService.displayUsername(callerUsername),
-      'callerName': callerName.trim().isEmpty ? SupabaseService.displayUsername(callerUsername) : callerName.trim(),
+      'callerName': cleanCallerName,
       'callerAvatarPath': callerAvatarPath ?? '',
       'video': video,
+      'language': language,
     });
 
     // الأهم: لا نكتفي بإشعار Flutter؛ نشغّل شاشة Android Native البنفسجية مباشرة.
-    // هذا يحل مشكلة ظهور المكالمة كرسالة/إشعار فقط عندما يكون التطبيق مفتوحًا أو عبر Realtime.
     final nativeShown = await _showNativeIncomingCallScreen(
       callId: callId,
       callerUsername: callerUsername,
-      callerName: callerName,
+      callerName: cleanCallerName,
       callerAvatarPath: callerAvatarPath,
       video: video,
     );
 
-    // fallback فقط لو فشل الـ MethodChannel لأي سبب.
     if (!nativeShown) {
       final androidDetails = AndroidNotificationDetails(
         'respect_calls_channel',
         'Respect Incoming Calls',
-        channelDescription: 'إشعارات ورنين المكالمات الواردة',
+        channelDescription: _translateSync('إشعارات ورنين المكالمات الواردة', language),
         importance: Importance.max,
         priority: Priority.max,
         category: AndroidNotificationCategory.call,
-        ticker: video ? 'مكالمة فيديو واردة' : 'مكالمة صوتية واردة',
+        ticker: titleText,
         fullScreenIntent: true,
         ongoing: true,
         autoCancel: false,
@@ -362,8 +426,8 @@ class NotificationService {
 
       await _plugin.show(
         _stableId('call_$callId'),
-        video ? 'مكالمة فيديو واردة' : 'مكالمة صوتية واردة',
-        callerName.trim().isEmpty ? SupabaseService.displayUsername(callerUsername) : callerName.trim(),
+        titleText,
+        cleanCallerName,
         NotificationDetails(android: androidDetails, iOS: _iosCallDetails),
         payload: payload,
       );
@@ -448,10 +512,12 @@ class NotificationService {
     if (_shownIds.contains('inapp_reply_$safeReplyId')) return;
     _shownIds.add('inapp_reply_$safeReplyId');
 
+    final language = await _currentLanguageCode();
     final titleName = authorName.trim().isEmpty
         ? SupabaseService.displayUsername(authorUsername)
         : authorName.trim();
-    final body = text.trim().isEmpty ? 'رد على تغريدتك' : text.trim();
+    final body = text.trim().isEmpty ? _translateSync('رد على تغريدتك', language) : text.trim();
+    final replyLabel = _translateSync('رد عليك', language);
     final payload = jsonEncode({
       'type': 'post_reply',
       'replyId': safeReplyId,
@@ -459,11 +525,12 @@ class NotificationService {
       'authorUsername': SupabaseService.displayUsername(authorUsername),
       'authorName': titleName,
       'text': text,
+      'language': language,
     });
 
     showTopNotification(
       body.length > 120 ? '${body.substring(0, 120)}...' : body,
-      title: '$titleName رد عليك',
+      title: '$titleName $replyLabel',
       icon: Icons.reply_rounded,
       accentColor: AppColors.purpleLight,
       duration: const Duration(milliseconds: 4800),
@@ -482,9 +549,11 @@ class NotificationService {
     if (_shownIds.contains('post_$safeId')) return;
     _shownIds.add('post_$safeId');
 
+    final language = await _currentLanguageCode();
     final titleName = authorName.trim().isEmpty ? SupabaseService.displayUsername(authorUsername) : authorName.trim();
+    final newPostText = _translateSync('نشر تغريدة جديدة', language);
     final body = text.trim().isEmpty
-        ? 'نشر تغريدة جديدة'
+        ? newPostText
         : (text.trim().length > 110 ? '${text.trim().substring(0, 110)}...' : text.trim());
 
     final payload = jsonEncode({
@@ -493,12 +562,13 @@ class NotificationService {
       'authorUsername': SupabaseService.displayUsername(authorUsername),
       'authorName': titleName,
       'text': text,
+      'language': language,
     });
 
-    const androidDetails = AndroidNotificationDetails(
+    final androidDetails = AndroidNotificationDetails(
       'respect_posts_channel',
       'Respect Post Alerts',
-      channelDescription: 'إشعارات التغريدات الجديدة من المستخدمين الذين فعّلت إشعاراتهم',
+      channelDescription: _translateSync('إشعارات التغريدات الجديدة من المستخدمين الذين فعّلت إشعاراتهم', language),
       importance: Importance.high,
       priority: Priority.high,
       icon: '@mipmap/ic_launcher',
@@ -506,9 +576,9 @@ class NotificationService {
 
     await _plugin.show(
       _stableId('post_$safeId'),
-      '$titleName نشر تغريدة جديدة',
+      '$titleName $newPostText',
       body,
-      const NotificationDetails(android: androidDetails, iOS: _iosPostDetails),
+      NotificationDetails(android: androidDetails, iOS: _iosPostDetails),
       payload: payload,
     );
   }
@@ -562,8 +632,9 @@ class NotificationService {
     if (_shownIds.contains('general_$safeId')) return;
     _shownIds.add('general_$safeId');
 
+    final language = await _currentLanguageCode();
     final cleanTitle = title.trim().isEmpty ? 'Respect' : title.trim();
-    final cleanBody = body.trim().isEmpty ? 'لديك إشعار جديد' : body.trim();
+    final cleanBody = body.trim().isEmpty ? _translateSync('لديك إشعار جديد', language) : body.trim();
     await _saveGeneralNotificationLocal(
       id: safeId,
       title: cleanTitle,
@@ -578,6 +649,7 @@ class NotificationService {
       'id': safeId,
       'title': cleanTitle,
       'body': cleanBody,
+      'language': language,
     });
 
     showTopNotification(
@@ -590,10 +662,10 @@ class NotificationService {
     );
 
     if (!showSystemNotification) return;
-    const androidDetails = AndroidNotificationDetails(
+    final androidDetails = AndroidNotificationDetails(
       'respect_general_channel',
       'Respect General Alerts',
-      channelDescription: 'الإشعارات العامة من إدارة Respect',
+      channelDescription: _translateSync('الإشعارات العامة من إدارة Respect', language),
       importance: Importance.high,
       priority: Priority.high,
       icon: '@mipmap/ic_launcher',
@@ -603,7 +675,7 @@ class NotificationService {
       _stableId('general_$safeId'),
       cleanTitle,
       cleanBody,
-      const NotificationDetails(android: androidDetails, iOS: _iosGeneralDetails),
+      NotificationDetails(android: androidDetails, iOS: _iosGeneralDetails),
       payload: payload,
     );
   }
@@ -613,8 +685,8 @@ class NotificationService {
     if (type == 'general_notification' || type == 'general') {
       await showGeneralNotification(
         id: (data['id'] ?? data['notificationId'] ?? data['notification_id'] ?? DateTime.now().microsecondsSinceEpoch).toString(),
-        title: (data['title'] ?? 'Respect').toString(),
-        body: (data['body'] ?? data['text'] ?? 'لديك إشعار جديد').toString(),
+        title: _firstNonEmpty([data['localizedTitle'], data['title']], fallback: 'Respect'),
+        body: _firstNonEmpty([data['localizedBody'], data['body'], data['text']], fallback: 'لديك إشعار جديد'),
         createdAt: (data['createdAt'] ?? data['created_at'] ?? '').toString(),
         senderUsername: (data['senderUsername'] ?? data['sender_username'] ?? '').toString(),
         senderName: (data['senderName'] ?? data['sender_name'] ?? '').toString(),
@@ -636,7 +708,7 @@ class NotificationService {
         messageId: (data['messageId'] ?? data['message_id'] ?? DateTime.now().millisecondsSinceEpoch).toString(),
         senderUsername: (data['senderUsername'] ?? data['sender_username'] ?? '').toString(),
         senderName: (data['senderName'] ?? data['sender_name'] ?? '').toString(),
-        text: 'رسالة جديدة',
+        text: _firstNonEmpty([data['localizedBody'], data['body'], data['text']], fallback: 'رسالة جديدة'),
       );
       return;
     }
@@ -645,7 +717,7 @@ class NotificationService {
         postId: (data['postId'] ?? data['post_id'] ?? DateTime.now().millisecondsSinceEpoch).toString(),
         authorUsername: (data['authorUsername'] ?? data['author_username'] ?? '').toString(),
         authorName: (data['authorName'] ?? data['author_name'] ?? data['title'] ?? '').toString(),
-        text: (data['text'] ?? data['body'] ?? 'تغريدة جديدة').toString(),
+        text: _firstNonEmpty([data['text'], data['localizedBody'], data['body']], fallback: 'تغريدة جديدة'),
       );
       return;
     }
@@ -666,9 +738,10 @@ class NotificationService {
           : (eventType == 'community_report_accepted' || eventType == 'report_accepted_reporter')
           ? 'راجعنا البلاغ وتم حذف التغريدة.'
           : 'راجعنا البلاغ والتغريدة سليمة.';
-      final title = (data['title'] ?? defaultTitle).toString();
-      final body = (data['body'] ?? data['text'] ?? defaultBody).toString();
-      const androidDetails = AndroidNotificationDetails(
+      final language = await _currentLanguageCode();
+      final title = _firstNonEmpty([data['localizedTitle'], data['title']], fallback: _translateSync(defaultTitle, language));
+      final body = _firstNonEmpty([data['localizedBody'], data['body'], data['text']], fallback: _translateSync(defaultBody, language));
+      final androidDetails = AndroidNotificationDetails(
         'respect_posts_channel',
         'Respect Post Alerts',
         channelDescription: 'إشعارات التغريدات والبلاغات',
@@ -680,7 +753,7 @@ class NotificationService {
         _stableId('event_${data['postId'] ?? data['post_id'] ?? DateTime.now().millisecondsSinceEpoch}'),
         title,
         body,
-        const NotificationDetails(android: androidDetails, iOS: _iosPostDetails),
+        NotificationDetails(android: androidDetails, iOS: _iosPostDetails),
         payload: jsonEncode({
           'type': 'post',
           'postId': (data['postId'] ?? data['post_id'] ?? '').toString(),
@@ -835,7 +908,7 @@ class _RespectTopNotificationOverlayState extends State<_RespectTopNotificationO
                   Padding(
                     padding: const EdgeInsets.fromLTRB(18, 16, 18, 10),
                     child: Row(
-                      textDirection: TextDirection.rtl,
+                      textDirection: Directionality.of(context),
                       children: [
                         Container(
                           width: 48,
@@ -856,11 +929,11 @@ class _RespectTopNotificationOverlayState extends State<_RespectTopNotificationO
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.end,
                             children: [
-                              Text(
+                              AppText(
                                 widget.title,
                                 maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
-                                textDirection: TextDirection.rtl,
+                                textDirection: Directionality.of(context),
                                 style: TextStyle(
                                   color: textColor,
                                   fontSize: 18,
@@ -868,9 +941,9 @@ class _RespectTopNotificationOverlayState extends State<_RespectTopNotificationO
                                 ),
                               ),
                               const SizedBox(height: 3),
-                              Text(
+                              AppText(
                                 'اضغط نسخ التفاصيل وأرسلها لمعرفة سبب الخطأ بدقة',
-                                textDirection: TextDirection.rtl,
+                                textDirection: Directionality.of(context),
                                 style: TextStyle(
                                   color: muted,
                                   fontSize: 12,
@@ -1053,7 +1126,7 @@ class _RespectTopNotificationOverlayState extends State<_RespectTopNotificationO
                               ],
                             ),
                             child: Row(
-                              textDirection: TextDirection.rtl,
+                              textDirection: Directionality.of(context),
                               children: [
                                 Container(
                                   width: 46,
@@ -1084,11 +1157,11 @@ class _RespectTopNotificationOverlayState extends State<_RespectTopNotificationO
                                     crossAxisAlignment: CrossAxisAlignment.end,
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
-                                      Text(
+                                      AppText(
                                         widget.title,
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
-                                        textDirection: TextDirection.rtl,
+                                        textDirection: Directionality.of(context),
                                         style: TextStyle(
                                           color: textColor,
                                           fontSize: 14,
@@ -1096,11 +1169,11 @@ class _RespectTopNotificationOverlayState extends State<_RespectTopNotificationO
                                         ),
                                       ),
                                       const SizedBox(height: 3),
-                                      Text(
+                                      AppText(
                                         widget.message,
                                         maxLines: 2,
                                         overflow: TextOverflow.ellipsis,
-                                        textDirection: TextDirection.rtl,
+                                        textDirection: Directionality.of(context),
                                         style: TextStyle(
                                           color: mutedColor,
                                           fontSize: 12.5,

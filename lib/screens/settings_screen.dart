@@ -12,8 +12,10 @@ import '../theme/app_theme.dart';
 import '../widgets/glass_card.dart';
 import '../services/supabase_service.dart';
 import '../services/realtime_notification_service.dart';
+import '../services/notification_service.dart';
 import 'login_screen.dart';
 
+import '../app/app_language.dart';
 void _scannerSafeIgnore([Object? error, StackTrace? stackTrace]) {}
 
 
@@ -160,14 +162,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _phoneVerified = false;
         _smsSecurityEnabled = false;
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('تم إرسال رمز SMS إلى $phone')),
+      _showSettingsSuccess(
+        'تم إرسال رمز SMS إلى $phone',
+        title: 'رمز التحقق',
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
-      );
+      _showSettingsError(e.toString().replaceFirst('Exception: ', ''));
     } finally {
       if (mounted) setState(() => _savingPhoneSecurity = false);
     }
@@ -177,7 +178,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (_savingPhoneSecurity) return;
     final code = _phoneCodeCtrl.text.trim();
     if (code.length < 4) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('اكتب رمز SMS')));
+      _showSettingsError('اكتب رمز SMS');
       return;
     }
     FocusScope.of(context).unfocus();
@@ -195,14 +196,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _phoneCodeSent = false;
         _phoneCodeCtrl.clear();
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('تم تفعيل الأمان عبر الرقم بنجاح')),
+      _showSettingsSuccess(
+        'تم تفعيل الأمان عبر الرقم بنجاح',
+        title: 'تم تفعيل الأمان',
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
-      );
+      _showSettingsError(e.toString().replaceFirst('Exception: ', ''));
     } finally {
       if (mounted) setState(() => _savingPhoneSecurity = false);
     }
@@ -253,14 +253,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _callsEnabled = SupabaseService.truthy(next['calls_enabled'] ?? true);
         _chatRequestsRequired = SupabaseService.truthy(next['chat_requests_required'] ?? true);
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('تم حفظ خصوصية الرسائل')),
+      _showSettingsSuccess(
+        'تم حفظ خصوصية الرسائل',
+        title: 'تم الحفظ',
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('تعذر حفظ خصوصية الرسائل: $e')),
-      );
+      _showSettingsError('تعذر حفظ خصوصية الرسائل: $e');
     } finally {
       if (mounted) setState(() => _savingMessagingPrivacy = false);
     }
@@ -325,15 +324,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
         final isDark = Theme.of(context).brightness == Brightness.dark;
         return AlertDialog(
           backgroundColor: isDark ? AppColors.darkCard : AppColors.lightCard,
-          title: const Text('تسجيل الخروج'),
-          content: const Text('هل تريد تسجيل الخروج من الحساب الحالي؟'),
+          title: const AppText('تسجيل الخروج'),
+          content: const AppText('هل تريد تسجيل الخروج من الحساب الحالي؟'),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('إلغاء')),
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const AppText('إلغاء')),
             ElevatedButton.icon(
               style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger, foregroundColor: Colors.white),
               onPressed: () => Navigator.pop(context, true),
               icon: const Icon(Icons.logout_rounded),
-              label: const Text('خروج'),
+              label: const AppText('خروج'),
             ),
           ],
         );
@@ -360,6 +359,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() {
       _isScreenBlack = !_isScreenBlack;
     });
+  }
+
+  void _showSettingsSuccess(
+    String message, {
+    String title = 'تم بنجاح',
+  }) {
+    NotificationService.showTopSuccess(message, title: title);
+  }
+
+  void _showSettingsError(
+    String message, {
+    String title = 'حدث خطأ',
+  }) {
+    NotificationService.showTopError(message, title: title);
+  }
+
+  void _showSettingsInfo(
+    String message, {
+    String title = 'Respect',
+    IconData icon = Icons.info_rounded,
+  }) {
+    NotificationService.showTopNotification(
+      message,
+      title: title,
+      icon: icon,
+      accentColor: AppColors.purple,
+    );
   }
 
 
@@ -390,9 +416,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (_sendingAiFeedback) return;
     final note = _feedbackNoteCtrl.text.trim();
     if (note.length < 8) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('اكتب وصف المشكلة بتفاصيل أكثر')),
-      );
+      _showSettingsError('اكتب وصف المشكلة بتفاصيل أكثر');
       return;
     }
 
@@ -409,14 +433,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
       );
       if (!mounted) return;
       setState(() => _latestAiFeedbackResult = result);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('تم إرسال البلاغ وبدأ تحليل Qwen3-Coder')),
+      _showSettingsSuccess(
+        'تم إرسال البلاغ وبدأ تحليل Qwen3-Coder',
+        title: 'تم إرسال البلاغ',
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('تعذر تحليل البلاغ: ${e.toString().replaceFirst('Exception: ', '')}')),
-      );
+      _showSettingsError('تعذر تحليل البلاغ: ${e.toString().replaceFirst('Exception: ', '')}');
     } finally {
       if (mounted) setState(() => _sendingAiFeedback = false);
     }
@@ -426,23 +449,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (_approvingAiFeedbackFix) return;
     final reportId = (_latestAiFeedbackResult?['id'] ?? _latestAiFeedbackResult?['reportId'] ?? '').toString();
     if (reportId.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('لا يوجد بلاغ محلل للموافقة عليه')),
-      );
+      _showSettingsError('لا يوجد بلاغ محلل للموافقة عليه');
       return;
     }
 
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('تأكيد التصحيح'),
-        content: const Text('سيتم طلب التصحيح من Qwen3-Coder ثم إنشاء Pull Request في GitHub إذا كانت مفاتيح GitHub مضبوطة على السيرفر.'),
+        title: const AppText('تأكيد التصحيح'),
+        content: const AppText('سيتم طلب التصحيح من Qwen3-Coder ثم إنشاء Pull Request في GitHub إذا كانت مفاتيح GitHub مضبوطة على السيرفر.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('إلغاء')),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const AppText('إلغاء')),
           FilledButton.icon(
             onPressed: () => Navigator.pop(context, true),
             icon: const Icon(Icons.auto_fix_high_rounded),
-            label: const Text('ابدأ التصحيح'),
+            label: const AppText('ابدأ التصحيح'),
           ),
         ],
       ),
@@ -458,14 +479,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (!mounted) return;
       setState(() => _latestAiFeedbackResult = result);
       final prUrl = (result['pullRequestUrl'] ?? result['prUrl'] ?? '').toString();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(prUrl.isNotEmpty ? 'تم إنشاء Pull Request للتصحيح' : 'تم تجهيز نتيجة التصحيح')),
+      _showSettingsSuccess(
+        prUrl.isNotEmpty ? 'تم إنشاء Pull Request للتصحيح' : 'تم تجهيز نتيجة التصحيح',
+        title: 'نتيجة التصحيح',
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('تعذر تنفيذ التصحيح: ${e.toString().replaceFirst('Exception: ', '')}')),
-      );
+      _showSettingsError('تعذر تنفيذ التصحيح: ${e.toString().replaceFirst('Exception: ', '')}');
     } finally {
       if (mounted) setState(() => _approvingAiFeedbackFix = false);
     }
@@ -491,16 +511,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const ListTile(
               contentPadding: EdgeInsets.zero,
               leading: Icon(Icons.bug_report_rounded, color: AppColors.purple),
-              title: Text('ملاحظات / بلاغ مشكلة', style: TextStyle(fontWeight: FontWeight.w900)),
-              subtitle: Text('اكتب المشكلة، وQwen3-Coder يراجع ملفات GitHub ويحدد سببها. التصحيح لا يبدأ إلا بعد موافقة الأدمن.'),
+              title: AppText('ملاحظات / بلاغ مشكلة', style: TextStyle(fontWeight: FontWeight.w900)),
+              subtitle: AppText('اكتب المشكله او الملاحظه وسيتم المراجعة والاصلاح في اقرب وقت ممكن '),
             ),
             const SizedBox(height: 8),
             TextField(
               controller: _feedbackTitleCtrl,
               textInputAction: TextInputAction.next,
               decoration: InputDecoration(
-                labelText: 'عنوان المشكلة',
-                hintText: 'مثلاً: زر تعديل الملف الشخصي لا يعمل',
+                labelText: context.tr('عنوان المشكلة'),
+                hintText: context.tr('مثلاً: زر تعديل الملف الشخصي لا يعمل'),
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
               ),
             ),
@@ -509,8 +529,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               controller: _feedbackScreenCtrl,
               textInputAction: TextInputAction.next,
               decoration: InputDecoration(
-                labelText: 'مكان المشكلة / الصفحة',
-                hintText: 'مثلاً: الملف الشخصي، الفيد، الرسائل',
+                labelText: context.tr('مكان المشكلة / الصفحة'),
+                hintText: context.tr('مثلاً: الملف الشخصي، الفيد، الرسائل'),
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
               ),
             ),
@@ -520,8 +540,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               minLines: 4,
               maxLines: 8,
               decoration: InputDecoration(
-                labelText: 'وصف المشكلة',
-                hintText: 'اشرح ماذا حدث، ماذا توقعت، وهل ظهر خطأ معين',
+                labelText: context.tr('وصف المشكلة'),
+                hintText: context.tr('اشرح ماذا حدث، ماذا توقعت، وهل ظهر خطأ معين'),
                 alignLabelWithHint: true,
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
               ),
@@ -532,7 +552,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               icon: _sendingAiFeedback
                   ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.psychology_alt_rounded),
-              label: Text(_sendingAiFeedback ? 'جاري التحليل...' : 'إرسال وتشغيل Qwen3-Coder'),
+              label: AppText(_sendingAiFeedback ? 'جاري التحليل...' : 'إرسال'),
             ),
             if (result != null) ...[
               const SizedBox(height: 14),
@@ -546,23 +566,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('الحالة: ${_aiFeedbackStatusText(status)}', style: const TextStyle(fontWeight: FontWeight.w900)),
+                    AppText('الحالة: ${_aiFeedbackStatusText(status)}', style: const TextStyle(fontWeight: FontWeight.w900)),
                     if (summary.trim().isNotEmpty) ...[
                       const SizedBox(height: 8),
-                      Text(summary),
+                      AppText(summary),
                     ],
                     if (suspectedFiles.isNotEmpty) ...[
                       const SizedBox(height: 10),
-                      const Text('الملفات المتوقعة:', style: TextStyle(fontWeight: FontWeight.w900)),
+                      const AppText('الملفات المتوقعة:', style: TextStyle(fontWeight: FontWeight.w900)),
                       const SizedBox(height: 4),
                       ...suspectedFiles.map((file) => Padding(
                         padding: const EdgeInsets.symmetric(vertical: 2),
-                        child: Text('• $file', textDirection: TextDirection.ltr),
+                        child: AppText('• $file', textDirection: TextDirection.ltr),
                       )),
                     ],
                     if (prUrl.isNotEmpty) ...[
                       const SizedBox(height: 10),
-                      Text('Pull Request: $prUrl', textDirection: TextDirection.ltr),
+                      AppText('Pull Request: $prUrl', textDirection: TextDirection.ltr),
                     ],
                     if (_canApproveAiFeedbackFix && status.toLowerCase() == 'analyzed') ...[
                       const SizedBox(height: 12),
@@ -571,7 +591,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         icon: _approvingAiFeedbackFix
                             ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                             : const Icon(Icons.auto_fix_high_rounded),
-                        label: Text(_approvingAiFeedbackFix ? 'جاري التصحيح...' : 'الموافقة وبدء التصحيح'),
+                        label: AppText(_approvingAiFeedbackFix ? 'جاري التصحيح...' : 'الموافقة وبدء التصحيح'),
                       ),
                     ],
                   ],
@@ -581,6 +601,120 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ],
         ),
       ),
+    );
+  }
+
+
+  Future<void> _showLanguagePicker() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        final isDark = Theme.of(sheetContext).brightness == Brightness.dark;
+        final languageProvider = sheetContext.watch<AppLanguageProvider>();
+        return Directionality(
+          textDirection: languageProvider.textDirection,
+          child: Container(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(sheetContext).size.height * 0.82,
+            ),
+            decoration: BoxDecoration(
+              color: isDark ? AppColors.darkCard : AppColors.lightCard,
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+              border: Border.all(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
+            ),
+            child: SafeArea(
+              top: false,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(height: 10),
+                  Container(
+                    width: 46,
+                    height: 5,
+                    decoration: BoxDecoration(
+                      color: (isDark ? AppColors.darkMuted : AppColors.lightMuted).withValues(alpha: 0.35),
+                      borderRadius: BorderRadius.circular(99),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(18, 18, 18, 8),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 44,
+                          height: 44,
+                          decoration: BoxDecoration(
+                            color: AppColors.purple.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: const Icon(Icons.language_rounded, color: AppColors.purple),
+                        ),
+                        const SizedBox(width: 12),
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              AppText('اختر لغة التطبيق', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+                              SizedBox(height: 3),
+                              AppText('تتغير اللغة فورًا في كل صفحات التطبيق', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: () => Navigator.pop(sheetContext),
+                          icon: const Icon(Icons.close_rounded),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Flexible(
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      padding: const EdgeInsets.fromLTRB(10, 4, 10, 18),
+                      itemCount: AppLanguageProvider.supportedLanguages.length,
+                      itemBuilder: (context, index) {
+                        final language = AppLanguageProvider.supportedLanguages[index];
+                        final selected = language.code == languageProvider.languageCode;
+                        return Container(
+                          margin: const EdgeInsets.symmetric(vertical: 4),
+                          decoration: BoxDecoration(
+                            color: selected ? AppColors.purple.withValues(alpha: 0.13) : Colors.transparent,
+                            borderRadius: BorderRadius.circular(18),
+                            border: Border.all(
+                              color: selected ? AppColors.purple.withValues(alpha: 0.45) : Colors.transparent,
+                            ),
+                          ),
+                          child: RadioListTile<String>(
+                            value: language.code,
+                            groupValue: languageProvider.languageCode,
+                            activeColor: AppColors.purple,
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+                            title: Text(language.nativeName, style: const TextStyle(fontWeight: FontWeight.w900)),
+                            subtitle: Text(language.englishName),
+                            secondary: selected ? const Icon(Icons.check_circle_rounded, color: AppColors.purple) : const Icon(Icons.translate_rounded),
+                            onChanged: (value) async {
+                              if (value == null) return;
+                              await languageProvider.setLanguageCode(value);
+                              if (!mounted) return;
+                              Navigator.pop(sheetContext);
+                              _showSettingsSuccess(
+                                'تم تغيير لغة التطبيق',
+                                title: 'اللغة',
+                              );
+                            },
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -612,6 +746,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     final themeProvider = context.watch<ThemeProvider>();
+    final languageProvider = context.watch<AppLanguageProvider>();
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
@@ -632,8 +767,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                   GlassCard(
                     child: SwitchListTile(
-                      title: const Text('الوضع الداكن'),
-                      subtitle: Text(isDark ? 'مفعل حالياً' : 'معطل حالياً'),
+                      title: const AppText('الوضع الداكن'),
+                      subtitle: AppText(isDark ? 'مفعل حالياً' : 'معطل حالياً'),
                       value: themeProvider.isDark,
                       onChanged: (_) => themeProvider.toggle(),
                       secondary: Icon(isDark ? Icons.dark_mode : Icons.light_mode, color: AppColors.purple),
@@ -645,8 +780,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                   GlassCard(
                     child: SwitchListTile(
-                      title: const Text('وضع الخصوصية (تأثير جانبي)'),
-                      subtitle: const Text('يجعل الشاشة غير واضحة عند النظر من الجانب'),
+                      title: const AppText('وضع الخصوصية (تأثير جانبي)'),
+                      subtitle: const AppText('يجعل الشاشة غير واضحة عند النظر من الجانب'),
                       value: _privacyModeEnabled,
                       onChanged: _togglePrivacyMode,
                       secondary: const Icon(Icons.visibility_off_rounded, color: AppColors.purple),
@@ -658,8 +793,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                   GlassCard(
                     child: SwitchListTile(
-                      title: const Text('إخفاء سريع (الضغط 3 ثواني)'),
-                      subtitle: const Text('تفعيل ميزة تعتيم الشاشة بالضغط مع الاستمرار'),
+                      title: const AppText('إخفاء سريع (الضغط 3 ثواني)'),
+                      subtitle: const AppText('تفعيل ميزة تعتيم الشاشة بالضغط مع الاستمرار'),
                       value: _quickHideEnabled,
                       onChanged: _toggleQuickHide,
                       secondary: const Icon(Icons.touch_app_rounded, color: AppColors.purple),
@@ -682,8 +817,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ListTile(
                             contentPadding: EdgeInsets.zero,
                             leading: Icon(_phoneVerified ? Icons.verified_user_rounded : Icons.phone_iphone_rounded, color: AppColors.purple),
-                            title: const Text('الأمان عبر رقم الجوال', style: TextStyle(fontWeight: FontWeight.w900)),
-                            subtitle: Text(_phoneVerified
+                            title: const AppText('الأمان عبر رقم الجوال', style: TextStyle(fontWeight: FontWeight.w900)),
+                            subtitle: AppText(_phoneVerified
                                 ? 'مفعل على الرقم $_phoneE164 ويمكن استخدام SMS لاستعادة الدخول'
                                 : 'أضف رقمك واستقبل رمز SMS لتفعيل حماية إضافية للحساب'),
                           ),
@@ -696,8 +831,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   controller: _phoneCountryCtrl,
                                   keyboardType: TextInputType.phone,
                                   decoration: InputDecoration(
-                                    labelText: 'الدولة',
-                                    hintText: '+961',
+                                    labelText: context.tr('الدولة'),
+                                    hintText: context.tr('+961'),
                                     border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
                                   ),
                                 ),
@@ -708,8 +843,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   controller: _phoneCtrl,
                                   keyboardType: TextInputType.phone,
                                   decoration: InputDecoration(
-                                    labelText: 'رقم الجوال',
-                                    hintText: '70123456',
+                                    labelText: context.tr('رقم الجوال'),
+                                    hintText: context.tr('70123456'),
                                     border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
                                   ),
                                 ),
@@ -722,7 +857,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             icon: _savingPhoneSecurity
                                 ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                                 : const Icon(Icons.sms_rounded),
-                            label: Text(_phoneVerified ? 'تغيير الرقم وإرسال رمز جديد' : 'إرسال رمز التحقق SMS'),
+                            label: AppText(_phoneVerified ? 'تغيير الرقم وإرسال رمز جديد' : 'إرسال رمز التحقق SMS'),
                           ),
                           if (_phoneCodeSent) ...[
                             const SizedBox(height: 12),
@@ -731,8 +866,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               keyboardType: TextInputType.number,
                               textAlign: TextAlign.center,
                               decoration: InputDecoration(
-                                labelText: 'رمز SMS',
-                                hintText: '000000',
+                                labelText: context.tr('رمز SMS'),
+                                hintText: context.tr('000000'),
                                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
                               ),
                             ),
@@ -740,7 +875,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             OutlinedButton.icon(
                               onPressed: _savingPhoneSecurity ? null : _verifyPhoneSecurityCode,
                               icon: const Icon(Icons.check_circle_rounded),
-                              label: const Text('تأكيد وتفعيل الأمان'),
+                              label: const AppText('تأكيد وتفعيل الأمان'),
                             ),
                           ],
                         ],
@@ -755,21 +890,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       children: [
                         ListTile(
                           leading: const Icon(Icons.chat_bubble_outline_rounded, color: AppColors.purple),
-                          title: const Text('خصوصية الرسائل', style: TextStyle(fontWeight: FontWeight.w900)),
-                          subtitle: Text(_canUseVerifiedOnlyMessages
+                          title: const AppText('خصوصية الرسائل', style: TextStyle(fontWeight: FontWeight.w900)),
+                          subtitle: AppText(_canUseVerifiedOnlyMessages
                               ? 'يمكنك قفل الرسائل على الحسابات الموثقة فقط'
                               : 'ميزة الموثقين فقط تحتاج الباقة الذهبية أو المميزة'),
                         ),
                         SwitchListTile(
-                          title: const Text('تفعيل الرسائل'),
-                          subtitle: const Text('عند الإيقاف لا أحد يستطيع إرسال رسالة جديدة لك'),
+                          title: const AppText('تفعيل الرسائل'),
+                          subtitle: const AppText('عند الإيقاف لا أحد يستطيع إرسال رسالة جديدة لك'),
                           value: _messagesEnabled,
                           onChanged: (v) => setState(() => _messagesEnabled = v),
                           activeThumbColor: AppColors.purple,
                         ),
                         SwitchListTile(
-                          title: const Text('استقبال الرسائل من الموثقين فقط'),
-                          subtitle: Text(_canUseVerifiedOnlyMessages
+                          title: const AppText('استقبال الرسائل من الموثقين فقط'),
+                          subtitle: AppText(_canUseVerifiedOnlyMessages
                               ? 'غير الموثق سيُمنع من إرسال الرسالة'
                               : 'مقفلة للحسابات الذهبية والمميزة فقط'),
                           value: _verifiedOnlyMessages && _canUseVerifiedOnlyMessages,
@@ -779,15 +914,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           activeThumbColor: AppColors.purple,
                         ),
                         SwitchListTile(
-                          title: const Text('طلب دردشة قبل أول رسالة'),
-                          subtitle: const Text('يفتح المحادثة بعد قبول الطلب'),
+                          title: const AppText('طلب دردشة قبل أول رسالة'),
+                          subtitle: const AppText('يفتح المحادثة بعد قبول الطلب'),
                           value: _chatRequestsRequired,
                           onChanged: _messagesEnabled ? (v) => setState(() => _chatRequestsRequired = v) : null,
                           activeThumbColor: AppColors.purple,
                         ),
                         SwitchListTile(
-                          title: const Text('السماح بالمكالمات'),
-                          subtitle: const Text('عند الإيقاف لا أحد يستطيع الاتصال بك'),
+                          title: const AppText('السماح بالمكالمات'),
+                          subtitle: const AppText('عند الإيقاف لا أحد يستطيع الاتصال بك'),
                           value: _callsEnabled,
                           onChanged: (v) => setState(() => _callsEnabled = v),
                           activeThumbColor: AppColors.purple,
@@ -801,7 +936,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               icon: _savingMessagingPrivacy
                                   ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                                   : const Icon(Icons.save_rounded),
-                              label: const Text('حفظ خصوصية الرسائل'),
+                              label: const AppText('حفظ خصوصية الرسائل'),
                             ),
                           ),
                         ),
@@ -814,10 +949,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   GlassCard(
                     child: ListTile(
                       leading: const Icon(Icons.language, color: AppColors.purple),
-                      title: const Text('اللغة'),
-                      subtitle: const Text('العربية'),
+                      title: const AppText('اللغة'),
+                      subtitle: Text(languageProvider.currentLanguage.nativeName),
                       trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-                      onTap: () {},
+                      onTap: _showLanguagePicker,
                     ),
                   ).animate().fadeIn(delay: 200.ms),
 
@@ -826,8 +961,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   GlassCard(
                     child: ListTile(
                       leading: const Icon(Icons.info_outline, color: AppColors.purple),
-                      title: const Text('حول التطبيق'),
-                      subtitle: const Text('الإصدار 1.0.0'),
+                      title: const AppText('حول التطبيق'),
+                      subtitle: const AppText('الإصدار 1.0.0'),
                       onTap: () {},
                     ),
                   ).animate().fadeIn(delay: 300.ms),
@@ -837,8 +972,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   GlassCard(
                     child: ListTile(
                       leading: const Icon(Icons.logout_rounded, color: AppColors.danger),
-                      title: const Text('تسجيل الخروج', style: TextStyle(fontWeight: FontWeight.w900)),
-                      subtitle: const Text('العودة إلى صفحة تسجيل الدخول'),
+                      title: const AppText('تسجيل الخروج', style: TextStyle(fontWeight: FontWeight.w900)),
+                      subtitle: const AppText('العودة إلى صفحة تسجيل الدخول'),
                       trailing: const Icon(Icons.arrow_forward_ios, size: 16),
                       onTap: _logout,
                     ),

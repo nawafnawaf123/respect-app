@@ -12,6 +12,7 @@ import '../widgets/glass_card.dart';
 import '../services/supabase_service.dart';
 import '../services/notification_service.dart';
 
+import '../app/app_language.dart';
 void _respectSafeLog(Object error, [StackTrace? stackTrace]) {
   if (kDebugMode) {
     developer.log('Respect safe catch', error: error, stackTrace: stackTrace, name: 'respect.safe');
@@ -942,7 +943,7 @@ class _AdminScreenState extends State<AdminScreen> {
                                   backgroundColor: AppColors.purple,
                                   backgroundImage: _avatarProvider(user.avatarPath),
                                   child: _avatarProvider(user.avatarPath) == null
-                                      ? Text(user.name.isEmpty ? '?' : user.name.characters.first,
+                                      ? AppText(user.name.isEmpty ? '?' : user.name.characters.first,
                                           style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900))
                                       : null,
                                 ),
@@ -951,8 +952,8 @@ class _AdminScreenState extends State<AdminScreen> {
                                   child: Column(
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
-                                      const Text('بيانات البث', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
-                                      Text('${user.name} • ${user.username}', style: TextStyle(color: muted, fontWeight: FontWeight.w700)),
+                                      const AppText('بيانات البث', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+                                      AppText('${user.name} • ${user.username}', style: TextStyle(color: muted, fontWeight: FontWeight.w700)),
                                     ],
                                   ),
                                 ),
@@ -962,25 +963,25 @@ class _AdminScreenState extends State<AdminScreen> {
                             TextField(
                               controller: streamUrlCtrl,
                               keyboardType: TextInputType.url,
-                              decoration: const InputDecoration(
+                              decoration: InputDecoration(
                                 prefixIcon: Icon(Icons.link_rounded),
-                                hintText: 'رابط البث الثابت',
+                                hintText: context.tr('رابط البث الثابت'),
                               ),
                             ),
                             const SizedBox(height: 10),
                             TextField(
                               controller: streamNameCtrl,
-                              decoration: const InputDecoration(
+                              decoration: InputDecoration(
                                 prefixIcon: Icon(Icons.badge_rounded),
-                                hintText: 'اسم الستريمر / القناة',
+                                hintText: context.tr('اسم الستريمر / القناة'),
                               ),
                             ),
                             const SizedBox(height: 10),
                             TextField(
                               controller: streamTitleCtrl,
-                              decoration: const InputDecoration(
+                              decoration: InputDecoration(
                                 prefixIcon: Icon(Icons.title_rounded),
-                                hintText: 'عنوان البث',
+                                hintText: context.tr('عنوان البث'),
                               ),
                             ),
                             const SizedBox(height: 10),
@@ -990,9 +991,9 @@ class _AdminScreenState extends State<AdminScreen> {
                                   child: TextField(
                                     controller: viewersCtrl,
                                     keyboardType: TextInputType.number,
-                                    decoration: const InputDecoration(
+                                    decoration: InputDecoration(
                                       prefixIcon: Icon(Icons.visibility_rounded),
-                                      hintText: 'عدد المشاهدين',
+                                      hintText: context.tr('عدد المشاهدين'),
                                     ),
                                   ),
                                 ),
@@ -1000,9 +1001,9 @@ class _AdminScreenState extends State<AdminScreen> {
                                 Expanded(
                                   child: TextField(
                                     controller: platformCtrl,
-                                    decoration: const InputDecoration(
+                                    decoration: InputDecoration(
                                       prefixIcon: Icon(Icons.live_tv_rounded),
-                                      hintText: 'المنصة: kick / twitch',
+                                      hintText: context.tr('المنصة: kick / twitch'),
                                     ),
                                   ),
                                 ),
@@ -1012,9 +1013,9 @@ class _AdminScreenState extends State<AdminScreen> {
                             TextField(
                               controller: thumbnailCtrl,
                               keyboardType: TextInputType.url,
-                              decoration: const InputDecoration(
+                              decoration: InputDecoration(
                                 prefixIcon: Icon(Icons.image_rounded),
-                                hintText: 'رابط صورة البث / المصغرة',
+                                hintText: context.tr('رابط صورة البث / المصغرة'),
                               ),
                             ),
                             const SizedBox(height: 10),
@@ -1023,8 +1024,8 @@ class _AdminScreenState extends State<AdminScreen> {
                               onChanged: (value) => setSheet(() => isLive = value),
                               activeColor: AppColors.purple,
                               contentPadding: EdgeInsets.zero,
-                              title: const Text('البث مباشر الآن', style: TextStyle(fontWeight: FontWeight.w900)),
-                              subtitle: Text('يمكن ترك الحقول فارغة وسيتم جلب الاسم والصورة والحالة تلقائيًا من الرابط.', style: TextStyle(color: muted, fontSize: 12)),
+                              title: const AppText('البث مباشر الآن', style: TextStyle(fontWeight: FontWeight.w900)),
+                              subtitle: AppText('يمكن ترك الحقول فارغة وسيتم جلب الاسم والصورة والحالة تلقائيًا من الرابط.', style: TextStyle(color: muted, fontSize: 12)),
                             ),
                             const SizedBox(height: 14),
                             Row(
@@ -1039,7 +1040,7 @@ class _AdminScreenState extends State<AdminScreen> {
                                     ),
                                     onPressed: () => Navigator.of(sheetContext).pop('save'),
                                     icon: const Icon(Icons.save_rounded),
-                                    label: const Text('حفظ بيانات البث', style: TextStyle(fontWeight: FontWeight.w900)),
+                                    label: const AppText('حفظ بيانات البث', style: TextStyle(fontWeight: FontWeight.w900)),
                                   ),
                                 ),
                                 if (user.streamUrl.trim().isNotEmpty) ...[
@@ -1053,7 +1054,7 @@ class _AdminScreenState extends State<AdminScreen> {
                                       ),
                                       onPressed: () => Navigator.of(sheetContext).pop('remove'),
                                       icon: const Icon(Icons.delete_rounded),
-                                      label: const Text('إزالة البث', style: TextStyle(fontWeight: FontWeight.w900)),
+                                      label: const AppText('إزالة البث', style: TextStyle(fontWeight: FontWeight.w900)),
                                     ),
                                   ),
                                 ],
@@ -1273,15 +1274,15 @@ class _AdminScreenState extends State<AdminScreen> {
                           backgroundColor: blocked ? AppColors.danger : AppColors.purple,
                           backgroundImage: _avatarProvider(user.avatarPath),
                           child: _avatarProvider(user.avatarPath) == null
-                              ? Text(
+                              ? AppText(
                             user.name.isEmpty ? '?' : user.name.characters.first,
                             style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 20),
                           )
                               : null,
                         ),
                         const SizedBox(height: 10),
-                        Text(user.name, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
-                        Text(user.username, style: TextStyle(color: muted, fontWeight: FontWeight.w700)),
+                        AppText(user.name, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+                        AppText(user.username, style: TextStyle(color: muted, fontWeight: FontWeight.w700)),
                         const SizedBox(height: 14),
                         Container(
                           width: double.infinity,
@@ -1298,7 +1299,7 @@ class _AdminScreenState extends State<AdminScreen> {
                               Icon(Icons.phone_android_rounded, color: blocked || user.deviceBanned ? AppColors.danger : AppColors.purple),
                               const SizedBox(width: 10),
                               Expanded(
-                                child: Text(
+                                child: AppText(
                                   user.deviceId.trim().isEmpty
                                       ? 'لا يوجد جهاز مسجل لهذا المستخدم حتى الآن'
                                       : 'الجهاز المسجل: ${user.deviceId}',
@@ -1315,9 +1316,9 @@ class _AdminScreenState extends State<AdminScreen> {
                           initialValue: reason,
                           maxLines: 3,
                           onChanged: (value) => reason = value,
-                          decoration: const InputDecoration(
+                          decoration: InputDecoration(
                             prefixIcon: Icon(Icons.notes_rounded),
-                            hintText: 'سبب الحظر',
+                            hintText: context.tr('سبب الحظر'),
                           ),
                         ),
                         const SizedBox(height: 18),
@@ -1332,7 +1333,7 @@ class _AdminScreenState extends State<AdminScreen> {
                                   minimumSize: const Size.fromHeight(52),
                                 ),
                                 icon: Icon(blocked ? Icons.lock_open_rounded : Icons.block_rounded),
-                                label: Text(
+                                label: AppText(
                                   blocked ? 'إلغاء الحظر' : 'حظر الحساب والجهاز',
                                   style: const TextStyle(fontWeight: FontWeight.w900),
                                 ),
@@ -1347,7 +1348,7 @@ class _AdminScreenState extends State<AdminScreen> {
                                   minimumSize: const Size.fromHeight(52),
                                 ),
                                 icon: const Icon(Icons.close_rounded),
-                                label: const Text('إلغاء', style: TextStyle(fontWeight: FontWeight.w900)),
+                                label: const AppText('إلغاء', style: TextStyle(fontWeight: FontWeight.w900)),
                                 onPressed: () => Navigator.of(sheetContext).pop(false),
                               ),
                             ),
@@ -1378,17 +1379,17 @@ class _AdminScreenState extends State<AdminScreen> {
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: Text(title, style: const TextStyle(fontWeight: FontWeight.w900)),
-          content: Text(message),
+          title: AppText(title, style: const TextStyle(fontWeight: FontWeight.w900)),
+          content: AppText(message),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('إلغاء')),
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const AppText('إلغاء')),
             FilledButton(
               style: FilledButton.styleFrom(
                 backgroundColor: danger ? AppColors.danger : AppColors.purple,
                 foregroundColor: Colors.white,
               ),
               onPressed: () => Navigator.pop(context, true),
-              child: const Text('تأكيد'),
+              child: const AppText('تأكيد'),
             ),
           ],
         );
@@ -1664,7 +1665,7 @@ class _AdminScreenState extends State<AdminScreen> {
             child: OutlinedButton.icon(
               onPressed: _toggleStatisticsCards,
               icon: Icon(_hideStatisticsCards ? Icons.visibility_rounded : Icons.visibility_off_rounded),
-              label: Text(_hideStatisticsCards ? 'إظهار الإحصائيات' : 'إخفاء الإحصائيات'),
+              label: AppText(_hideStatisticsCards ? 'إظهار الإحصائيات' : 'إخفاء الإحصائيات'),
               style: OutlinedButton.styleFrom(
                 foregroundColor: AppColors.purple,
                 side: BorderSide(color: AppColors.purple.withValues(alpha: .30)),
@@ -1739,7 +1740,7 @@ class _AdminScreenState extends State<AdminScreen> {
         controller: _searchCtrl,
         decoration: InputDecoration(
           prefixIcon: const Icon(Icons.search_rounded),
-          hintText: 'بحث سريع داخل الإدارة...',
+          hintText: context.tr('بحث سريع داخل الإدارة...'),
           suffixIcon: _query.isEmpty
               ? null
               : IconButton(
@@ -1756,7 +1757,7 @@ class _AdminScreenState extends State<AdminScreen> {
     final title = _generalTitleCtrl.text.trim();
     final body = _generalBodyCtrl.text.trim();
     if (title.isEmpty || body.isEmpty) {
-      NotificationService.showTopError('اكتب عنوان ونص الإشعار أولاً');
+      NotificationService.showTopError(context.tr('اكتب عنوان ونص الإشعار أولاً'));
       return;
     }
     if (_sendingGeneralNotification) return;
@@ -1777,7 +1778,7 @@ class _AdminScreenState extends State<AdminScreen> {
       );
     } catch (e) {
       if (!mounted) return;
-      NotificationService.showTopError('تعذر إرسال الإشعار العام: $e');
+      NotificationService.showTopError(context.tr('تعذر إرسال الإشعار العام: $e'));
     } finally {
       if (mounted) setState(() => _sendingGeneralNotification = false);
     }
@@ -1817,9 +1818,9 @@ class _AdminScreenState extends State<AdminScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('إشعار عام لكل المستخدمين', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+                          AppText('إشعار عام لكل المستخدمين', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
                           SizedBox(height: 3),
-                          Text('يرسل Push خارج التطبيق ويظهر كتنبيه داخلي داخل Respect.', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12)),
+                          AppText('يرسل Push خارج التطبيق ويظهر كتنبيه داخلي داخل Respect.', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12)),
                         ],
                       ),
                     ),
@@ -1830,9 +1831,9 @@ class _AdminScreenState extends State<AdminScreen> {
                   controller: _generalTitleCtrl,
                   maxLength: 60,
                   textInputAction: TextInputAction.next,
-                  decoration: const InputDecoration(
-                    labelText: 'عنوان الإشعار',
-                    hintText: 'مثال: تحديث جديد',
+                  decoration: InputDecoration(
+                    labelText: context.tr('عنوان الإشعار'),
+                    hintText: context.tr('مثال: تحديث جديد'),
                     prefixIcon: Icon(Icons.title_rounded),
                     counterText: '',
                   ),
@@ -1843,9 +1844,9 @@ class _AdminScreenState extends State<AdminScreen> {
                   minLines: 5,
                   maxLines: 8,
                   maxLength: 500,
-                  decoration: const InputDecoration(
-                    labelText: 'نص الإشعار',
-                    hintText: 'اكتب الرسالة التي ستصل لكل مستخدمي التطبيق...',
+                  decoration: InputDecoration(
+                    labelText: context.tr('نص الإشعار'),
+                    hintText: context.tr('اكتب الرسالة التي ستصل لكل مستخدمي التطبيق...'),
                     alignLabelWithHint: true,
                     prefixIcon: Padding(
                       padding: EdgeInsets.only(bottom: 88),
@@ -1867,7 +1868,7 @@ class _AdminScreenState extends State<AdminScreen> {
                       const Icon(Icons.info_rounded, color: AppColors.purple, size: 20),
                       const SizedBox(width: 8),
                       Expanded(
-                        child: Text(
+                        child: AppText(
                           'الإشعار يصل للأجهزة التي سجلت FCM Token. المستخدم الذي يكون داخل التطبيق سيشاهد تنبيه علوي، وسيظهر أيضاً في صفحة الإشعارات.',
                           style: TextStyle(color: muted, fontWeight: FontWeight.w700, height: 1.35),
                         ),
@@ -1883,7 +1884,7 @@ class _AdminScreenState extends State<AdminScreen> {
                     icon: _sendingGeneralNotification
                         ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                         : const Icon(Icons.send_rounded),
-                    label: Text(_sendingGeneralNotification ? 'جاري الإرسال...' : 'إرسال لكل المستخدمين'),
+                    label: AppText(_sendingGeneralNotification ? 'جاري الإرسال...' : 'إرسال لكل المستخدمين'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.purple,
                       foregroundColor: Colors.white,
@@ -1931,11 +1932,11 @@ class _AdminScreenState extends State<AdminScreen> {
           ],
         ),
         tabs: [
-          Tab(icon: const Icon(Icons.report_rounded, size: 19), text: 'البلاغات ${_postReports.length}'),
-          Tab(icon: const Icon(Icons.people_alt_rounded, size: 19), text: 'المستخدمين ${_users.length}'),
-          Tab(icon: const Icon(Icons.article_rounded, size: 19), text: 'المنشورات ${_posts.length}'),
-          Tab(icon: const Icon(Icons.live_tv_rounded, size: 19), text: 'الستريمرز $_streamersCount'),
-          const Tab(icon: Icon(Icons.campaign_rounded, size: 19), text: 'إشعار عام'),
+          Tab(icon: const Icon(Icons.report_rounded, size: 19), child: AppText('البلاغات ${_postReports.length}')),
+          Tab(icon: const Icon(Icons.people_alt_rounded, size: 19), child: AppText('المستخدمين ${_users.length}')),
+          Tab(icon: const Icon(Icons.article_rounded, size: 19), child: AppText('المنشورات ${_posts.length}')),
+          Tab(icon: const Icon(Icons.live_tv_rounded, size: 19), child: AppText('الستريمرز $_streamersCount')),
+          const Tab(icon: Icon(Icons.campaign_rounded, size: 19), child: AppText('إشعار عام')),
         ],
       ),
     );
@@ -1962,9 +1963,9 @@ class _AdminScreenState extends State<AdminScreen> {
             child: Icon(icon, color: color, size: 32),
           ),
           const SizedBox(height: 14),
-          Text(title, textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
+          AppText(title, textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
           const SizedBox(height: 6),
-          Text(
+          AppText(
             subtitle,
             textAlign: TextAlign.center,
             style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, fontWeight: FontWeight.w700),
@@ -2015,12 +2016,12 @@ class _AdminScreenState extends State<AdminScreen> {
           Row(
             children: [
               Expanded(
-                child: Text('بلاغات التغريدات', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: isDark ? Colors.white : Colors.black87)),
+                child: AppText('بلاغات التغريدات', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: isDark ? Colors.white : Colors.black87)),
               ),
               TextButton.icon(
                 onPressed: _clearReports,
                 icon: const Icon(Icons.delete_sweep_rounded, size: 18),
-                label: const Text('حذف الكل'),
+                label: const AppText('حذف الكل'),
               ),
             ],
           ),
@@ -2064,9 +2065,9 @@ class _AdminScreenState extends State<AdminScreen> {
           Row(
             children: [
               const Expanded(
-                child: Text('إدارة المستخدمين', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+                child: AppText('إدارة المستخدمين', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
               ),
-              Text('${users.length} نتيجة', style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted)),
+              AppText('${users.length} نتيجة', style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted)),
             ],
           ),
           const SizedBox(height: 10),
@@ -2110,9 +2111,9 @@ class _AdminScreenState extends State<AdminScreen> {
           Row(
             children: [
               const Expanded(
-                child: Text('إدارة المنشورات', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+                child: AppText('إدارة المنشورات', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
               ),
-              Text('${posts.length} منشور', style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted)),
+              AppText('${posts.length} منشور', style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted)),
             ],
           ),
           const SizedBox(height: 10),
@@ -2165,8 +2166,8 @@ class _AdminScreenState extends State<AdminScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('إدارة الستريمرز', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
-                    Text(
+                    const AppText('إدارة الستريمرز', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+                    AppText(
                       count == 0 ? 'أضف القناة بالرابط فقط وتظهر في صفحة الستريمرز' : '$count قناة مضافة',
                       style: TextStyle(color: muted, fontWeight: FontWeight.w700, fontSize: 12.5),
                     ),
@@ -2186,7 +2187,7 @@ class _AdminScreenState extends State<AdminScreen> {
               textStyle: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14),
             ),
             icon: const Icon(Icons.add_link_rounded),
-            label: const Text('إضافة ستريمر جديد'),
+            label: const AppText('إضافة ستريمر جديد'),
           ),
         ],
       ),
@@ -2399,9 +2400,9 @@ class _AdminPostCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(author, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15)),
+                    AppText(author, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15)),
                     const SizedBox(height: 2),
-                    Text(
+                    AppText(
                       id.trim().isEmpty ? 'منشور بدون ID' : 'ID: $id',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -2411,7 +2412,7 @@ class _AdminPostCard extends StatelessWidget {
                 ),
               ),
               IconButton(
-                tooltip: 'حذف المنشور',
+                tooltip: context.tr('حذف المنشور'),
                 onPressed: onDelete,
                 icon: const Icon(Icons.delete_rounded, color: AppColors.danger),
               ),
@@ -2426,7 +2427,7 @@ class _AdminPostCard extends StatelessWidget {
               borderRadius: BorderRadius.circular(18),
               border: Border.all(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
             ),
-            child: Text(
+            child: AppText(
               text.trim().isEmpty ? 'منشور يحتوي على وسائط فقط' : text,
               maxLines: 4,
               overflow: TextOverflow.ellipsis,
@@ -2478,7 +2479,7 @@ class _StreamerAdminCard extends StatelessWidget {
                 backgroundColor: AppColors.purple,
                 backgroundImage: avatarProvider,
                 child: avatarProvider == null
-                    ? Text(
+                    ? AppText(
                   user.name.isEmpty ? '?' : user.name.characters.first,
                   style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 20),
                 )
@@ -2489,9 +2490,9 @@ class _StreamerAdminCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(user.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+                    AppText(user.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
                     const SizedBox(height: 3),
-                    Text(user.username, style: TextStyle(color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
+                    AppText(user.username, style: TextStyle(color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
                   ],
                 ),
               ),
@@ -2512,7 +2513,7 @@ class _StreamerAdminCard extends StatelessWidget {
                 const Icon(Icons.link_rounded, color: AppColors.purple, size: 18),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: Text(
+                  child: AppText(
                     user.streamUrl,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -2536,7 +2537,7 @@ class _StreamerAdminCard extends StatelessWidget {
             const SizedBox(height: 8),
             Align(
               alignment: AlignmentDirectional.centerStart,
-              child: Text(
+              child: AppText(
                 user.streamTitle,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
@@ -2552,13 +2553,13 @@ class _StreamerAdminCard extends StatelessWidget {
               OutlinedButton.icon(
                 onPressed: onEditStream,
                 icon: const Icon(Icons.edit_rounded, color: AppColors.purple),
-                label: const Text('تعديل', style: TextStyle(fontWeight: FontWeight.w900)),
+                label: const AppText('تعديل', style: TextStyle(fontWeight: FontWeight.w900)),
               ),
               OutlinedButton.icon(
                 onPressed: onRemoveStream,
                 style: OutlinedButton.styleFrom(foregroundColor: AppColors.danger),
                 icon: const Icon(Icons.delete_rounded),
-                label: const Text('حذف', style: TextStyle(fontWeight: FontWeight.w900)),
+                label: const AppText('حذف', style: TextStyle(fontWeight: FontWeight.w900)),
               ),
             ],
           ),
@@ -2667,8 +2668,8 @@ class _AddStreamerSheetState extends State<_AddStreamerSheet> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const Text('إضافة ستريمر بالرابط', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w900)),
-                              Text(
+                              const AppText('إضافة ستريمر بالرابط', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w900)),
+                              AppText(
                                 'حط رابط القناة فقط، وRespect يجلب الاسم والصورة والمنصة تلقائيًا.',
                                 style: TextStyle(color: muted, fontWeight: FontWeight.w700, fontSize: 12.5),
                               ),
@@ -2684,9 +2685,9 @@ class _AddStreamerSheetState extends State<_AddStreamerSheet> {
                       keyboardType: TextInputType.url,
                       textInputAction: TextInputAction.done,
                       onSubmitted: (_) => _submit(),
-                      decoration: const InputDecoration(
+                      decoration: InputDecoration(
                         prefixIcon: Icon(Icons.link_rounded),
-                        hintText: 'مثال: https://kick.com/channel أو twitch.tv/name',
+                        hintText: context.tr('مثال: https://kick.com/channel أو twitch.tv/name'),
                       ),
                     ),
                     const SizedBox(height: 12),
@@ -2703,7 +2704,7 @@ class _AddStreamerSheetState extends State<_AddStreamerSheet> {
                           const Icon(Icons.auto_awesome_rounded, color: AppColors.purple, size: 20),
                           const SizedBox(width: 10),
                           Expanded(
-                            child: Text(
+                            child: AppText(
                               'سيتم حفظ القناة في تبويب الستريمرز وتظهر مباشرة في صفحة البث. الحذف والتعديل من نفس الكرت.',
                               style: TextStyle(color: muted, fontWeight: FontWeight.w800, fontSize: 12.5, height: 1.35),
                             ),
@@ -2723,7 +2724,7 @@ class _AddStreamerSheetState extends State<_AddStreamerSheet> {
                         ),
                         onPressed: _submit,
                         icon: const Icon(Icons.cloud_download_rounded),
-                        label: const Text('جلب البيانات وإضافة الستريمر', style: TextStyle(fontWeight: FontWeight.w900)),
+                        label: const AppText('جلب البيانات وإضافة الستريمر', style: TextStyle(fontWeight: FontWeight.w900)),
                       ),
                     ),
                   ],
@@ -2779,7 +2780,7 @@ class _ReportDetailsScreen extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('تفاصيل البلاغ', style: TextStyle(fontWeight: FontWeight.w900)),
+        title: const AppText('تفاصيل البلاغ', style: TextStyle(fontWeight: FontWeight.w900)),
         centerTitle: true,
         backgroundColor: Colors.transparent,
         elevation: 0,
@@ -2807,9 +2808,9 @@ class _ReportDetailsScreen extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text('التغريدة المبلّغ عنها', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+                          const AppText('التغريدة المبلّغ عنها', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
                           const SizedBox(height: 2),
-                          Text('صاحب التغريدة: $_postUser', style: TextStyle(color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
+                          AppText('صاحب التغريدة: $_postUser', style: TextStyle(color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
                         ],
                       ),
                     ),
@@ -2824,7 +2825,7 @@ class _ReportDetailsScreen extends StatelessWidget {
                     borderRadius: BorderRadius.circular(18),
                     border: Border.all(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
                   ),
-                  child: Text(
+                  child: AppText(
                     _postText.trim().isEmpty ? 'تغريدة تحتوي على وسائط فقط' : _postText,
                     style: const TextStyle(fontSize: 15, height: 1.55, fontWeight: FontWeight.w700),
                   ),
@@ -2836,7 +2837,7 @@ class _ReportDetailsScreen extends StatelessWidget {
                       Icon(videoPath.trim().isNotEmpty ? Icons.videocam_rounded : Icons.image_rounded, color: AppColors.purple, size: 18),
                       const SizedBox(width: 6),
                       Expanded(
-                        child: Text(
+                        child: AppText(
                           videoPath.trim().isNotEmpty ? 'التغريدة تحتوي على فيديو مرفق' : 'التغريدة تحتوي على صورة مرفقة',
                           style: TextStyle(color: muted, fontWeight: FontWeight.w800, fontSize: 12),
                         ),
@@ -2878,9 +2879,9 @@ class _ReportDetailsScreen extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text('البلاغ', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+                          const AppText('البلاغ', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
                           const SizedBox(height: 2),
-                          Text('المبلّغ: $_reporter', style: TextStyle(color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
+                          AppText('المبلّغ: $_reporter', style: TextStyle(color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
                         ],
                       ),
                     ),
@@ -2899,7 +2900,7 @@ class _ReportDetailsScreen extends StatelessWidget {
                       color: status == 'accepted' ? AppColors.danger.withValues(alpha: 0.10) : AppColors.success.withValues(alpha: 0.10),
                       borderRadius: BorderRadius.circular(16),
                     ),
-                    child: Text(
+                    child: AppText(
                       status == 'accepted'
                           ? 'قرار Respect AI: البلاغ صحيح\n$aiReason'
                           : 'قرار Respect AI: البلاغ غير مؤكد\n$aiReason',
@@ -2932,12 +2933,12 @@ class _ReportDetailsScreen extends StatelessWidget {
                 icon: reviewing
                     ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                     : const Icon(Icons.smart_toy_rounded),
-                label: Text(reviewing ? 'جاري المراجعة...' : 'مراجعة Respect AI', style: const TextStyle(fontWeight: FontWeight.w900)),
+                label: AppText(reviewing ? 'جاري المراجعة...' : 'مراجعة Respect AI', style: const TextStyle(fontWeight: FontWeight.w900)),
               ),
             ),
             const SizedBox(width: 10),
             IconButton.filledTonal(
-              tooltip: 'حذف البلاغ',
+              tooltip: context.tr('حذف البلاغ'),
               onPressed: onDelete,
               icon: const Icon(Icons.delete_rounded, color: AppColors.danger),
             ),
@@ -2972,9 +2973,9 @@ class _DetailLine extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: TextStyle(color: muted, fontSize: 12, fontWeight: FontWeight.w800)),
+          AppText(label, style: TextStyle(color: muted, fontSize: 12, fontWeight: FontWeight.w800)),
           const SizedBox(height: 5),
-          Text(value, style: const TextStyle(fontSize: 14, height: 1.45, fontWeight: FontWeight.w800)),
+          AppText(value, style: const TextStyle(fontSize: 14, height: 1.45, fontWeight: FontWeight.w800)),
         ],
       ),
     );
@@ -3033,9 +3034,9 @@ class _ReportCard extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(type, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15)),
+                      AppText(type, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15)),
                       const SizedBox(height: 2),
-                      Text('المبلِّغ: $reporter · على: $postUser', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: muted, fontSize: 12)),
+                      AppText('المبلِّغ: $reporter · على: $postUser', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: muted, fontSize: 12)),
                     ],
                   ),
                 ),
@@ -3043,12 +3044,12 @@ class _ReportCard extends StatelessWidget {
                   const SizedBox(width: 28, height: 28, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.purple))
                 else
                   IconButton(
-                    tooltip: reviewed ? 'إعادة مراجعة البلاغ بالذكاء الاصطناعي' : 'مراجعة البلاغ بالذكاء الاصطناعي',
+                    tooltip: reviewed ? context.tr('إعادة مراجعة البلاغ بالذكاء الاصطناعي') : context.tr('مراجعة البلاغ بالذكاء الاصطناعي'),
                     onPressed: onReview,
                     icon: Icon(reviewed ? Icons.refresh_rounded : Icons.smart_toy_rounded, color: AppColors.purple),
                   ),
                 IconButton(
-                  tooltip: 'حذف البلاغ',
+                  tooltip: context.tr('حذف البلاغ'),
                   onPressed: onDelete,
                   icon: const Icon(Icons.close_rounded, color: AppColors.danger),
                 ),
@@ -3063,7 +3064,7 @@ class _ReportCard extends StatelessWidget {
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
               ),
-              child: Text(text.trim().isEmpty ? 'تغريدة تحتوي على وسائط فقط' : text, maxLines: 3, overflow: TextOverflow.ellipsis, style: const TextStyle(height: 1.35)),
+              child: AppText(text.trim().isEmpty ? 'تغريدة تحتوي على وسائط فقط' : text, maxLines: 3, overflow: TextOverflow.ellipsis, style: const TextStyle(height: 1.35)),
             ),
             if (aiReason.trim().isNotEmpty) ...[
               const SizedBox(height: 8),
@@ -3074,7 +3075,7 @@ class _ReportCard extends StatelessWidget {
                   color: status == 'accepted' ? AppColors.danger.withValues(alpha: 0.10) : AppColors.success.withValues(alpha: 0.10),
                   borderRadius: BorderRadius.circular(14),
                 ),
-                child: Text(
+                child: AppText(
                   status == 'accepted' ? 'قرار Respect AI: البلاغ صحيح · $aiReason' : 'قرار Respect AI: البلاغ غير مؤكد · $aiReason',
                   style: TextStyle(
                     color: status == 'accepted' ? AppColors.danger : AppColors.success,
@@ -3132,9 +3133,9 @@ class _AdminHeader extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('لوحة تحكم حقيقية', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+                const AppText('لوحة تحكم حقيقية', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
                 const SizedBox(height: 3),
-                Text(
+                AppText(
                   '$users مستخدم · $admins أدمن · $blocked محظور',
                   style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted),
                 ),
@@ -3183,21 +3184,21 @@ class _StatCard extends StatelessWidget {
                 children: [
                   Icon(icon, color: color, size: compact ? 26 : 30),
                   SizedBox(height: compact ? 5 : 7),
-                  Text(
+                  AppText(
                     value,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(fontSize: compact ? 20 : 22, fontWeight: FontWeight.w900),
                   ),
                   const SizedBox(height: 1),
-                  Text(
+                  AppText(
                     title,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(fontWeight: FontWeight.w900, fontSize: compact ? 12 : 13),
                   ),
                   SizedBox(height: compact ? 2 : 3),
-                  Text(
+                  AppText(
                     subtitle,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -3246,7 +3247,7 @@ class _UserAdminCard extends StatelessWidget {
                 backgroundColor: user.isBlocked ? AppColors.danger : AppColors.purple,
                 backgroundImage: avatarProvider,
                 child: avatarProvider == null
-                    ? Text(
+                    ? AppText(
                   user.name.isEmpty ? '?' : user.name.characters.first,
                   style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 20),
                 )
@@ -3260,7 +3261,7 @@ class _UserAdminCard extends StatelessWidget {
                     Row(
                       children: [
                         Flexible(
-                          child: Text(
+                          child: AppText(
                             user.name,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -3278,7 +3279,7 @@ class _UserAdminCard extends StatelessWidget {
                       ],
                     ),
                     const SizedBox(height: 3),
-                    Text(user.username, style: TextStyle(color: muted, fontSize: 12)),
+                    AppText(user.username, style: TextStyle(color: muted, fontSize: 12)),
                     const SizedBox(height: 4),
                     Wrap(
                       spacing: 6,
@@ -3314,7 +3315,7 @@ class _UserAdminCard extends StatelessWidget {
                         Icon(user.isBlocked ? Icons.lock_open_rounded : Icons.block_rounded,
                             color: user.isBlocked ? AppColors.success : AppColors.danger),
                         const SizedBox(width: 8),
-                        Text(user.isBlocked ? 'إلغاء الحظر' : 'حظر كامل'),
+                        AppText(user.isBlocked ? 'إلغاء الحظر' : 'حظر كامل'),
                       ],
                     ),
                   ),
@@ -3325,7 +3326,7 @@ class _UserAdminCard extends StatelessWidget {
                         Icon(user.isAdmin ? Icons.person_remove_rounded : Icons.add_moderator_rounded,
                             color: AppColors.purple),
                         const SizedBox(width: 8),
-                        Text(user.isAdmin ? 'إزالة الأدمن' : 'ترقية أدمن'),
+                        AppText(user.isAdmin ? 'إزالة الأدمن' : 'ترقية أدمن'),
                       ],
                     ),
                   ),
@@ -3335,7 +3336,7 @@ class _UserAdminCard extends StatelessWidget {
                       children: [
                         Icon(Icons.live_tv_rounded, color: AppColors.purple),
                         SizedBox(width: 8),
-                        Text('بيانات البث'),
+                        AppText('بيانات البث'),
                       ],
                     ),
                   ),
@@ -3345,7 +3346,7 @@ class _UserAdminCard extends StatelessWidget {
                       children: [
                         Icon(Icons.cleaning_services_rounded, color: AppColors.danger),
                         SizedBox(width: 8),
-                        Text('حذف محتواه'),
+                        AppText('حذف محتواه'),
                       ],
                     ),
                   ),
@@ -3367,14 +3368,14 @@ class _UserAdminCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   if (user.streamUrl.trim().isNotEmpty)
-                    Text(
+                    AppText(
                       'البث: ${user.streamUrl}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(color: muted, fontSize: 12),
                     ),
                   if (user.blockedReason.trim().isNotEmpty)
-                    Text(
+                    AppText(
                       'سبب الحظر: ${user.blockedReason}',
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
@@ -3396,7 +3397,7 @@ class _UserAdminCard extends StatelessWidget {
                   ),
                   onPressed: onBlock,
                   icon: Icon(user.isBlocked ? Icons.lock_open_rounded : Icons.block_rounded, size: 18),
-                  label: Text(user.isBlocked ? 'فك الحظر' : 'حظر', style: const TextStyle(fontWeight: FontWeight.w900)),
+                  label: AppText(user.isBlocked ? 'فك الحظر' : 'حظر', style: const TextStyle(fontWeight: FontWeight.w900)),
                 ),
               ),
               const SizedBox(width: 8),
@@ -3409,7 +3410,7 @@ class _UserAdminCard extends StatelessWidget {
                   ),
                   onPressed: onAdmin,
                   icon: Icon(user.isAdmin ? Icons.person_remove_rounded : Icons.add_moderator_rounded, size: 18),
-                  label: Text(user.isAdmin ? 'إزالة' : 'ترقية', style: const TextStyle(fontWeight: FontWeight.w900)),
+                  label: AppText(user.isAdmin ? 'إزالة' : 'ترقية', style: const TextStyle(fontWeight: FontWeight.w900)),
                 ),
               ),
             ],
@@ -3420,7 +3421,7 @@ class _UserAdminCard extends StatelessWidget {
             child: OutlinedButton.icon(
               onPressed: onEditStream,
               icon: const Icon(Icons.live_tv_rounded, color: AppColors.purple, size: 18),
-              label: Text(
+              label: AppText(
                 user.streamUrl.trim().isEmpty ? 'إضافة بيانات بث' : 'تعديل بيانات البث',
                 style: const TextStyle(fontWeight: FontWeight.w900),
               ),
@@ -3450,7 +3451,7 @@ class _MiniChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(999),
         border: Border.all(color: color.withValues(alpha: 0.35)),
       ),
-      child: Text(
+      child: AppText(
         text,
         style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w900),
       ),

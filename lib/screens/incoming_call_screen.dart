@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
 
+import '../app/app_language.dart';
 /// هذا الملف كان يسبب ظهور شاشة قبول/رفض القديمة داخل Flutter
 /// خلف شاشة المكالمة البنفسجية Native.
 ///

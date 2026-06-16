@@ -10,6 +10,7 @@ import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/glass_card.dart';
 
+import '../app/app_language.dart';
 class RespectPaintersScreen extends StatefulWidget {
   const RespectPaintersScreen({super.key});
 
@@ -82,7 +83,7 @@ class _RespectPaintersScreenState extends State<RespectPaintersScreen> {
     final drawing = _myDrawingThisWeek(user);
     final title = (drawing == null ? '' : (drawing['title'] ?? '').toString()).trim();
     final extra = title.isEmpty ? '' : ' رسمتك الحالية: $title';
-    NotificationService.showTopNotification('لا يمكنك نشر أكثر من رسمة واحدة في نفس الأسبوع.$extra');
+    NotificationService.showTopNotification(context.tr('لا يمكنك نشر أكثر من رسمة واحدة في نفس الأسبوع.$extra'));
   }
 
   bool _truthy(dynamic value) {
@@ -113,7 +114,7 @@ class _RespectPaintersScreenState extends State<RespectPaintersScreen> {
         _statusText = _buildStatusText();
       });
     } catch (e) {
-      if (mounted) NotificationService.showTopNotification('تعذر تحميل رسامين ريسبكت: $e');
+      if (mounted) NotificationService.showTopNotification(context.tr('تعذر تحميل رسامين ريسبكت: $e'));
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -152,7 +153,7 @@ class _RespectPaintersScreenState extends State<RespectPaintersScreen> {
       barrierColor: Colors.black.withValues(alpha: 0.92),
       builder: (context) {
         return Directionality(
-          textDirection: TextDirection.rtl,
+          textDirection: context.appTextDirection,
           child: Dialog.fullscreen(
             backgroundColor: Colors.black,
             child: SafeArea(
@@ -203,14 +204,14 @@ class _RespectPaintersScreenState extends State<RespectPaintersScreen> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Text(
+                                AppText(
                                   rank > 0 ? '$title  •  المركز $rank' : title,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 15),
                                 ),
                                 if (name.trim().isNotEmpty)
-                                  Text(
+                                  AppText(
                                     name,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
@@ -235,7 +236,7 @@ class _RespectPaintersScreenState extends State<RespectPaintersScreen> {
   Future<void> _submitDrawing() async {
     final user = _currentUser ?? await SupabaseService.currentUser();
     if (user == null) {
-      NotificationService.showTopNotification('سجل دخولك أولاً');
+      NotificationService.showTopNotification(context.tr('سجل دخولك أولاً'));
       return;
     }
     if (_hasSubmittedThisWeek(user)) {
@@ -244,12 +245,12 @@ class _RespectPaintersScreenState extends State<RespectPaintersScreen> {
     }
     final selectedImage = _selectedImage;
     if (selectedImage == null) {
-      NotificationService.showTopNotification('اختر صورة الرسمة أولاً');
+      NotificationService.showTopNotification(context.tr('اختر صورة الرسمة أولاً'));
       return;
     }
     final title = _titleController.text.trim();
     if (title.isEmpty) {
-      NotificationService.showTopNotification('اكتب عنوان للرسمة');
+      NotificationService.showTopNotification(context.tr('اكتب عنوان للرسمة'));
       return;
     }
 
@@ -275,7 +276,7 @@ class _RespectPaintersScreenState extends State<RespectPaintersScreen> {
 
       final accepted = result['accepted'] == true;
       if (accepted) {
-        NotificationService.showTopSuccess('تم نشر الرسمة داخل بطولة رسامين ريسبكت');
+        NotificationService.showTopSuccess(context.tr('تم نشر الرسمة داخل بطولة رسامين ريسبكت'));
         _titleController.clear();
         _descriptionController.clear();
         setState(() => _selectedImage = null);
@@ -293,7 +294,7 @@ class _RespectPaintersScreenState extends State<RespectPaintersScreen> {
           msg.contains('رسمة واحدة')) {
         _showAlreadySubmittedMessage(user);
       } else {
-        NotificationService.showTopNotification('فشل نشر الرسمة: $e');
+        NotificationService.showTopNotification(context.tr('فشل نشر الرسمة: $e'));
       }
     } finally {
       if (mounted) setState(() => _submitting = false);
@@ -311,7 +312,7 @@ class _RespectPaintersScreenState extends State<RespectPaintersScreen> {
       NotificationService.showTopNotification(ok ? 'انتهت التصفيات وتم اختيار الفائز' : (result['reason'] ?? 'تعذر تشغيل التصفيات').toString());
       await _loadAll(showLoader: false);
     } catch (e) {
-      NotificationService.showTopNotification('فشل تشغيل التصفيات: $e');
+      NotificationService.showTopNotification(context.tr('فشل تشغيل التصفيات: $e'));
     } finally {
       if (mounted) setState(() => _runningTournament = false);
     }
@@ -330,7 +331,7 @@ class _RespectPaintersScreenState extends State<RespectPaintersScreen> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     return Directionality(
-      textDirection: TextDirection.rtl,
+      textDirection: context.appTextDirection,
       child: Scaffold(
         backgroundColor: isDark ? AppColors.darkBg : AppColors.lightBg,
         body: _loading
@@ -379,8 +380,8 @@ class _RespectPaintersScreenState extends State<RespectPaintersScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('رسامين ريسبكت', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: isDark ? Colors.white : Colors.black87)),
-                    Text(_statusText, style: TextStyle(fontSize: 13, color: isDark ? AppColors.darkMuted : AppColors.lightMuted)),
+                    AppText('رسامين ريسبكت', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: isDark ? Colors.white : Colors.black87)),
+                    AppText(_statusText, style: TextStyle(fontSize: 13, color: isDark ? AppColors.darkMuted : AppColors.lightMuted)),
                   ],
                 ),
               ),
@@ -403,7 +404,7 @@ class _RespectPaintersScreenState extends State<RespectPaintersScreen> {
                 child: OutlinedButton.icon(
                   onPressed: () => _changeWeek(-1),
                   icon: const Icon(Icons.chevron_right_rounded),
-                  label: const Text('الأسبوع السابق'),
+                  label: const AppText('الأسبوع السابق'),
                 ),
               ),
               const SizedBox(width: 8),
@@ -411,7 +412,7 @@ class _RespectPaintersScreenState extends State<RespectPaintersScreen> {
                 child: OutlinedButton.icon(
                   onPressed: () => _changeWeek(1),
                   icon: const Icon(Icons.chevron_left_rounded),
-                  label: const Text('الأسبوع التالي'),
+                  label: const AppText('الأسبوع التالي'),
                 ),
               ),
             ],
@@ -426,7 +427,7 @@ class _RespectPaintersScreenState extends State<RespectPaintersScreen> {
                 icon: _runningTournament
                     ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                     : const Icon(Icons.auto_awesome_rounded),
-                label: Text(_runningTournament ? 'جاري تشغيل التصفيات...' : 'تشغيل تصفيات الأسبوع بالذكاء الاصطناعي'),
+                label: AppText(_runningTournament ? 'جاري تشغيل التصفيات...' : 'تشغيل تصفيات الأسبوع بالذكاء الاصطناعي'),
               ),
             ),
           ],
@@ -448,7 +449,7 @@ class _RespectPaintersScreenState extends State<RespectPaintersScreen> {
             children: [
               const Icon(Icons.emoji_events_rounded, color: Color(0xFFF59E0B)),
               const SizedBox(width: 8),
-              Text('منصة الفائزين', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: isDark ? Colors.white : Colors.black87)),
+              AppText('منصة الفائزين', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: isDark ? Colors.white : Colors.black87)),
             ],
           ),
           const SizedBox(height: 14),
@@ -479,7 +480,7 @@ class _RespectPaintersScreenState extends State<RespectPaintersScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('انشر رسمتك', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: isDark ? Colors.white : Colors.black87)),
+          AppText('انشر رسمتك', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: isDark ? Colors.white : Colors.black87)),
           const SizedBox(height: 10),
           if (hasSubmitted) ...[
             Container(
@@ -495,7 +496,7 @@ class _RespectPaintersScreenState extends State<RespectPaintersScreen> {
                   const Icon(Icons.info_rounded, color: AppColors.purpleLight),
                   const SizedBox(width: 8),
                   Expanded(
-                    child: Text(
+                    child: AppText(
                       'مسموح لكل حساب بنشر رسمة واحدة فقط في الأسبوع. تقدر تشارك من جديد الأسبوع القادم.',
                       style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800, color: isDark ? Colors.white : Colors.black87),
                     ),
@@ -529,9 +530,9 @@ class _RespectPaintersScreenState extends State<RespectPaintersScreen> {
                 children: [
                   Icon(Icons.add_photo_alternate_rounded, size: 46, color: AppColors.purple.withValues(alpha: 0.9)),
                   const SizedBox(height: 8),
-                  Text('اختر صورة الرسمة', style: TextStyle(fontWeight: FontWeight.w800, color: isDark ? Colors.white : Colors.black87)),
+                  AppText('اختر صورة الرسمة', style: TextStyle(fontWeight: FontWeight.w800, color: isDark ? Colors.white : Colors.black87)),
                   const SizedBox(height: 4),
-                  Text('سيتم فحصها للتأكد أنها رسمة وليست تصميم AI', style: TextStyle(fontSize: 12, color: isDark ? AppColors.darkMuted : AppColors.lightMuted)),
+                  AppText('سيتم فحصها للتأكد أنها رسمة وليست تصميم AI', style: TextStyle(fontSize: 12, color: isDark ? AppColors.darkMuted : AppColors.lightMuted)),
                 ],
               )
                   : Image.file(_selectedImage!, fit: BoxFit.cover),
@@ -541,13 +542,13 @@ class _RespectPaintersScreenState extends State<RespectPaintersScreen> {
           TextField(
             controller: _titleController,
             textInputAction: TextInputAction.next,
-            decoration: const InputDecoration(prefixIcon: Icon(Icons.title_rounded), hintText: 'عنوان الرسمة'),
+            decoration: InputDecoration(prefixIcon: Icon(Icons.title_rounded), hintText: context.tr('عنوان الرسمة')),
           ),
           const SizedBox(height: 10),
           TextField(
             controller: _descriptionController,
             maxLines: 3,
-            decoration: const InputDecoration(prefixIcon: Icon(Icons.notes_rounded), hintText: 'وصف اختياري للرسمه'),
+            decoration: InputDecoration(prefixIcon: Icon(Icons.notes_rounded), hintText: context.tr('وصف اختياري للرسمه')),
           ),
           const SizedBox(height: 12),
           SizedBox(
@@ -558,7 +559,7 @@ class _RespectPaintersScreenState extends State<RespectPaintersScreen> {
               icon: _submitting
                   ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.cloud_upload_rounded),
-              label: Text(hasSubmitted ? 'تمت المشاركة هذا الأسبوع' : (_submitting ? 'جاري الرفع والفحص...' : 'نشر الرسمة في البطولة')),
+              label: AppText(hasSubmitted ? 'تمت المشاركة هذا الأسبوع' : (_submitting ? 'جاري الرفع والفحص...' : 'نشر الرسمة في البطولة')),
             ),
           ),
         ],
@@ -575,12 +576,12 @@ class _RespectPaintersScreenState extends State<RespectPaintersScreen> {
             children: [
               const Icon(Icons.psychology_rounded, color: AppColors.purpleLight),
               const SizedBox(width: 8),
-              Text('تحليل المواجهات مباشر', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: isDark ? Colors.white : Colors.black87)),
+              AppText('تحليل المواجهات مباشر', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: isDark ? Colors.white : Colors.black87)),
             ],
           ),
           const SizedBox(height: 12),
           if (_matches.isEmpty)
-            Text('عند نهاية الأسبوع أو تشغيل الأدمن للتصفيات ستظهر هنا المقارنات: صورة ضد صورة، مميزات، عيوب، ثم الفائز.', style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted))
+            AppText('عند نهاية الأسبوع أو تشغيل الأدمن للتصفيات ستظهر هنا المقارنات: صورة ضد صورة، مميزات، عيوب، ثم الفائز.', style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted))
           else
             ..._matches.take(20).map((m) => _MatchCard(match: m)),
         ],
@@ -594,10 +595,10 @@ class _RespectPaintersScreenState extends State<RespectPaintersScreen> {
       children: [
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
-          child: Text('رسمات الأسبوع', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: isDark ? Colors.white : Colors.black87)),
+          child: AppText('رسمات الأسبوع', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: isDark ? Colors.white : Colors.black87)),
         ),
         if (_drawings.isEmpty)
-          GlassCard(child: Center(child: Padding(padding: const EdgeInsets.all(18), child: Text('لا توجد رسمات بعد', style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted)))))
+          GlassCard(child: Center(child: Padding(padding: const EdgeInsets.all(18), child: AppText('لا توجد رسمات بعد', style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted)))))
         else
           GridView.builder(
             itemCount: _drawings.length,
@@ -641,8 +642,8 @@ class _StatPill extends StatelessWidget {
           children: [
             Icon(icon, size: 18, color: AppColors.purpleLight),
             const SizedBox(height: 4),
-            Text(value, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontWeight: FontWeight.w900, color: isDark ? Colors.white : Colors.black87, fontSize: 12)),
-            Text(title, style: TextStyle(fontSize: 10, color: isDark ? AppColors.darkMuted : AppColors.lightMuted)),
+            AppText(value, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontWeight: FontWeight.w900, color: isDark ? Colors.white : Colors.black87, fontSize: 12)),
+            AppText(title, style: TextStyle(fontSize: 10, color: isDark ? AppColors.darkMuted : AppColors.lightMuted)),
           ],
         ),
       ),
@@ -707,7 +708,7 @@ class _PodiumPlace extends StatelessWidget {
             const SizedBox(height: gap1),
             SizedBox(
               height: titleHeight,
-              child: Text(
+              child: AppText(
                 title,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
@@ -718,7 +719,7 @@ class _PodiumPlace extends StatelessWidget {
             const SizedBox(height: gap2),
             SizedBox(
               height: nameHeight,
-              child: Text(
+              child: AppText(
                 name,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
@@ -734,7 +735,7 @@ class _PodiumPlace extends StatelessWidget {
                 gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [color.withValues(alpha: 0.95), color.withValues(alpha: 0.45)]),
                 borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
               ),
-              child: Text('$rank', style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w900, color: Colors.white)),
+              child: AppText('$rank', style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w900, color: Colors.white)),
             ),
           ],
         );
@@ -784,7 +785,7 @@ class _DrawingCard extends StatelessWidget {
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
                       decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.48), borderRadius: BorderRadius.circular(20)),
-                      child: Text(rank > 0 ? 'المركز $rank' : status, style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w900)),
+                      child: AppText(rank > 0 ? 'المركز $rank' : status, style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w900)),
                     ),
                   ),
                 ],
@@ -795,9 +796,9 @@ class _DrawingCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontWeight: FontWeight.w900, color: isDark ? Colors.white : Colors.black87)),
+                  AppText(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontWeight: FontWeight.w900, color: isDark ? Colors.white : Colors.black87)),
                   const SizedBox(height: 2),
-                  Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: isDark ? AppColors.darkMuted : AppColors.lightMuted)),
+                  AppText(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: isDark ? AppColors.darkMuted : AppColors.lightMuted)),
                 ],
               ),
             ),
@@ -835,13 +836,13 @@ class _MatchCard extends StatelessWidget {
             children: [
               Icon(analyzing ? Icons.autorenew_rounded : Icons.check_circle_rounded, color: analyzing ? AppColors.purpleLight : AppColors.success),
               const SizedBox(width: 8),
-              Expanded(child: Text('الجولة ${_s('round_number')} — ${_s('drawing_a_title')} ضد ${_s('drawing_b_title')}', style: TextStyle(fontWeight: FontWeight.w900, color: isDark ? Colors.white : Colors.black87))),
+              Expanded(child: AppText('الجولة ${_s('round_number')} — ${_s('drawing_a_title')} ضد ${_s('drawing_b_title')}', style: TextStyle(fontWeight: FontWeight.w900, color: isDark ? Colors.white : Colors.black87))),
             ],
           ),
           const SizedBox(height: 10),
           if (analyzing) const LinearProgressIndicator(),
           if (_s('analysis_summary').isNotEmpty) ...[
-            Text(_s('analysis_summary'), style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, height: 1.45)),
+            AppText(_s('analysis_summary'), style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, height: 1.45)),
             const SizedBox(height: 8),
           ],
           if (_s('drawing_a_pros').isNotEmpty) _AnalysisLine(title: 'مميزات الأولى', text: _s('drawing_a_pros')),
@@ -857,7 +858,7 @@ class _MatchCard extends StatelessWidget {
                 children: [
                   const Icon(Icons.emoji_events_rounded, color: AppColors.success, size: 18),
                   const SizedBox(width: 6),
-                  Expanded(child: Text('الفائز: ${_s('winner_title')}', style: const TextStyle(fontWeight: FontWeight.w900, color: AppColors.success))),
+                  Expanded(child: AppText('الفائز: ${_s('winner_title')}', style: const TextStyle(fontWeight: FontWeight.w900, color: AppColors.success))),
                 ],
               ),
             ),

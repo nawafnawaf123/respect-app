@@ -13,6 +13,7 @@ import '../theme/app_theme.dart';
 import '../widgets/primary_button.dart';
 import 'home_screen.dart';
 
+import '../app/app_language.dart';
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -407,20 +408,20 @@ class _LoginScreenState extends State<LoginScreen> {
               children: [
                 Container(width: 44, height: 5, decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: .45), borderRadius: BorderRadius.circular(99))),
                 const SizedBox(height: 14),
-                const Text('استعادة الحساب', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w900)),
+                const AppText('استعادة الحساب', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w900)),
                 const SizedBox(height: 6),
-                Text('اختر طريقة الاستعادة المناسبة لحسابك', style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, fontWeight: FontWeight.w700)),
+                AppText('اختر طريقة الاستعادة المناسبة لحسابك', style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 14),
                 ListTile(
                   leading: const CircleAvatar(backgroundColor: AppColors.purple, foregroundColor: Colors.white, child: Icon(Icons.email_rounded)),
-                  title: const Text('رابط عبر البريد الإلكتروني', style: TextStyle(fontWeight: FontWeight.w900)),
-                  subtitle: const Text('يصلك رابط تغيير كلمة المرور'),
+                  title: const AppText('رابط عبر البريد الإلكتروني', style: TextStyle(fontWeight: FontWeight.w900)),
+                  subtitle: const AppText('يصلك رابط تغيير كلمة المرور'),
                   onTap: () => Navigator.pop(context, 'email'),
                 ),
                 ListTile(
                   leading: const CircleAvatar(backgroundColor: AppColors.purple, foregroundColor: Colors.white, child: Icon(Icons.sms_rounded)),
-                  title: const Text('رمز SMS عبر رقم الجوال', style: TextStyle(fontWeight: FontWeight.w900)),
-                  subtitle: const Text('إذا كنت مفعّل الأمان عبر الرقم من الإعدادات'),
+                  title: const AppText('رمز SMS عبر رقم الجوال', style: TextStyle(fontWeight: FontWeight.w900)),
+                  subtitle: const AppText('إذا كنت مفعّل الأمان عبر الرقم من الإعدادات'),
                   onTap: () => Navigator.pop(context, 'sms'),
                 ),
               ],
@@ -504,7 +505,7 @@ class _LoginScreenState extends State<LoginScreen> {
       children: [
         Padding(
           padding: const EdgeInsetsDirectional.only(start: 4, bottom: 7),
-          child: Text(
+          child: AppText(
             label,
             style: TextStyle(
               fontSize: 12.5,
@@ -627,16 +628,16 @@ class _LoginScreenState extends State<LoginScreen> {
                     const SizedBox(height: 10),
                     Container(width: 46, height: 5, decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: 0.55), borderRadius: BorderRadius.circular(99))),
                     const SizedBox(height: 14),
-                    const Text('سياسات Respect App', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
+                    const AppText('سياسات Respect App', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
                     const SizedBox(height: 12),
                     TabBar(
                       labelColor: AppColors.purple,
                       unselectedLabelColor: isDark ? AppColors.darkMuted : AppColors.lightMuted,
                       indicatorColor: AppColors.purple,
-                      tabs: const [
-                        Tab(text: 'الخصوصية'),
-                        Tab(text: 'القوانين'),
-                        Tab(text: 'الاستخدام'),
+                      tabs: [
+                        Tab(child: AppText('الخصوصية')),
+                        Tab(child: AppText('القوانين')),
+                        Tab(child: AppText('الاستخدام')),
                       ],
                     ),
                     Expanded(
@@ -664,7 +665,7 @@ class _LoginScreenState extends State<LoginScreen> {
       controller: controller,
       padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
       children: [
-        Text(
+        AppText(
           text,
           style: TextStyle(
             height: 1.65,
@@ -718,7 +719,7 @@ class _LoginScreenState extends State<LoginScreen> {
           ],
         ).animate().scale(duration: 360.ms, curve: Curves.easeOutBack),
         const SizedBox(height: 14),
-        Text(
+        AppText(
           _isCreateMode ? 'انضم إلى Respect' : 'أهلًا برجعتك',
           textAlign: TextAlign.center,
           style: TextStyle(
@@ -728,7 +729,7 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
         ).animate().fadeIn(duration: 360.ms).slideY(begin: 0.18, end: 0),
         const SizedBox(height: 7),
-        Text(
+        AppText(
           _isCreateMode
               ? 'حسابك يبدأ باسم مستخدم فريد واسم بروفايل لا يشبه أحد'
               : 'سجّل دخولك باسم المستخدم أو الإيميل',
@@ -773,7 +774,7 @@ class _LoginScreenState extends State<LoginScreen> {
           boxShadow: active ? [BoxShadow(color: AppColors.purple.withValues(alpha: 0.28), blurRadius: 18, offset: const Offset(0, 8))] : null,
         ),
         alignment: Alignment.center,
-        child: Text(
+        child: AppText(
           text,
           style: TextStyle(
             color: active ? Colors.white : null,
@@ -799,7 +800,7 @@ class _LoginScreenState extends State<LoginScreen> {
           Icon(Icons.verified_user_rounded, color: AppColors.purple, size: 21),
           SizedBox(width: 10),
           Expanded(
-            child: Text(
+            child: AppText(
               'اسم المستخدم: أحرف إنجليزية صغيرة + أرقام + _ فقط. ممنوع العربي، الكابيتال، المسافات، النقاط، الشرطات، + و -.',
               style: TextStyle(fontSize: 12.2, fontWeight: FontWeight.w800, height: 1.45),
             ),
@@ -832,11 +833,11 @@ class _LoginScreenState extends State<LoginScreen> {
               alignment: WrapAlignment.start,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                const Text('أوافق على ', style: TextStyle(fontWeight: FontWeight.w800)),
+                const AppText('أوافق على ', style: TextStyle(fontWeight: FontWeight.w800)),
                 _policyLink('سياسة الخصوصية', 0),
-                const Text(' و', style: TextStyle(fontWeight: FontWeight.w800)),
+                const AppText(' و', style: TextStyle(fontWeight: FontWeight.w800)),
                 _policyLink('القوانين', 1),
-                const Text(' و', style: TextStyle(fontWeight: FontWeight.w800)),
+                const AppText(' و', style: TextStyle(fontWeight: FontWeight.w800)),
                 _policyLink('سياسة الاستخدام', 2),
               ],
             ),
@@ -851,7 +852,7 @@ class _LoginScreenState extends State<LoginScreen> {
       onTap: () => _showPoliciesSheet(initialIndex: index),
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 4),
-        child: Text(
+        child: AppText(
           text,
           style: const TextStyle(
             color: AppColors.purple,
@@ -1005,7 +1006,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   icon: _resettingPassword
                       ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                       : const Icon(Icons.lock_reset_rounded, size: 19),
-                  label: Text(
+                  label: AppText(
                     _resettingPassword ? 'جاري إرسال الرابط...' : 'نسيت كلمة المرور؟',
                     style: const TextStyle(fontWeight: FontWeight.w900),
                   ),
@@ -1019,7 +1020,7 @@ class _LoginScreenState extends State<LoginScreen> {
               child: OutlinedButton.icon(
                 onPressed: _loading ? null : _loginWithGoogle,
                 icon: const Icon(Icons.g_mobiledata_rounded, size: 34),
-                label: const Text('المتابعة باستخدام Google', style: TextStyle(fontWeight: FontWeight.w900)),
+                label: const AppText('المتابعة باستخدام Google', style: TextStyle(fontWeight: FontWeight.w900)),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: isDark ? Colors.white : Colors.black87,
                   side: BorderSide(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
@@ -1082,7 +1083,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         TextButton.icon(
                           onPressed: () => _showPoliciesSheet(),
                           icon: const Icon(Icons.policy_rounded, size: 18),
-                          label: const Text('عرض سياسة الخصوصية وقوانين البرنامج', style: TextStyle(fontWeight: FontWeight.w900)),
+                          label: const AppText('عرض سياسة الخصوصية وقوانين البرنامج', style: TextStyle(fontWeight: FontWeight.w900)),
                         ),
                       ],
                     ),
@@ -1214,7 +1215,7 @@ class _OtpVerificationPageState extends State<_OtpVerificationPage> {
         resizeToAvoidBottomInset: true,
         backgroundColor: bg,
         appBar: AppBar(
-          title: const Text('رمز التحقق', style: TextStyle(fontWeight: FontWeight.w900)),
+          title: const AppText('رمز التحقق', style: TextStyle(fontWeight: FontWeight.w900)),
           centerTitle: true,
           leading: IconButton(
             onPressed: _submitting ? null : () => Navigator.of(context).pop(null),
@@ -1244,13 +1245,13 @@ class _OtpVerificationPageState extends State<_OtpVerificationPage> {
                   child: const Icon(Icons.mark_email_read_rounded, color: Colors.white, size: 40),
                 ),
                 const SizedBox(height: 18),
-                Text(
+                AppText(
                   widget.title,
                   textAlign: TextAlign.center,
                   style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900),
                 ),
                 const SizedBox(height: 9),
-                Text(
+                AppText(
                   widget.subtitle,
                   textAlign: TextAlign.center,
                   style: TextStyle(color: muted, height: 1.5, fontWeight: FontWeight.w700),
@@ -1269,7 +1270,7 @@ class _OtpVerificationPageState extends State<_OtpVerificationPage> {
                       const Icon(Icons.email_rounded, color: AppColors.purple, size: 20),
                       const SizedBox(width: 8),
                       Expanded(
-                        child: Text(
+                        child: AppText(
                           widget.email,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -1303,7 +1304,7 @@ class _OtpVerificationPageState extends State<_OtpVerificationPage> {
                   onSubmitted: (_) => _confirm(),
                   decoration: InputDecoration(
                     counterText: '',
-                    hintText: '000000',
+                    hintText: context.tr('000000'),
                     prefixIcon: const Icon(Icons.pin_rounded),
                     filled: true,
                     fillColor: isDark ? Colors.white.withValues(alpha: .055) : Colors.white.withValues(alpha: .78),
@@ -1338,8 +1339,8 @@ class _OtpVerificationPageState extends State<_OtpVerificationPage> {
                       activeColor: AppColors.purple,
                       contentPadding: EdgeInsets.zero,
                       controlAffinity: ListTileControlAffinity.leading,
-                      title: const Text('تذكر هذا الجهاز', style: TextStyle(fontWeight: FontWeight.w900)),
-                      subtitle: Text(
+                      title: const AppText('تذكر هذا الجهاز', style: TextStyle(fontWeight: FontWeight.w900)),
+                      subtitle: AppText(
                         'لن نطلب رمز تحقق مرة أخرى على هذا الجهاز لمدة 90 يوم تقريبًا.',
                         style: TextStyle(color: muted, fontWeight: FontWeight.w700, fontSize: 12),
                       ),
@@ -1359,7 +1360,7 @@ class _OtpVerificationPageState extends State<_OtpVerificationPage> {
                       child: OutlinedButton.icon(
                         onPressed: _submitting ? null : () => Navigator.of(context).pop(null),
                         icon: const Icon(Icons.close_rounded),
-                        label: const Text('إلغاء', style: TextStyle(fontWeight: FontWeight.w900)),
+                        label: const AppText('إلغاء', style: TextStyle(fontWeight: FontWeight.w900)),
                         style: OutlinedButton.styleFrom(
                           minimumSize: const Size.fromHeight(50),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
@@ -1377,7 +1378,7 @@ class _OtpVerificationPageState extends State<_OtpVerificationPage> {
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
                             : const Icon(Icons.refresh_rounded, size: 18),
-                        label: Text(
+                        label: AppText(
                           _resending ? 'جاري الإرسال...' : 'إعادة الإرسال',
                           style: const TextStyle(fontWeight: FontWeight.w900),
                         ),
@@ -1467,7 +1468,7 @@ class _PhoneCodeVerificationPageState extends State<_PhoneCodeVerificationPage> 
         resizeToAvoidBottomInset: true,
         backgroundColor: bg,
         appBar: AppBar(
-          title: const Text('تأكيد رقم الجوال', style: TextStyle(fontWeight: FontWeight.w900)),
+          title: const AppText('تأكيد رقم الجوال', style: TextStyle(fontWeight: FontWeight.w900)),
           centerTitle: true,
           leading: IconButton(
             onPressed: _submitting ? null : () => Navigator.of(context).pop(null),
@@ -1497,13 +1498,13 @@ class _PhoneCodeVerificationPageState extends State<_PhoneCodeVerificationPage> 
                   child: const Icon(Icons.sms_rounded, color: Colors.white, size: 40),
                 ),
                 const SizedBox(height: 18),
-                Text(
+                AppText(
                   widget.title,
                   textAlign: TextAlign.center,
                   style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900),
                 ),
                 const SizedBox(height: 9),
-                Text(
+                AppText(
                   widget.subtitle,
                   textAlign: TextAlign.center,
                   style: TextStyle(color: muted, height: 1.5, fontWeight: FontWeight.w700),
@@ -1522,7 +1523,7 @@ class _PhoneCodeVerificationPageState extends State<_PhoneCodeVerificationPage> 
                       const Icon(Icons.phone_iphone_rounded, color: AppColors.purple, size: 20),
                       const SizedBox(width: 8),
                       Expanded(
-                        child: Text(
+                        child: AppText(
                           widget.phoneE164,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -1556,7 +1557,7 @@ class _PhoneCodeVerificationPageState extends State<_PhoneCodeVerificationPage> 
                   onSubmitted: (_) => _confirm(),
                   decoration: InputDecoration(
                     counterText: '',
-                    hintText: '000000',
+                    hintText: context.tr('000000'),
                     prefixIcon: const Icon(Icons.pin_rounded),
                     filled: true,
                     fillColor: isDark ? Colors.white.withValues(alpha: .055) : Colors.white.withValues(alpha: .78),
@@ -1587,7 +1588,7 @@ class _PhoneCodeVerificationPageState extends State<_PhoneCodeVerificationPage> 
                       child: OutlinedButton.icon(
                         onPressed: _submitting ? null : () => Navigator.of(context).pop(null),
                         icon: const Icon(Icons.close_rounded),
-                        label: const Text('إلغاء', style: TextStyle(fontWeight: FontWeight.w900)),
+                        label: const AppText('إلغاء', style: TextStyle(fontWeight: FontWeight.w900)),
                         style: OutlinedButton.styleFrom(
                           minimumSize: const Size.fromHeight(50),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
@@ -1601,7 +1602,7 @@ class _PhoneCodeVerificationPageState extends State<_PhoneCodeVerificationPage> 
                         icon: _resending
                             ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                             : const Icon(Icons.refresh_rounded, size: 18),
-                        label: Text(
+                        label: AppText(
                           _resending ? 'جاري الإرسال...' : 'إعادة الإرسال',
                           style: const TextStyle(fontWeight: FontWeight.w900),
                         ),

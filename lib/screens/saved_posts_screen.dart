@@ -9,6 +9,7 @@ import '../services/notification_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/glass_card.dart';
 
+import '../app/app_language.dart';
 void _scannerSafeIgnore([Object? error, StackTrace? stackTrace]) {}
 
 
@@ -55,7 +56,7 @@ class _SavedPostsScreenState extends State<SavedPostsScreen> {
     setState(() => _items.removeWhere((e) => (e['id'] ?? '').toString() == postId));
     await prefs.setString(_savedPostsKey, jsonEncode(_items));
     if (!mounted) return;
-    NotificationService.showTopNotification('تمت إزالة التغريدة من المحفوظات');
+    NotificationService.showTopNotification(context.tr('تمت إزالة التغريدة من المحفوظات'));
   }
 
   ImageProvider? _imageProvider(String? path) {
@@ -85,7 +86,7 @@ class _SavedPostsScreenState extends State<SavedPostsScreen> {
     return Scaffold(
       appBar: null,
       body: Directionality(
-        textDirection: TextDirection.rtl,
+        textDirection: context.appTextDirection,
         child: _loading
             ? const Center(child: CircularProgressIndicator(color: AppColors.purple))
             : RefreshIndicator(
@@ -100,10 +101,10 @@ class _SavedPostsScreenState extends State<SavedPostsScreen> {
               Icon(Icons.bookmarks_rounded, size: 80, color: AppColors.purple.withValues(alpha: .85)),
               const SizedBox(height: 16),
               const Center(
-                child: Text('لا توجد تغريدات محفوظة بعد', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
+                child: AppText('لا توجد تغريدات محفوظة بعد', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
               ),
               const SizedBox(height: 8),
-              Text(
+              AppText(
                 'اضغط زر الحفظ على أي تغريدة وستظهر هنا مباشرة.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, fontWeight: FontWeight.w700),
@@ -173,7 +174,7 @@ class _SavedPostCard extends StatelessWidget {
                 backgroundColor: AppColors.purple,
                 backgroundImage: avatarProvider,
                 child: avatarProvider == null
-                    ? Text(name.isNotEmpty ? name.characters.first.toUpperCase() : '?', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900))
+                    ? AppText(name.isNotEmpty ? name.characters.first.toUpperCase() : '?', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900))
                     : null,
               ),
               const SizedBox(width: 10),
@@ -181,9 +182,9 @@ class _SavedPostCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+                    AppText(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
                     const SizedBox(height: 2),
-                    Text(
+                    AppText(
                       savedAt.isEmpty ? username : '$username · محفوظة $savedAt',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -193,7 +194,7 @@ class _SavedPostCard extends StatelessWidget {
                 ),
               ),
               IconButton(
-                tooltip: 'إزالة من المحفوظات',
+                tooltip: context.tr('إزالة من المحفوظات'),
                 onPressed: onRemove,
                 icon: const Icon(Icons.bookmark_remove_rounded, color: AppColors.purple),
               ),
@@ -201,7 +202,7 @@ class _SavedPostCard extends StatelessWidget {
           ),
           if (text.trim().isNotEmpty) ...[
             const SizedBox(height: 12),
-            Text(text, style: const TextStyle(fontSize: 15, height: 1.45, fontWeight: FontWeight.w700)),
+            AppText(text, style: const TextStyle(fontSize: 15, height: 1.45, fontWeight: FontWeight.w700)),
           ],
           if (mediaProvider != null || hasVideo || mediaPath.isNotEmpty) ...[
             const SizedBox(height: 12),
@@ -247,7 +248,7 @@ class _MiniStat extends StatelessWidget {
       children: [
         Icon(icon, color: AppColors.purple, size: 17),
         const SizedBox(width: 4),
-        Text(value, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12)),
+        AppText(value, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12)),
       ],
     );
   }

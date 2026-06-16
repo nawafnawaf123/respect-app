@@ -281,6 +281,7 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
 GITHUB_DEFAULT_BRANCH = os.getenv("GITHUB_DEFAULT_BRANCH", "").strip()
 GITHUB_API_BASE = os.getenv("GITHUB_API_BASE", "https://api.github.com").rstrip("/")
 QWEN_CODER_MODEL = os.getenv("QWEN_CODER_MODEL", "qwen3-coder-plus").strip() or "qwen3-coder-plus"
+QWEN_CODER_TIMEOUT_SECONDS = int(os.getenv("QWEN_CODER_TIMEOUT_SECONDS", "300"))
 AI_FIX_ADMIN_USERNAMES = {
     normalize.strip().lower().replace("@", "")
     for normalize in os.getenv("AI_FIX_ADMIN_USERNAMES", "mjakcon8,nawafrp,nawaf_city,nawafnawaf123").split(",")
@@ -695,7 +696,192 @@ def display_username(value: str) -> str:
     return f"@{clean}" if clean else "@user"
 
 
-def get_user_fcm_token(receiver_username: str) -> Optional[str]:
+
+SUPPORTED_APP_LANGUAGES = {"ar", "en", "fr", "es", "de", "tr", "id", "hi", "ur", "fa", "ru", "pt"}
+
+def normalize_language(value: str) -> str:
+    v = (value or "").strip().lower().replace("_", "-")
+    if not v:
+        return "ar"
+    primary = v.split("-", 1)[0]
+    return primary if primary in SUPPORTED_APP_LANGUAGES else "ar"
+
+
+def _language_from_user_row(row: Dict[str, Any], fallback: str = "ar") -> str:
+    if not isinstance(row, dict):
+        return normalize_language(fallback)
+    for key in ("app_language", "language", "locale", "preferred_language"):
+        value = str(row.get(key) or "").strip()
+        if value:
+            return normalize_language(value)
+    return normalize_language(fallback)
+
+
+def _t_push(key: str, language: str, **kwargs: Any) -> str:
+    lang = normalize_language(language)
+    translations: Dict[str, Dict[str, str]] = {
+        "ar": {
+            "respect": "Respect",
+            "new_message": "لديك رسالة جديدة",
+            "incoming_call": "مكالمة واردة",
+            "incoming_video_call": "مكالمة فيديو واردة",
+            "incoming_audio_call": "مكالمة صوتية واردة",
+            "new_post": "نشر تغريدة جديدة",
+            "new_notification": "لديك إشعار جديد",
+            "report_result": "نتيجة البلاغ",
+            "report_accepted": "تم قبول البلاغ",
+            "post_deleted": "تم حذف تغريدتك",
+        },
+        "en": {
+            "respect": "Respect",
+            "new_message": "You have a new message",
+            "incoming_call": "Incoming call",
+            "incoming_video_call": "Incoming video call",
+            "incoming_audio_call": "Incoming voice call",
+            "new_post": "posted a new tweet",
+            "new_notification": "You have a new notification",
+            "report_result": "Report result",
+            "report_accepted": "Report accepted",
+            "post_deleted": "Your tweet was deleted",
+        },
+        "fr": {
+            "respect": "Respect",
+            "new_message": "Vous avez un nouveau message",
+            "incoming_call": "Appel entrant",
+            "incoming_video_call": "Appel vidéo entrant",
+            "incoming_audio_call": "Appel vocal entrant",
+            "new_post": "a publié un nouveau tweet",
+            "new_notification": "Vous avez une nouvelle notification",
+            "report_result": "Résultat du signalement",
+            "report_accepted": "Signalement accepté",
+            "post_deleted": "Votre tweet a été supprimé",
+        },
+        "es": {
+            "respect": "Respect",
+            "new_message": "Tienes un mensaje nuevo",
+            "incoming_call": "Llamada entrante",
+            "incoming_video_call": "Videollamada entrante",
+            "incoming_audio_call": "Llamada de voz entrante",
+            "new_post": "publicó un nuevo tweet",
+            "new_notification": "Tienes una notificación nueva",
+            "report_result": "Resultado del reporte",
+            "report_accepted": "Reporte aceptado",
+            "post_deleted": "Tu tweet fue eliminado",
+        },
+        "de": {
+            "respect": "Respect",
+            "new_message": "Du hast eine neue Nachricht",
+            "incoming_call": "Eingehender Anruf",
+            "incoming_video_call": "Eingehender Videoanruf",
+            "incoming_audio_call": "Eingehender Sprachanruf",
+            "new_post": "hat einen neuen Tweet gepostet",
+            "new_notification": "Du hast eine neue Benachrichtigung",
+            "report_result": "Meldeergebnis",
+            "report_accepted": "Meldung akzeptiert",
+            "post_deleted": "Dein Tweet wurde gelöscht",
+        },
+        "tr": {
+            "respect": "Respect",
+            "new_message": "Yeni bir mesajın var",
+            "incoming_call": "Gelen arama",
+            "incoming_video_call": "Gelen görüntülü arama",
+            "incoming_audio_call": "Gelen sesli arama",
+            "new_post": "yeni bir tweet paylaştı",
+            "new_notification": "Yeni bir bildirimin var",
+            "report_result": "Şikayet sonucu",
+            "report_accepted": "Şikayet kabul edildi",
+            "post_deleted": "Tweetin silindi",
+        },
+        "pt": {
+            "respect": "Respect",
+            "new_message": "Você tem uma nova mensagem",
+            "incoming_call": "Chamada recebida",
+            "incoming_video_call": "Chamada de vídeo recebida",
+            "incoming_audio_call": "Chamada de voz recebida",
+            "new_post": "publicou um novo tweet",
+            "new_notification": "Você tem uma nova notificação",
+            "report_result": "Resultado da denúncia",
+            "report_accepted": "Denúncia aceita",
+            "post_deleted": "Seu tweet foi excluído",
+        },
+        "ru": {
+            "respect": "Respect",
+            "new_message": "У вас новое сообщение",
+            "incoming_call": "Входящий звонок",
+            "incoming_video_call": "Входящий видеозвонок",
+            "incoming_audio_call": "Входящий голосовой звонок",
+            "new_post": "опубликовал новый твит",
+            "new_notification": "У вас новое уведомление",
+            "report_result": "Результат жалобы",
+            "report_accepted": "Жалоба принята",
+            "post_deleted": "Ваш твит был удалён",
+        },
+        "id": {
+            "respect": "Respect",
+            "new_message": "Anda memiliki pesan baru",
+            "incoming_call": "Panggilan masuk",
+            "incoming_video_call": "Panggilan video masuk",
+            "incoming_audio_call": "Panggilan suara masuk",
+            "new_post": "memposting tweet baru",
+            "new_notification": "Anda memiliki notifikasi baru",
+            "report_result": "Hasil laporan",
+            "report_accepted": "Laporan diterima",
+            "post_deleted": "Tweet Anda dihapus",
+        },
+        "hi": {
+            "respect": "Respect",
+            "new_message": "आपके पास नया संदेश है",
+            "incoming_call": "इनकमिंग कॉल",
+            "incoming_video_call": "इनकमिंग वीडियो कॉल",
+            "incoming_audio_call": "इनकमिंग वॉइस कॉल",
+            "new_post": "ने नया ट्वीट पोस्ट किया",
+            "new_notification": "आपके पास नई सूचना है",
+            "report_result": "रिपोर्ट परिणाम",
+            "report_accepted": "रिपोर्ट स्वीकार हुई",
+            "post_deleted": "आपका ट्वीट हटा दिया गया",
+        },
+        "ur": {
+            "respect": "Respect",
+            "new_message": "آپ کے پاس نیا پیغام ہے",
+            "incoming_call": "آنے والی کال",
+            "incoming_video_call": "آنے والی ویڈیو کال",
+            "incoming_audio_call": "آنے والی وائس کال",
+            "new_post": "نے نیا ٹویٹ پوسٹ کیا",
+            "new_notification": "آپ کے پاس نیا نوٹیفکیشن ہے",
+            "report_result": "رپورٹ کا نتیجہ",
+            "report_accepted": "رپورٹ قبول ہوگئی",
+            "post_deleted": "آپ کا ٹویٹ حذف کر دیا گیا",
+        },
+        "fa": {
+            "respect": "Respect",
+            "new_message": "شما یک پیام جدید دارید",
+            "incoming_call": "تماس ورودی",
+            "incoming_video_call": "تماس ویدیویی ورودی",
+            "incoming_audio_call": "تماس صوتی ورودی",
+            "new_post": "یک توییت جدید منتشر کرد",
+            "new_notification": "شما یک اعلان جدید دارید",
+            "report_result": "نتیجه گزارش",
+            "report_accepted": "گزارش پذیرفته شد",
+            "post_deleted": "توییت شما حذف شد",
+        },
+    }
+    text = (translations.get(lang) or translations["ar"]).get(key) or translations["ar"].get(key) or key
+    try:
+        return text.format(**kwargs)
+    except Exception:
+        return text
+
+
+def _localized_data(data: Dict[str, Any], language: str, title: str, body: str) -> Dict[str, Any]:
+    lang = normalize_language(language)
+    merged = dict(data or {})
+    merged["language"] = lang
+    merged["localizedTitle"] = title
+    merged["localizedBody"] = body
+    return merged
+
+
+def get_user_push_target(receiver_username: str, fallback_language: str = "ar") -> Optional[Dict[str, str]]:
     clean = normalize_username(receiver_username)
     display = display_username(clean)
     if not clean:
@@ -705,10 +891,9 @@ def get_user_fcm_token(receiver_username: str) -> Optional[str]:
         raise HTTPException(status_code=500, detail="Supabase env missing: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY/SUPABASE_ANON_KEY")
 
     url = f"{SB_URL}/rest/v1/users"
-    # السيرفر يستخدم service role إن وجد حتى لا تمنع RLS قراءة fcm_token.
     headers = _supabase_headers(use_service_role=True)
     params = {
-        "select": "username,fcm_token",
+        "select": "*",
         "or": f"(username.eq.{clean},username.eq.{display})",
         "limit": "1",
     }
@@ -729,10 +914,21 @@ def get_user_fcm_token(receiver_username: str) -> Optional[str]:
     if not isinstance(rows, list) or not rows:
         return None
 
-    token = rows[0].get("fcm_token")
-    token = str(token or "").strip()
-    return token or None
+    row = rows[0] if isinstance(rows[0], dict) else {}
+    token = str(row.get("fcm_token") or "").strip()
+    if not token:
+        return None
 
+    return {
+        "username": display_username(str(row.get("username") or display)),
+        "token": token,
+        "language": _language_from_user_row(row, fallback=fallback_language),
+    }
+
+
+def get_user_fcm_token(receiver_username: str) -> Optional[str]:
+    target = get_user_push_target(receiver_username)
+    return target.get("token") if target else None
 
 
 def get_all_user_fcm_tokens() -> list[Dict[str, str]]:
@@ -748,7 +944,7 @@ def get_all_user_fcm_tokens() -> list[Dict[str, str]]:
             f"{SB_URL}/rest/v1/users",
             headers=headers,
             params={
-                "select": "username,fcm_token",
+                "select": "*",
                 "fcm_token": "not.is.null",
                 "limit": str(page_size),
                 "offset": str(offset),
@@ -761,14 +957,20 @@ def get_all_user_fcm_tokens() -> list[Dict[str, str]]:
         if not isinstance(rows, list) or not rows:
             break
         for row in rows:
-            token = str((row or {}).get("fcm_token") or "").strip()
-            username = display_username(str((row or {}).get("username") or ""))
+            if not isinstance(row, dict):
+                continue
+            token = str(row.get("fcm_token") or "").strip()
+            username = display_username(str(row.get("username") or ""))
             if token:
-                users.append({"username": username, "token": token})
+                users.append({
+                    "username": username,
+                    "token": token,
+                    "language": _language_from_user_row(row),
+                })
         if len(rows) < page_size:
             break
         offset += page_size
-    # إزالة تكرار التوكن حتى لا يصل الإشعار مرتين لنفس الجهاز.
+
     deduped: Dict[str, Dict[str, str]] = {}
     for item in users:
         deduped[item["token"]] = item
@@ -883,6 +1085,7 @@ class UserPushRequest(BaseModel):
     title: str
     body: str
     data: Dict[str, Any] = Field(default_factory=dict)
+    language: str = "ar" 
 
 
 class GeneralPushRequest(BaseModel):
@@ -891,6 +1094,7 @@ class GeneralPushRequest(BaseModel):
     senderUsername: str = "@admin"
     senderName: str = "Respect Admin"
     data: Dict[str, Any] = Field(default_factory=dict)
+    language: str = "ar" 
 
 
 class MessagePushRequest(BaseModel):
@@ -899,6 +1103,7 @@ class MessagePushRequest(BaseModel):
     senderName: str = ""
     messageId: str
     text: str = ""
+    language: str = "ar" ""
 
 
 class CallPushRequest(BaseModel):
@@ -908,6 +1113,7 @@ class CallPushRequest(BaseModel):
     callerName: str = "مستخدم"
     callerAvatar: str = ""
     video: bool = False
+    language: str = "ar" 
 
 
 class PaddleVerificationCheckoutRequest(BaseModel):
@@ -1019,21 +1225,13 @@ def _string_data(data: Dict[str, Any], msg_type: str, title: str, body: str) -> 
     return {str(k): "" if v is None else str(v) for k, v in merged.items()}
 
 
-def _fcm_ios_apns_config(msg_type: str, clean_data: Dict[str, str], privacy_data_only: bool) -> Dict[str, Any]:
+def _fcm_ios_apns_config(msg_type: str, clean_data: Dict[str, str], privacy_data_only: bool, title: str, body: str) -> Dict[str, Any]:
     """
     إعداد APNs حتى تصل إشعارات iOS بشكل موثوق.
-    لا نرسل محتوى حساس داخل alert؛ نستخدم نص عام ونترك التطبيق يقرأ data.
-    مكالمات VoIP الحقيقية على iOS تحتاج PushKit + CallKit Native، وهذا الإعداد يحسن FCM العادي فقط.
+    النص هنا صار يأخذ اللغة التي حددها السيرفر للمستخدم المستقبل.
     """
-    is_call = msg_type == "call"
-    is_message = msg_type == "message"
-    alert_title = "Respect"
-    if is_call:
-        alert_body = "لديك مكالمة واردة"
-    elif is_message:
-        alert_body = "لديك رسالة جديدة"
-    else:
-        alert_body = "لديك إشعار جديد"
+    alert_title = (title or "Respect").strip() or "Respect"
+    alert_body = (body or "").strip() or clean_data.get("localizedBody") or clean_data.get("body") or "Respect"
 
     aps: Dict[str, Any] = {
         "badge": 1,
@@ -1071,7 +1269,7 @@ def send_fcm_v1(token: str, msg_type: str, title: str, body: str, data: Dict[str
 
     privacy_data_only = os.getenv("FCM_PRIVACY_DATA_ONLY", "true").strip().lower() in {"1", "true", "yes", "on"}
 
-    ios_apns = _fcm_ios_apns_config(msg_type, clean_data, privacy_data_only)
+    ios_apns = _fcm_ios_apns_config(msg_type, clean_data, privacy_data_only, title, body)
 
     if msg_type == "call" or privacy_data_only:
         # Privacy-first: Android يبقى Data Only، و iOS يأخذ APNs alert عام حتى لا يضيع الإشعار بالخلفية.
@@ -1093,8 +1291,8 @@ def send_fcm_v1(token: str, msg_type: str, title: str, body: str, data: Dict[str
             "message": {
                 "token": token,
                 "notification": {
-                    "title": "Respect",
-                    "body": "لديك إشعار جديد",
+                    "title": title or "Respect",
+                    "body": body or clean_data.get("localizedBody", "Respect"),
                 },
                 "data": clean_data,
                 "android": {
@@ -1167,6 +1365,8 @@ def health():
         "qwen_model": QWEN_MODEL,
         "qwen_text_model": QWEN_TEXT_MODEL,
         "qwen_vision_model": QWEN_VISION_MODEL,
+        "qwen_coder_model": QWEN_CODER_MODEL,
+        "qwen_coder_timeout_seconds": QWEN_CODER_TIMEOUT_SECONDS,
         "qwen_base_url": QWEN_BASE_URL,
         "moderation_endpoint": "/respect-ai/moderate",
         "story_moderation_endpoint": "/respect-ai/moderate-story",
@@ -2971,16 +3171,28 @@ def auth_trust_device(req: TrustedDeviceRequest, x_app_secret: Optional[str] = H
 @app.post("/send_push")
 def send_push(req: PushRequest, x_app_secret: Optional[str] = Header(default=None)):
     _check_secret(x_app_secret)
-    return send_fcm_v1(req.token, req.type, req.title, req.body, req.data)
+    language = normalize_language(str((req.data or {}).get("language") or "ar"))
+    title = (req.title or _t_push("respect", language)).strip()
+    body = (req.body or _t_push("new_notification", language)).strip()
+    return send_fcm_v1(req.token, req.type, title, body, _localized_data(req.data, language, title, body))
 
 
 @app.post("/send_user_push")
 def send_user_push(req: UserPushRequest, x_app_secret: Optional[str] = Header(default=None)):
     _check_secret(x_app_secret)
-    token = get_user_fcm_token(req.receiverUsername)
-    if not token:
+    target = get_user_push_target(req.receiverUsername, fallback_language=req.language)
+    if not target:
         raise HTTPException(status_code=400, detail="receiver_has_no_fcm_token")
-    return send_fcm_v1(token, req.type, req.title, req.body, req.data)
+    language = target.get("language", normalize_language(req.language))
+    title = (req.title or _t_push("respect", language)).strip()
+    body = (req.body or _t_push("new_notification", language)).strip()
+    return send_fcm_v1(
+        target["token"],
+        req.type,
+        title,
+        body,
+        _localized_data(req.data, language, title, body),
+    )
 
 
 @app.post("/send_general_push")
@@ -2999,7 +3211,10 @@ def send_general_push(req: GeneralPushRequest, x_app_secret: Optional[str] = Hea
     created_at = datetime.now(timezone.utc).isoformat()
 
     for item in tokens:
-        data = {
+        language = normalize_language(item.get("language") or req.language)
+        localized_title = title or _t_push("respect", language)
+        localized_body = body or _t_push("new_notification", language)
+        data = _localized_data({
             **(req.data or {}),
             "type": "general_notification",
             "id": notification_id,
@@ -3009,9 +3224,9 @@ def send_general_push(req: GeneralPushRequest, x_app_secret: Optional[str] = Hea
             "created_at": created_at,
             "senderUsername": display_username(req.senderUsername),
             "senderName": req.senderName or "Respect Admin",
-        }
+        }, language, localized_title, localized_body)
         try:
-            send_fcm_v1(item["token"], "general_notification", title, body, data)
+            send_fcm_v1(item["token"], "general_notification", localized_title, localized_body, data)
             sent += 1
         except HTTPException as exc:
             failed += 1
@@ -3036,19 +3251,20 @@ def send_general_push(req: GeneralPushRequest, x_app_secret: Optional[str] = Hea
 def send_message_push(req: MessagePushRequest, x_app_secret: Optional[str] = Header(default=None)):
     _check_secret(x_app_secret)
     # لا نرسل اسم المرسل أو نص الرسالة عبر FCM.
-    title = "Respect"
-    body = "لديك رسالة جديدة"
-
-    token = get_user_fcm_token(req.receiverUsername)
-    if not token:
+    target = get_user_push_target(req.receiverUsername, fallback_language=req.language)
+    if not target:
         raise HTTPException(status_code=400, detail="receiver_has_no_fcm_token")
 
+    language = target.get("language", normalize_language(req.language))
+    title = _t_push("respect", language)
+    body = _t_push("new_message", language)
+
     return send_fcm_v1(
-        token,
+        target["token"],
         "message",
         title,
         body,
-        {
+        _localized_data({
             "messageId": req.messageId,
             "senderUsername": display_username(req.senderUsername),
             "senderName": "",
@@ -3056,26 +3272,27 @@ def send_message_push(req: MessagePushRequest, x_app_secret: Optional[str] = Hea
             "peerUsername": display_username(req.senderUsername),
             "peerName": "",
             "privacy": "metadata_only",
-        },
+        }, language, title, body),
     )
 
 
 @app.post("/send_call_push")
 def send_call_push(req: CallPushRequest, x_app_secret: Optional[str] = Header(default=None)):
     _check_secret(x_app_secret)
-    title = "Respect"
-    body = "مكالمة واردة"
-
-    token = get_user_fcm_token(req.receiverUsername)
-    if not token:
+    target = get_user_push_target(req.receiverUsername, fallback_language=req.language)
+    if not target:
         raise HTTPException(status_code=400, detail="receiver_has_no_fcm_token")
 
+    language = target.get("language", normalize_language(req.language))
+    title = _t_push("respect", language)
+    body = _t_push("incoming_video_call" if req.video else "incoming_audio_call", language)
+
     return send_fcm_v1(
-        token,
+        target["token"],
         "call",
         title,
         body,
-        {
+        _localized_data({
             "callId": req.callId,
             "call_id": req.callId,
             "callerUsername": display_username(req.callerUsername),
@@ -3087,7 +3304,7 @@ def send_call_push(req: CallPushRequest, x_app_secret: Optional[str] = Header(de
             "privacy": "metadata_only",
             "video": str(req.video).lower(),
             "call_type": "video" if req.video else "audio",
-        },
+        }, language, title, body),
     )
 
 
@@ -6319,7 +6536,7 @@ def _qwen_coder_json(messages: list[Dict[str, str]], *, max_tokens: int = 2500, 
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
-            timeout=120,
+            timeout=QWEN_CODER_TIMEOUT_SECONDS,
             response_format={"type": "json_object"},
             log_label="QWEN_CODER",
         )
@@ -6331,7 +6548,7 @@ def _qwen_coder_json(messages: list[Dict[str, str]], *, max_tokens: int = 2500, 
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
-            timeout=120,
+            timeout=QWEN_CODER_TIMEOUT_SECONDS,
             log_label="QWEN_CODER_FALLBACK",
         )
     return _extract_json_object(raw)

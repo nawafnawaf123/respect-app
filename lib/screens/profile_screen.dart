@@ -21,6 +21,7 @@ import '../services/supabase_service.dart';
 import '../services/notification_service.dart';
 import 'search_screen.dart';
 
+import '../app/app_language.dart';
 void _scannerSafeIgnore([Object? error, StackTrace? stackTrace]) {}
 
 
@@ -585,11 +586,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   const SizedBox(height: 10),
                   Container(width: 46, height: 5, decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: .6), borderRadius: BorderRadius.circular(99))),
                   const SizedBox(height: 14),
-                  Text(title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
+                  AppText(title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
                   const SizedBox(height: 8),
                   Expanded(
                     child: users.isEmpty
-                        ? Center(child: Text('لا توجد حسابات هنا', style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted)))
+                        ? Center(child: AppText('لا توجد حسابات هنا', style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted)))
                         : ListView.separated(
                       controller: controller,
                       padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
@@ -608,16 +609,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 radius: 24,
                                 backgroundColor: AppColors.purple,
                                 backgroundImage: avatar,
-                                child: avatar == null ? Text(name.isNotEmpty ? name.characters.first.toUpperCase() : '?', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900)) : null,
+                                child: avatar == null ? AppText(name.isNotEmpty ? name.characters.first.toUpperCase() : '?', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900)) : null,
                               ),
                               const SizedBox(width: 12),
                               Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+                                    AppText(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
                                     const SizedBox(height: 2),
-                                    Text(username, style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, fontWeight: FontWeight.w700)),
+                                    AppText(username, style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, fontWeight: FontWeight.w700)),
                                   ],
                                 ),
                               ),
@@ -767,7 +768,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   borderRadius: BorderRadius.circular(999),
                   border: Border.all(color: gradient.first.withValues(alpha: .18)),
                 ),
-                child: Text(
+                child: AppText(
                   text,
                   style: TextStyle(
                     color: isDark ? Colors.white.withValues(alpha: .90) : const Color(0xFF2D2338),
@@ -796,7 +797,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ),
                     const SizedBox(width: 8),
                     Expanded(
-                      child: Text(
+                      child: AppText(
                         text,
                         style: TextStyle(
                           height: 1.35,
@@ -847,7 +848,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           Row(
                             children: [
                               Flexible(
-                                child: Text(
+                                child: AppText(
                                   'اسمك يظهر بشكل مميز',
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
@@ -859,7 +860,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             ],
                           ),
                           const SizedBox(height: 3),
-                          Text(verifiedLabel, style: TextStyle(color: muted, fontWeight: FontWeight.w800, fontSize: 12)),
+                          AppText(verifiedLabel, style: TextStyle(color: muted, fontWeight: FontWeight.w800, fontSize: 12)),
                         ],
                       ),
                     ),
@@ -909,20 +910,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             children: [
                               Row(
                                 children: [
-                                  Flexible(child: Text(title, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 17))),
+                                  Flexible(child: AppText(title, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 17))),
                                   const SizedBox(width: 7),
                                   _RespectAiVerifiedBadge(tier: tierId, large: false),
                                 ],
                               ),
                               const SizedBox(height: 4),
-                              Text('$badge • $maxChars حرف • $aiLimit AI يوميًا', style: TextStyle(color: muted, fontWeight: FontWeight.w800, fontSize: 12.5)),
+                              AppText('$badge • $maxChars حرف • $aiLimit AI يوميًا', style: TextStyle(color: muted, fontWeight: FontWeight.w800, fontSize: 12.5)),
                             ],
                           ),
                         ),
                       ],
                     ),
                     const SizedBox(height: 12),
-                    Text(
+                    AppText(
                       tierSummary(tierId),
                       style: TextStyle(color: isDark ? Colors.white.withValues(alpha: .88) : const Color(0xFF2D2338), height: 1.45, fontWeight: FontWeight.w800),
                     ),
@@ -941,12 +942,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       ],
                     ),
                     const SizedBox(height: 14),
-                    Text('المزايا مرتبة حسب الاستخدام:', style: TextStyle(fontWeight: FontWeight.w900, color: isDark ? Colors.white : const Color(0xFF201726))),
+                    AppText('المزايا مرتبة حسب الاستخدام:', style: TextStyle(fontWeight: FontWeight.w900, color: isDark ? Colors.white : const Color(0xFF201726))),
                     const SizedBox(height: 10),
                     for (final group in groupedBenefits.entries) ...[
                       Padding(
                         padding: const EdgeInsets.only(top: 4, bottom: 8),
-                        child: Text(
+                        child: AppText(
                           group.key,
                           style: TextStyle(
                             color: gradient.first,
@@ -972,7 +973,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             children: [
                               Icon(Icons.payments_rounded, color: gradient.first),
                               const SizedBox(width: 8),
-                              const Text('اختر مدة الاشتراك', style: TextStyle(fontWeight: FontWeight.w900)),
+                              const AppText('اختر مدة الاشتراك', style: TextStyle(fontWeight: FontWeight.w900)),
                             ],
                           ),
                           const SizedBox(height: 10),
@@ -1006,12 +1007,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                     child: Column(
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
-                                        Text(durationTitle, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12)),
+                                        AppText(durationTitle, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12)),
                                         const SizedBox(height: 2),
-                                        Text(priceText(plan['price']), style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13)),
+                                        AppText(priceText(plan['price']), style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13)),
                                         if (planBadge.isNotEmpty) ...[
                                           const SizedBox(height: 2),
-                                          Text(planBadge, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontWeight: FontWeight.w800, fontSize: 9.5, color: Colors.white.withValues(alpha: .88))),
+                                          AppText(planBadge, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontWeight: FontWeight.w800, fontSize: 9.5, color: Colors.white.withValues(alpha: .88))),
                                         ],
                                       ],
                                     ),
@@ -1057,11 +1058,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               child: const _RespectAiVerifiedBadge(tier: 'premium', large: true),
                             ),
                             const SizedBox(width: 10),
-                            const Expanded(child: Text('اشتراكات Respect', style: TextStyle(fontSize: 21, fontWeight: FontWeight.w900))),
+                            const Expanded(child: AppText('اشتراكات Respect', style: TextStyle(fontSize: 21, fontWeight: FontWeight.w900))),
                           ],
                         ),
                         const SizedBox(height: 8),
-                        Text(
+                        AppText(
                           'كل باقة لها شكل توثيق مختلف ومزايا واضحة. اختر الباقة المناسبة لك، ثم اختر مدة الاشتراك: شهر، 3 أشهر، أو سنة.',
                           style: TextStyle(color: muted, height: 1.45, fontWeight: FontWeight.w700),
                         ),
@@ -1079,7 +1080,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               const Icon(Icons.info_rounded, color: AppColors.purple),
                               const SizedBox(width: 9),
                               Expanded(
-                                child: Text(
+                                child: AppText(
                                   'بعد الاشتراك تظهر شارة الباقة على حسابك ومنشوراتك، وتتفعل حدود الكتابة وRespect AI والستوري وأولوية الظهور والميزات الخاصة حسب نوع الباقة.',
                                   style: TextStyle(color: isDark ? Colors.white.withValues(alpha: .90) : const Color(0xFF2D2338), height: 1.45, fontWeight: FontWeight.w800),
                                 ),
@@ -1090,7 +1091,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         const SizedBox(height: 14),
                         ...SupabaseService.subscriptionTiers.map((tier) => tierCard(Map<String, dynamic>.from(tier))),
                         const SizedBox(height: 4),
-                        Text(
+                        AppText(
                           'ملاحظة: الدفع يتم عبر Paddle. التفعيل يصير تلقائيًا بعد تأكيد الدفع من السيرفر عبر Webhook.',
                           style: TextStyle(color: muted, fontSize: 12, height: 1.35),
                         ),
@@ -1149,12 +1150,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
       if (!mounted) return;
 
       if (paidOrClosed == true) {
-        NotificationService.showTopNotification(
-          'تم تأكيد الدفع داخل التطبيق. يتم الآن تحديث حالة الاشتراك...',
+        NotificationService.showTopNotification(context.tr('تم تأكيد الدفع داخل التطبيق. يتم الآن تحديث حالة الاشتراك...'),
         );
       } else {
-        NotificationService.showTopNotification(
-          'تم إغلاق صفحة الدفع. إذا أكملت الدفع سيتم تفعيل التوثيق تلقائيًا خلال لحظات.',
+        NotificationService.showTopNotification(context.tr('تم إغلاق صفحة الدفع. إذا أكملت الدفع سيتم تفعيل التوثيق تلقائيًا خلال لحظات.'),
         );
       }
 
@@ -1166,7 +1165,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       });
     } catch (e) {
       if (!mounted) return;
-      NotificationService.showTopError('تعذر إنشاء صفحة الدفع داخل التطبيق: $e');
+      NotificationService.showTopError(context.tr('تعذر إنشاء صفحة الدفع داخل التطبيق: $e'));
     } finally {
       if (mounted) setState(() => _activatingVerification = false);
     }
@@ -1202,7 +1201,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
       if (verified) {
         await widget.onProfileUpdated?.call();
-        NotificationService.showTopSuccess('تم تفعيل التوثيق حتى ${_formatVerifiedUntil(_verifiedUntil)}');
+        NotificationService.showTopSuccess(context.tr('تم تفعيل التوثيق حتى ${_formatVerifiedUntil(_verifiedUntil)}'));
       }
     } catch (_) {
       _scannerSafeIgnore();
@@ -1232,11 +1231,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
         _activatingVerification = false;
       });
       await widget.onProfileUpdated?.call();
-      NotificationService.showTopNotification('تم توثيق الحساب بنجاح حتى ${_formatVerifiedUntil(_verifiedUntil)}');
+      NotificationService.showTopNotification(context.tr('تم توثيق الحساب بنجاح حتى ${_formatVerifiedUntil(_verifiedUntil)}'));
     } catch (e) {
       if (!mounted) return;
       setState(() => _activatingVerification = false);
-      NotificationService.showTopError('تعذر تفعيل التوثيق: $e');
+      NotificationService.showTopError(context.tr('تعذر تفعيل التوثيق: $e'));
     }
   }
 
@@ -1308,18 +1307,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         children: [
                           const Icon(Icons.lock_rounded, color: Color(0xFF00C853)),
                           const SizedBox(width: 8),
-                          const Expanded(child: Text('ستوري خاص', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18))),
-                          TextButton(onPressed: () => Navigator.pop(context, <String>[]), child: const Text('عام')),
+                          const Expanded(child: AppText('ستوري خاص', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18))),
+                          TextButton(onPressed: () => Navigator.pop(context, <String>[]), child: const AppText('عام')),
                           FilledButton(
                             onPressed: selected.isEmpty ? null : () => Navigator.pop(context, selected.toList()),
-                            child: Text('نشر خاص (${selected.length})'),
+                            child: AppText('نشر خاص (${selected.length})'),
                           ),
                         ],
                       ),
                     ),
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 18),
-                      child: Text(
+                      child: AppText(
                         'اختر الأشخاص من الذين تتابعهم. سيظهر إطار الستوري عندهم باللون الأخضر ولن يستطيع غيرهم فتح الملف المشفر.',
                         style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, height: 1.45),
                       ),
@@ -1327,7 +1326,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     const SizedBox(height: 10),
                     Expanded(
                       child: following.isEmpty
-                          ? const Center(child: Text('لا يوجد أشخاص تتابعهم لاختيارهم'))
+                          ? const Center(child: AppText('لا يوجد أشخاص تتابعهم لاختيارهم'))
                           : ListView.builder(
                               controller: controller,
                               itemCount: following.length,
@@ -1344,8 +1343,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                     checked ? selected.remove(username) : selected.add(username);
                                   }),
                                   secondary: CircleAvatar(backgroundImage: _fileImage(avatar), child: _fileImage(avatar) == null ? const Icon(Icons.person) : null),
-                                  title: Text(name, style: const TextStyle(fontWeight: FontWeight.w900)),
-                                  subtitle: Text(username),
+                                  title: AppText(name, style: const TextStyle(fontWeight: FontWeight.w900)),
+                                  subtitle: AppText(username),
                                 );
                               },
                             ),
@@ -1400,7 +1399,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       child: Icon(Icons.auto_stories_rounded, color: Colors.white),
                     ),
                     SizedBox(width: 12),
-                    Expanded(child: Text('أضف عناصر للستوري', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w900))),
+                    Expanded(child: AppText('أضف عناصر للستوري', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w900))),
                   ],
                 ),
                 const SizedBox(height: 12),
@@ -1435,7 +1434,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         padding: const EdgeInsets.symmetric(vertical: 13),
                       ),
                       icon: const Icon(Icons.check_circle_rounded),
-                      label: const Text('نشر العناصر المختارة', style: TextStyle(fontWeight: FontWeight.w900)),
+                      label: const AppText('نشر العناصر المختارة', style: TextStyle(fontWeight: FontWeight.w900)),
                     ),
                   ),
                 ],
@@ -1450,7 +1449,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Future<void> _pickStory() async {
     if (_loadingStory) return;
     if (!_profileVerified) {
-      NotificationService.showTopNotification('الستوري متاحة للحسابات الموثقة فقط');
+      NotificationService.showTopNotification(context.tr('الستوري متاحة للحسابات الموثقة فقط'));
       await _openVerificationSheet();
       return;
     }
@@ -1481,11 +1480,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
         context: context,
         builder: (context) => AlertDialog(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-          title: const Text('إضافة عنصر آخر؟', style: TextStyle(fontWeight: FontWeight.w900)),
-          content: Text('تم اختيار ${items.length} عنصر. تقدر تضيف صور أو فيديوهات زيادة قبل النشر.'),
+          title: const AppText('إضافة عنصر آخر؟', style: TextStyle(fontWeight: FontWeight.w900)),
+          content: AppText('تم اختيار ${items.length} عنصر. تقدر تضيف صور أو فيديوهات زيادة قبل النشر.'),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('نشر الآن')),
-            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('إضافة المزيد')),
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const AppText('نشر الآن')),
+            FilledButton(onPressed: () => Navigator.pop(context, true), child: const AppText('إضافة المزيد')),
           ],
         ),
       );
@@ -1509,18 +1508,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
           children: [
             Container(width: 42, height: 5, decoration: BoxDecoration(color: Colors.grey.withValues(alpha: .45), borderRadius: BorderRadius.circular(99))),
             const SizedBox(height: 18),
-            const Text('نوع الستوري', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 19)),
+            const AppText('نوع الستوري', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 19)),
             const SizedBox(height: 14),
             ListTile(
               leading: const Icon(Icons.public_rounded, color: AppColors.purple),
-              title: const Text('ستوري عادي مشفر', style: TextStyle(fontWeight: FontWeight.w900)),
-              subtitle: const Text('يظهر بشكل عادي لكن ملف الصورة/الفيديو يكون مشفرًا'),
+              title: const AppText('ستوري عادي مشفر', style: TextStyle(fontWeight: FontWeight.w900)),
+              subtitle: const AppText('يظهر بشكل عادي لكن ملف الصورة/الفيديو يكون مشفرًا'),
               onTap: () => Navigator.pop(context, 'normal'),
             ),
             ListTile(
               leading: const Icon(Icons.lock_rounded, color: Color(0xFF00C853)),
-              title: const Text('ستوري خاص', style: TextStyle(fontWeight: FontWeight.w900)),
-              subtitle: const Text('تختار أشخاص محددين ويظهر لهم بإطار أخضر'),
+              title: const AppText('ستوري خاص', style: TextStyle(fontWeight: FontWeight.w900)),
+              subtitle: const AppText('تختار أشخاص محددين ويظهر لهم بإطار أخضر'),
               onTap: () => Navigator.pop(context, 'private'),
             ),
           ],
@@ -1556,7 +1555,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ? 'تم نشر ستوري خاص مشفر لـ ${allowedViewers.length} شخص'
           : 'تم نشر ${items.length} عنصر مشفر في الستوري لمدة 24 ساعة');
     } catch (e) {
-      if (mounted) NotificationService.showTopError('تعذر نشر الستوري: $e');
+      if (mounted) NotificationService.showTopError(context.tr('تعذر نشر الستوري: $e'));
     } finally {
       if (mounted) setState(() => _loadingStory = false);
     }
@@ -1616,7 +1615,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       if (!mounted) return;
       setState(() => _patchPostCounters(id, res));
     } catch (e) {
-      if (mounted) NotificationService.showTopError('تعذر تحديث الإعجاب: $e');
+      if (mounted) NotificationService.showTopError(context.tr('تعذر تحديث الإعجاب: $e'));
     } finally {
       if (mounted) setState(() => _pendingPostActionIds.remove('like_$id'));
     }
@@ -1642,7 +1641,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       if (!mounted) return;
       setState(() => _patchPostCounters(id, res));
     } catch (e) {
-      if (mounted) NotificationService.showTopError('تعذر تحديث إعادة النشر: $e');
+      if (mounted) NotificationService.showTopError(context.tr('تعذر تحديث إعادة النشر: $e'));
     } finally {
       if (mounted) setState(() => _pendingPostActionIds.remove('repost_$id'));
     }
@@ -1667,7 +1666,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       });
       NotificationService.showTopNotification(saved ? 'تم حفظ التغريدة' : 'تمت إزالة التغريدة من الحفظ');
     } catch (e) {
-      if (mounted) NotificationService.showTopError('تعذر تحديث الحفظ: $e');
+      if (mounted) NotificationService.showTopError(context.tr('تعذر تحديث الحفظ: $e'));
     } finally {
       if (mounted) setState(() => _pendingPostActionIds.remove('save_$id'));
     }
@@ -1677,7 +1676,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final text = _postText(post).trim();
     if (text.isEmpty) return;
     await Clipboard.setData(ClipboardData(text: text));
-    if (mounted) NotificationService.showTopNotification('تم نسخ نص التغريدة');
+    if (mounted) NotificationService.showTopNotification(context.tr('تم نسخ نص التغريدة'));
   }
 
   Future<void> _editPost(Map<String, dynamic> post) async {
@@ -1707,7 +1706,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 children: [
                   Center(child: Container(width: 46, height: 5, decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: .55), borderRadius: BorderRadius.circular(99)))),
                   const SizedBox(height: 16),
-                  const Text('تعديل التغريدة', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
+                  const AppText('تعديل التغريدة', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
                   const SizedBox(height: 12),
                   TextField(
                     controller: ctrl,
@@ -1716,7 +1715,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     maxLines: 8,
                     maxLength: _profileVerified ? SupabaseService.verifiedPostMaxChars : SupabaseService.freePostMaxChars,
                     decoration: InputDecoration(
-                      hintText: 'اكتب التعديل هنا...',
+                      hintText: context.tr('اكتب التعديل هنا...'),
                       border: OutlineInputBorder(borderRadius: BorderRadius.circular(18)),
                     ),
                   ),
@@ -1726,7 +1725,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     child: FilledButton.icon(
                       onPressed: () => Navigator.pop(context, ctrl.text.trim()),
                       icon: const Icon(Icons.save_rounded),
-                      label: const Text('حفظ التعديل', style: TextStyle(fontWeight: FontWeight.w900)),
+                      label: const AppText('حفظ التعديل', style: TextStyle(fontWeight: FontWeight.w900)),
                       style: FilledButton.styleFrom(backgroundColor: AppColors.purple, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999))),
                     ),
                   ),
@@ -1749,9 +1748,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
           if (i >= 0) list[i] = {...list[i], 'text': newText, 'edited': true, 'edited_at': DateTime.now().toIso8601String()};
         }
       });
-      NotificationService.showTopNotification('تم تعديل التغريدة');
+      NotificationService.showTopNotification(context.tr('تم تعديل التغريدة'));
     } catch (e) {
-      if (mounted) NotificationService.showTopError('تعذر تعديل التغريدة: $e');
+      if (mounted) NotificationService.showTopError(context.tr('تعذر تعديل التغريدة: $e'));
     }
   }
 
@@ -1761,11 +1760,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('حذف التغريدة؟'),
-        content: const Text('سيتم حذف التغريدة وتفاعلاتها وردودها. لا يمكن التراجع عن هذا الإجراء.'),
+        title: const AppText('حذف التغريدة؟'),
+        content: const AppText('سيتم حذف التغريدة وتفاعلاتها وردودها. لا يمكن التراجع عن هذا الإجراء.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('إلغاء')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), style: FilledButton.styleFrom(backgroundColor: Colors.red), child: const Text('حذف')),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const AppText('إلغاء')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), style: FilledButton.styleFrom(backgroundColor: Colors.red), child: const AppText('حذف')),
         ],
       ),
     );
@@ -1778,9 +1777,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
         _profileMedia.removeWhere((p) => _postId(p) == id);
         _postsCount = _profilePosts.length;
       });
-      NotificationService.showTopNotification('تم حذف التغريدة');
+      NotificationService.showTopNotification(context.tr('تم حذف التغريدة'));
     } catch (e) {
-      if (mounted) NotificationService.showTopError('تعذر حذف التغريدة: $e');
+      if (mounted) NotificationService.showTopError(context.tr('تعذر حذف التغريدة: $e'));
     }
   }
 
@@ -1806,22 +1805,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 const SizedBox(height: 12),
                 ListTile(
                   leading: const Icon(Icons.edit_rounded, color: AppColors.purple),
-                  title: const Text('تعديل التغريدة', style: TextStyle(fontWeight: FontWeight.w900)),
+                  title: const AppText('تعديل التغريدة', style: TextStyle(fontWeight: FontWeight.w900)),
                   onTap: () { Navigator.pop(context); _editPost(post); },
                 ),
                 ListTile(
                   leading: const Icon(Icons.copy_rounded, color: AppColors.purple),
-                  title: const Text('نسخ النص', style: TextStyle(fontWeight: FontWeight.w900)),
+                  title: const AppText('نسخ النص', style: TextStyle(fontWeight: FontWeight.w900)),
                   onTap: () { Navigator.pop(context); _copyPostText(post); },
                 ),
                 ListTile(
                   leading: Icon(_savedPostIds.contains(_postId(post)) ? Icons.bookmark_remove_rounded : Icons.bookmark_add_rounded, color: AppColors.purple),
-                  title: Text(_savedPostIds.contains(_postId(post)) ? 'إزالة من الحفظ' : 'حفظ التغريدة', style: const TextStyle(fontWeight: FontWeight.w900)),
+                  title: AppText(_savedPostIds.contains(_postId(post)) ? 'إزالة من الحفظ' : 'حفظ التغريدة', style: const TextStyle(fontWeight: FontWeight.w900)),
                   onTap: () { Navigator.pop(context); _toggleSavePost(post); },
                 ),
                 ListTile(
                   leading: const Icon(Icons.delete_rounded, color: Colors.red),
-                  title: const Text('حذف التغريدة', style: TextStyle(fontWeight: FontWeight.w900, color: Colors.red)),
+                  title: const AppText('حذف التغريدة', style: TextStyle(fontWeight: FontWeight.w900, color: Colors.red)),
                   onTap: () { Navigator.pop(context); _deletePostFromProfile(post); },
                 ),
               ],
@@ -1834,7 +1833,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Future<void> _refreshProfileTimeline() async {
     await _loadProfileContent();
-    if (mounted) NotificationService.showTopNotification('تم تحديث الملف الشخصي');
+    if (mounted) NotificationService.showTopNotification(context.tr('تم تحديث الملف الشخصي'));
   }
 
   Future<void> _saveProfile() async {
@@ -1907,7 +1906,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       _editing = false;
     });
     await _loadProfileContent();
-    NotificationService.showTopNotification('تم حفظ بيانات البروفايل');
+    NotificationService.showTopNotification(context.tr('تم حفظ بيانات البروفايل'));
   }
 
   int _followersCount(String username) {
@@ -1967,7 +1966,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
         ),
         icon: Icon(icon, size: 17),
-        label: Text(text, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12.5)),
+        label: AppText(text, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12.5)),
       );
     }
 
@@ -2035,7 +2034,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                             children: [
                                               Icon(Icons.image_rounded, color: Colors.white, size: 16),
                                               SizedBox(width: 5),
-                                              Text('تغيير الغلاف', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
+                                              AppText('تغيير الغلاف', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
                                             ],
                                           ),
                                         ),
@@ -2120,7 +2119,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
                                 ),
                                 icon: Icon(_editing ? Icons.save_rounded : Icons.edit_rounded, size: 17),
-                                label: Text(_editing ? (_saving ? 'جاري الحفظ...' : 'حفظ التعديل') : 'تعديل الملف الشخصي', style: const TextStyle(fontWeight: FontWeight.w900)),
+                                label: AppText(_editing ? (_saving ? 'جاري الحفظ...' : 'حفظ التعديل') : 'تعديل الملف الشخصي', style: const TextStyle(fontWeight: FontWeight.w900)),
                               ),
                             ),
                             ],
@@ -2139,7 +2138,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
                                         Flexible(
-                                          child: Text(
+                                          child: AppText(
                                             displayName,
                                             maxLines: 1,
                                             overflow: TextOverflow.ellipsis,
@@ -2159,7 +2158,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               const SizedBox(height: 2),
                               Row(
                                 children: [
-                                  Text(username, style: TextStyle(color: muted, fontWeight: FontWeight.w700)),
+                                  AppText(username, style: TextStyle(color: muted, fontWeight: FontWeight.w700)),
                                   if (_profileSubscriptionTier != 'free') ...[
                                     const SizedBox(width: 8),
                                     _SubscriptionTierMiniBadge(tier: _profileSubscriptionTier),
@@ -2167,7 +2166,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 ],
                               ),
                               const SizedBox(height: 10),
-                              Text(
+                              AppText(
                                 _bioCtrl.text.trim().isEmpty ? 'أضف نبذة شخصية ليظهر حسابك بشكل أجمل' : _bioCtrl.text.trim(),
                                 style: const TextStyle(height: 1.42, fontSize: 14.5, fontWeight: FontWeight.w600),
                               ),
@@ -2184,7 +2183,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                     children: [
                                       const Icon(Icons.warning_amber_rounded, color: AppColors.danger),
                                       const SizedBox(width: 9),
-                                      Expanded(child: Text('لديك $_activeWarnings تحذير من أصل 3. التحذير يختفي تلقائيًا بعد شهر بدون مخالفات.', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12.5))),
+                                      Expanded(child: AppText('لديك $_activeWarnings تحذير من أصل 3. التحذير يختفي تلقائيًا بعد شهر بدون مخالفات.', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12.5))),
                                     ],
                                   ),
                                 ),
@@ -2248,7 +2247,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                       _RespectAiVerifiedBadge(tier: _profileSubscriptionTier, large: true),
                                       const SizedBox(width: 9),
                                       Expanded(
-                                        child: Text(
+                                        child: AppText(
                                           SupabaseService.tierPowerDescription(_profileSubscriptionTier),
                                           maxLines: 2,
                                           overflow: TextOverflow.ellipsis,
@@ -2297,7 +2296,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 children: [
                                   Icon(Icons.info_rounded, color: AppColors.purple),
                                   SizedBox(width: 8),
-                                  Expanded(child: Text('في صور مختارة تنتظر الحفظ. اضغط حفظ لتطبيق كل التعديلات.', style: TextStyle(fontWeight: FontWeight.w900))),
+                                  Expanded(child: AppText('في صور مختارة تنتظر الحفظ. اضغط حفظ لتطبيق كل التعديلات.', style: TextStyle(fontWeight: FontWeight.w900))),
                                 ],
                               ),
                             ),
@@ -2479,7 +2478,7 @@ class _ProfileStoryViewerState extends State<_ProfileStoryViewer> {
         _comments = int.tryParse((result['comments'] ?? _comments).toString()) ?? _comments;
       });
     } catch (e) {
-      if (mounted) NotificationService.showTopError('تعذر تحديث إعجاب الستوري');
+      if (mounted) NotificationService.showTopError(context.tr('تعذر تحديث إعجاب الستوري'));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -2499,9 +2498,9 @@ class _ProfileStoryViewerState extends State<_ProfileStoryViewer> {
       );
       if (!mounted) return;
       setState(() => _comments++);
-      NotificationService.showTopNotification('تم إرسال التعليق');
+      NotificationService.showTopNotification(context.tr('تم إرسال التعليق'));
     } catch (e) {
-      if (mounted) NotificationService.showTopError('تعذر إرسال التعليق: $e');
+      if (mounted) NotificationService.showTopError(context.tr('تعذر إرسال التعليق: $e'));
     }
   }
 
@@ -2511,11 +2510,11 @@ class _ProfileStoryViewerState extends State<_ProfileStoryViewer> {
       context: context,
       builder: (_) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        title: const Text('حذف هذا العنصر؟', style: TextStyle(fontWeight: FontWeight.w900)),
-        content: const Text('سيتم حذف الصورة أو الفيديو الحالي فقط من الستوري.'),
+        title: const AppText('حذف هذا العنصر؟', style: TextStyle(fontWeight: FontWeight.w900)),
+        content: const AppText('سيتم حذف الصورة أو الفيديو الحالي فقط من الستوري.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('إلغاء')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('حذف')),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const AppText('إلغاء')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const AppText('حذف')),
         ],
       ),
     );
@@ -2540,11 +2539,11 @@ class _ProfileStoryViewerState extends State<_ProfileStoryViewer> {
       context: context,
       builder: (_) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        title: const Text('حذف الستوري كامل؟', style: TextStyle(fontWeight: FontWeight.w900)),
-        content: const Text('سيتم حذف كل صور وفيديوهات الستوري الحالية.'),
+        title: const AppText('حذف الستوري كامل؟', style: TextStyle(fontWeight: FontWeight.w900)),
+        content: const AppText('سيتم حذف كل صور وفيديوهات الستوري الحالية.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('إلغاء')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('حذف الكل')),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const AppText('إلغاء')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const AppText('حذف الكل')),
         ],
       ),
     );
@@ -2587,7 +2586,7 @@ class _ProfileStoryViewerState extends State<_ProfileStoryViewer> {
         children: [
           Icon(Icons.lock_rounded, color: Colors.white70, size: 74),
           SizedBox(height: 12),
-          Text('هذا الستوري مشفر وغير متاح لهذا الحساب', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w800)),
+          AppText('هذا الستوري مشفر وغير متاح لهذا الحساب', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w800)),
         ],
       );
     }
@@ -2713,8 +2712,8 @@ class _ProfileStoryViewerState extends State<_ProfileStoryViewer> {
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 15)),
-                                    Text(username, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: Colors.white.withValues(alpha: .65), fontWeight: FontWeight.w700, fontSize: 12)),
+                                    AppText(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 15)),
+                                    AppText(username, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: Colors.white.withValues(alpha: .65), fontWeight: FontWeight.w700, fontSize: 12)),
                                   ],
                                 ),
                               ),
@@ -2729,8 +2728,8 @@ class _ProfileStoryViewerState extends State<_ProfileStoryViewer> {
                                     if (v == 'delete_all') _deleteAllStories();
                                   },
                                   itemBuilder: (_) => const [
-                                    PopupMenuItem(value: 'delete_item', child: Text('حذف هذا العنصر', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800))),
-                                    PopupMenuItem(value: 'delete_all', child: Text('حذف الستوري كامل', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800))),
+                                    PopupMenuItem(value: 'delete_item', child: AppText('حذف هذا العنصر', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800))),
+                                    PopupMenuItem(value: 'delete_all', child: AppText('حذف الستوري كامل', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800))),
                                   ],
                                 ),
                               _StoryRoundButton(icon: Icons.close_rounded, onTap: () => Navigator.pop(context)),
@@ -2759,7 +2758,7 @@ class _ProfileStoryViewerState extends State<_ProfileStoryViewer> {
                                     borderRadius: BorderRadius.circular(999),
                                     border: Border.all(color: Colors.white.withValues(alpha: .14)),
                                   ),
-                                  child: Text('$_likes إعجاب · $_comments تعليق', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
+                                  child: AppText('$_likes إعجاب · $_comments تعليق', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
                                 ),
                               ),
                             ),
@@ -2778,7 +2777,7 @@ class _ProfileStoryViewerState extends State<_ProfileStoryViewer> {
                                     maxLines: 3,
                                     style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
                                     decoration: InputDecoration(
-                                      hintText: 'اكتب تعليق على الستوري...',
+                                      hintText: context.tr('اكتب تعليق على الستوري...'),
                                       hintStyle: TextStyle(color: Colors.white.withValues(alpha: .58)),
                                       border: InputBorder.none,
                                       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -2860,8 +2859,8 @@ class _StoryPickerTile extends StatelessWidget {
           backgroundColor: AppColors.purple.withValues(alpha: .18),
           child: Icon(icon, color: AppColors.purple),
         ),
-        title: Text(title, style: const TextStyle(fontWeight: FontWeight.w900)),
-        subtitle: Text(subtitle),
+        title: AppText(title, style: const TextStyle(fontWeight: FontWeight.w900)),
+        subtitle: AppText(subtitle),
         trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16),
       ),
     );
@@ -2900,7 +2899,7 @@ class _StoryActivitySheet extends StatelessWidget {
             children: [
               Center(child: Container(width: 50, height: 5, decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: .65), borderRadius: BorderRadius.circular(99)))),
               const SizedBox(height: 16),
-              const Text('تفاعل الستوري', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
+              const AppText('تفاعل الستوري', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
               const SizedBox(height: 12),
               _StoryActivitySection(
                 title: 'الإعجابات',
@@ -2960,12 +2959,12 @@ class _StoryActivitySection extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(children: [Icon(icon, color: AppColors.purple), const SizedBox(width: 8), Text(title, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16))]),
+          Row(children: [Icon(icon, color: AppColors.purple), const SizedBox(width: 8), AppText(title, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16))]),
           const SizedBox(height: 10),
           if (rows.isEmpty)
             Padding(
               padding: const EdgeInsets.all(12),
-              child: Text(empty, style: TextStyle(color: Theme.of(context).brightness == Brightness.dark ? AppColors.darkMuted : AppColors.lightMuted, fontWeight: FontWeight.w700)),
+              child: AppText(empty, style: TextStyle(color: Theme.of(context).brightness == Brightness.dark ? AppColors.darkMuted : AppColors.lightMuted, fontWeight: FontWeight.w700)),
             )
           else
             ...rows.map((row) {
@@ -2978,8 +2977,8 @@ class _StoryActivitySection extends StatelessWidget {
                   backgroundImage: img,
                   child: img == null ? const Icon(Icons.person_rounded, color: Colors.white) : null,
                 ),
-                title: Text(textBuilder(row), style: const TextStyle(fontWeight: FontWeight.w900)),
-                subtitle: Text(subBuilder(row), maxLines: 2, overflow: TextOverflow.ellipsis),
+                title: AppText(textBuilder(row), style: const TextStyle(fontWeight: FontWeight.w900)),
+                subtitle: AppText(subBuilder(row), maxLines: 2, overflow: TextOverflow.ellipsis),
               );
             }),
         ],
@@ -3496,7 +3495,7 @@ class _AutoStreamPreview extends StatelessWidget {
               decoration: BoxDecoration(
                   color: isLive ? AppColors.danger : Colors.black54,
                   borderRadius: BorderRadius.circular(999)),
-              child: Text(isLive ? 'LIVE' : 'OFFLINE',
+              child: AppText(isLive ? 'LIVE' : 'OFFLINE',
                   style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 12)),
             ),
           ),
@@ -3508,12 +3507,12 @@ class _AutoStreamPreview extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(title.isEmpty ? 'سيظهر عنوان البث تلقائيًا هنا' : title,
+                AppText(title.isEmpty ? 'سيظهر عنوان البث تلقائيًا هنا' : title,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w900)),
                 const SizedBox(height: 3),
-                Text('${channelName.isEmpty ? 'اسم القناة' : channelName} · $viewers مشاهد',
+                AppText('${channelName.isEmpty ? 'اسم القناة' : channelName} · $viewers مشاهد',
                     style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
               ],
             ),
@@ -3548,7 +3547,7 @@ class _SectionTitle extends StatelessWidget {
   const _SectionTitle(this.text);
   @override
   Widget build(BuildContext context) =>
-      Text(text, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900));
+      AppText(text, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900));
 }
 
 class _ProfileField extends StatelessWidget {
@@ -3592,7 +3591,7 @@ class _InfoChip extends StatelessWidget {
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         Icon(icon, color: AppColors.purple, size: 16),
         const SizedBox(width: 5),
-        Text(text,
+        AppText(text,
             style: TextStyle(
                 color: isDark ? Colors.white : Colors.black87, fontWeight: FontWeight.w700)),
       ]),
@@ -3718,7 +3717,7 @@ class _ProfileContentTabs extends StatelessWidget {
                 ),
               ),
             ),
-            child: Text(
+            child: AppText(
               count > 0 ? '$title  $count' : title,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
@@ -3756,7 +3755,7 @@ class _ProfileContentTabs extends StatelessWidget {
                   width: 46,
                   child: IconButton(
                     onPressed: loading ? null : onRefresh,
-                    tooltip: 'تحديث',
+                    tooltip: context.tr('تحديث'),
                     icon: Icon(Icons.refresh_rounded, size: 20, color: loading ? muted : AppColors.purple),
                   ),
                 ),
@@ -3803,14 +3802,14 @@ class _ProfileInlineSectionHeader extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Expanded(child: Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900))),
+          Expanded(child: AppText(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900))),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
             decoration: BoxDecoration(
               color: AppColors.purple.withValues(alpha: .12),
               borderRadius: BorderRadius.circular(999),
             ),
-            child: Text('$count', style: TextStyle(color: count == 0 ? muted : AppColors.purple, fontWeight: FontWeight.w900, fontSize: 12)),
+            child: AppText('$count', style: TextStyle(color: count == 0 ? muted : AppColors.purple, fontWeight: FontWeight.w900, fontSize: 12)),
           ),
         ],
       ),
@@ -3829,7 +3828,7 @@ class _ProfileInlineEmpty extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 28),
       child: Center(
-        child: Text(
+        child: AppText(
           text,
           textAlign: TextAlign.center,
           style: TextStyle(
@@ -3953,7 +3952,7 @@ class _ProfilePostsList extends StatelessWidget {
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
           children: [
-            SizedBox(height: 220, child: Center(child: Text(emptyText, style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, fontWeight: FontWeight.w900)))),
+            SizedBox(height: 220, child: Center(child: AppText(emptyText, style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, fontWeight: FontWeight.w900)))),
           ],
         ),
       );
@@ -4087,11 +4086,11 @@ class _ProfileTweetCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     Flexible(
-                      child: Text(displayName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15.5)),
+                      child: AppText(displayName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15.5)),
                     ),
                     if (verified || subscriptionTier != 'free') _RespectAiVerifiedBadge(tier: subscriptionTier == 'free' ? 'premium' : subscriptionTier),
                     const SizedBox(width: 4),
-                    Flexible(child: Text('$username · ${_timeLabel()}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: muted, fontWeight: FontWeight.w600, fontSize: 12.2))),
+                    Flexible(child: AppText('$username · ${_timeLabel()}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: muted, fontWeight: FontWeight.w600, fontSize: 12.2))),
                     IconButton(onPressed: onOptions, icon: Icon(Icons.more_horiz_rounded, color: muted), visualDensity: VisualDensity.compact, padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 34, minHeight: 34)),
                   ],
                 ),
@@ -4118,7 +4117,7 @@ class _ProfileTweetCard extends StatelessWidget {
                   ),
                 ],
                 if (text.isEmpty && !hasMedia)
-                  Text('تغريدة بدون محتوى', style: TextStyle(color: muted, fontWeight: FontWeight.w700)),
+                  AppText('تغريدة بدون محتوى', style: TextStyle(color: muted, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 8),
                 Row(
                   children: [
@@ -4182,7 +4181,7 @@ class _LinkifiedText extends StatelessWidget {
     return v;
   }
 
-  Future<void> _openUrl(String rawUrl) async {
+  Future<void> _openUrl(BuildContext context, String rawUrl) async {
     final clean = _stripTrailingUrlPunctuation(rawUrl.trim());
     if (clean.isEmpty) return;
     final normalized = clean.startsWith('http://') || clean.startsWith('https://') ? clean : 'https://$clean';
@@ -4193,11 +4192,11 @@ class _LinkifiedText extends StatelessWidget {
       final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
       if (!opened) {
         await Clipboard.setData(ClipboardData(text: normalized));
-        NotificationService.showTopError('تعذر فتح الرابط، تم نسخه بدلًا من ذلك');
+        NotificationService.showTopError(context.tr('تعذر فتح الرابط، تم نسخه بدلًا من ذلك'));
       }
     } catch (_) {
       await Clipboard.setData(ClipboardData(text: normalized));
-      NotificationService.showTopError('تعذر فتح الرابط، تم نسخه بدلًا من ذلك');
+      NotificationService.showTopError(context.tr('تعذر فتح الرابط، تم نسخه بدلًا من ذلك'));
     }
   }
 
@@ -4229,7 +4228,7 @@ class _LinkifiedText extends StatelessWidget {
         final trailing = clean.length < original.length ? original.substring(clean.length) : '';
         spans.add(TextSpan(
           text: clean,
-          recognizer: TapGestureRecognizer()..onTap = () => _openUrl(clean),
+          recognizer: TapGestureRecognizer()..onTap = () => _openUrl(context, clean),
           style: const TextStyle(
             color: Colors.blueAccent,
             fontWeight: FontWeight.w800,
@@ -4293,7 +4292,7 @@ class _TweetAction extends StatelessWidget {
               Icon(icon, size: 18, color: color),
               if (!(hideZero && value == 0)) ...[
                 const SizedBox(width: 4),
-                Text(_compact(value), style: TextStyle(color: color, fontWeight: FontWeight.w800, fontSize: 12)),
+                AppText(_compact(value), style: TextStyle(color: color, fontWeight: FontWeight.w800, fontSize: 12)),
               ],
             ],
           ),
@@ -4319,7 +4318,7 @@ class _ProfileRepliesList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (items.isEmpty) {
-      return Center(child: Text('لا توجد ردود بعد', style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, fontWeight: FontWeight.w900)));
+      return Center(child: AppText('لا توجد ردود بعد', style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, fontWeight: FontWeight.w900)));
     }
     return ListView.separated(
       padding: EdgeInsets.zero,
@@ -4408,11 +4407,11 @@ class _VerificationPowerCard extends StatelessWidget {
           Row(children: [
             _RespectAiVerifiedBadge(tier: tier, large: true),
             const SizedBox(width: 8),
-            Expanded(child: Text('قوة التوثيق $title', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15.5))),
+            Expanded(child: AppText('قوة التوثيق $title', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15.5))),
             Icon(tier == 'premium' ? Icons.diamond_rounded : tier == 'gold' ? Icons.workspace_premium_rounded : Icons.star_rounded, color: colors.first),
           ]),
           const SizedBox(height: 8),
-          Text(description, style: TextStyle(color: isDark ? Colors.white70 : const Color(0xFF4B4455), fontWeight: FontWeight.w800, height: 1.35, fontSize: 12.5)),
+          AppText(description, style: TextStyle(color: isDark ? Colors.white70 : const Color(0xFF4B4455), fontWeight: FontWeight.w800, height: 1.35, fontSize: 12.5)),
           const SizedBox(height: 10),
           Wrap(spacing: 7, runSpacing: 7, children: [
             _PowerMiniPill(icon: Icons.push_pin_rounded, text: '$pinLimit تثبيت'),
@@ -4435,7 +4434,7 @@ class _PowerMiniPill extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
     decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: .12), borderRadius: BorderRadius.circular(999)),
-    child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(icon, color: AppColors.purple, size: 15), const SizedBox(width: 4), Text(text, style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w900, fontSize: 11.5))]),
+    child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(icon, color: AppColors.purple, size: 15), const SizedBox(width: 4), AppText(text, style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w900, fontSize: 11.5))]),
   );
 }
 
@@ -4545,7 +4544,7 @@ class _SubscriptionTierMiniBadge extends StatelessWidget {
         children: [
           Icon(_RespectAiVerifiedBadge.iconForTier(normalized), color: accent, size: 13),
           const SizedBox(width: 4),
-          Text(_label, style: TextStyle(color: accent, fontWeight: FontWeight.w900, fontSize: 11)),
+          AppText(_label, style: TextStyle(color: accent, fontWeight: FontWeight.w900, fontSize: 11)),
         ],
       ),
     );
@@ -4582,8 +4581,8 @@ class _StatBox extends StatelessWidget {
         ),
       ),
       child: Column(children: [
-        Text(value, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 17)),
-        Text(
+        AppText(value, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 17)),
+        AppText(
           label,
           style: TextStyle(
             color: isDark ? AppColors.darkMuted : AppColors.lightMuted,
@@ -4733,19 +4732,19 @@ class _PaddleCheckoutWebViewScreenState extends State<_PaddleCheckoutWebViewScre
       context: context,
       builder: (context) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
-        title: const Text('إغلاق صفحة الدفع؟', style: TextStyle(fontWeight: FontWeight.w900)),
-        content: const Text(
+        title: const AppText('إغلاق صفحة الدفع؟', style: TextStyle(fontWeight: FontWeight.w900)),
+        content: const AppText(
           'إذا أغلقت الصفحة قبل إكمال الدفع لن يتم تفعيل الاشتراك. إذا أكملت الدفع فعلًا، سيقوم التطبيق بتحديث الحالة تلقائيًا.',
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('متابعة الدفع'),
+            child: const AppText('متابعة الدفع'),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
             style: FilledButton.styleFrom(backgroundColor: AppColors.purple),
-            child: const Text('إغلاق'),
+            child: const AppText('إغلاق'),
           ),
         ],
       ),
@@ -4770,7 +4769,7 @@ class _PaddleCheckoutWebViewScreenState extends State<_PaddleCheckoutWebViewScre
           elevation: 0,
           backgroundColor: isDark ? AppColors.darkBg : AppColors.lightBg,
           foregroundColor: isDark ? Colors.white : const Color(0xFF201726),
-          title: Text(widget.title, style: const TextStyle(fontWeight: FontWeight.w900)),
+          title: AppText(widget.title, style: const TextStyle(fontWeight: FontWeight.w900)),
           centerTitle: true,
           leading: IconButton(
             icon: const Icon(Icons.close_rounded),
@@ -4781,7 +4780,7 @@ class _PaddleCheckoutWebViewScreenState extends State<_PaddleCheckoutWebViewScre
           ),
           actions: [
             IconButton(
-              tooltip: 'تحديث',
+              tooltip: context.tr('تحديث'),
               icon: const Icon(Icons.refresh_rounded),
               onPressed: () => _controller.reload(),
             ),

@@ -12,6 +12,7 @@ import '../services/supabase_service.dart';
 import '../services/notification_service.dart';
 import 'feed_screen.dart';
 
+import '../app/app_language.dart';
 void _scannerSafeIgnore([Object? error, StackTrace? stackTrace]) {}
 
 
@@ -75,7 +76,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         post.isLiked = previousLiked;
         post.likes = previousLikes;
       });
-      NotificationService.showTopError('تعذر تحديث الإعجاب');
+      NotificationService.showTopError(context.tr('تعذر تحديث الإعجاب'));
     }
   }
 
@@ -129,14 +130,14 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                 const SizedBox(height: 16),
                 ListTile(
                   leading: Icon(Icons.repeat_rounded, color: post.isReposted ? AppColors.purple : AppColors.purple),
-                  title: Text(post.isReposted ? 'تمت إعادة النشر مسبقًا' : 'إعادة نشر', style: const TextStyle(fontWeight: FontWeight.w900)),
-                  subtitle: Text(post.isReposted ? 'لا يمكن إعادة نشر نفس التغريدة أكثر من مرة' : 'إظهار التغريدة لمتابعيك', style: TextStyle(color: muted, fontSize: 12)),
+                  title: AppText(post.isReposted ? 'تمت إعادة النشر مسبقًا' : 'إعادة نشر', style: const TextStyle(fontWeight: FontWeight.w900)),
+                  subtitle: AppText(post.isReposted ? 'لا يمكن إعادة نشر نفس التغريدة أكثر من مرة' : 'إظهار التغريدة لمتابعيك', style: TextStyle(color: muted, fontSize: 12)),
                   onTap: () => Navigator.pop(context, 'repost'),
                 ),
                 ListTile(
                   leading: const Icon(Icons.format_quote_rounded, color: AppColors.purple),
-                  title: const Text('اقتباس', style: TextStyle(fontWeight: FontWeight.w900)),
-                  subtitle: Text('اكتب تعليقك مع التغريدة', style: TextStyle(color: muted, fontSize: 12)),
+                  title: const AppText('اقتباس', style: TextStyle(fontWeight: FontWeight.w900)),
+                  subtitle: AppText('اكتب تعليقك مع التغريدة', style: TextStyle(color: muted, fontSize: 12)),
                   onTap: () => Navigator.pop(context, 'quote'),
                 ),
               ],
@@ -148,7 +149,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     if (action == null) return;
     if (action == 'quote') {
       // فتح شاشة إنشاء تغريدة مقتبسة (يمكن فتح ComposePostScreen)
-      NotificationService.showTopNotification('اقتباس التغريدة سيتم فتحه قريبًا');
+      NotificationService.showTopNotification(context.tr('اقتباس التغريدة سيتم فتحه قريبًا'));
       return;
     }
     if (action != 'repost') return;
@@ -174,7 +175,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         post.isReposted = previousReposted;
         post.reposts = previousReposts;
       });
-      NotificationService.showTopError('تعذر تحديث إعادة النشر');
+      NotificationService.showTopError(context.tr('تعذر تحديث إعادة النشر'));
     }
   }
 
@@ -200,13 +201,13 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                 const SizedBox(height: 16),
                 ListTile(
                   leading: const Icon(Icons.chat_rounded, color: AppColors.success),
-                  title: const Text('إرسال للواتس', style: TextStyle(fontWeight: FontWeight.w900)),
-                  subtitle: const Text('سيتم نسخ نص التغريدة لتلصقه في واتساب'),
+                  title: const AppText('إرسال للواتس', style: TextStyle(fontWeight: FontWeight.w900)),
+                  subtitle: const AppText('سيتم نسخ نص التغريدة لتلصقه في واتساب'),
                   onTap: () => Navigator.pop(context, 'whatsapp'),
                 ),
                 ListTile(
                   leading: const Icon(Icons.link_rounded, color: AppColors.purple),
-                  title: const Text('نسخ رابط التغريدة', style: TextStyle(fontWeight: FontWeight.w900)),
+                  title: const AppText('نسخ رابط التغريدة', style: TextStyle(fontWeight: FontWeight.w900)),
                   onTap: () => Navigator.pop(context, 'copy'),
                 ),
               ],
@@ -861,14 +862,14 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(notification.title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+                              AppText(notification.title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
                               const SizedBox(height: 3),
-                              Text(notification.time, style: TextStyle(color: muted, fontWeight: FontWeight.w700, fontSize: 12)),
+                              AppText(notification.time, style: TextStyle(color: muted, fontWeight: FontWeight.w700, fontSize: 12)),
                             ],
                           ),
                         ),
                         IconButton(
-                          tooltip: 'إغلاق',
+                          tooltip: context.tr('إغلاق'),
                           onPressed: () => Navigator.pop(context),
                           icon: const Icon(Icons.close_rounded),
                         ),
@@ -885,7 +886,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                       ),
                       child: SelectableText(
                         notification.body.trim().isEmpty ? 'لا يوجد نص داخل هذا الإشعار' : notification.body,
-                        textDirection: TextDirection.rtl,
+                        textDirection: context.appTextDirection,
                         style: const TextStyle(fontSize: 15, height: 1.65, fontWeight: FontWeight.w700),
                       ),
                     ),
@@ -903,7 +904,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
                         ),
                         icon: const Icon(Icons.open_in_new_rounded),
-                        label: const Text('فتح التغريدة المرتبطة', style: TextStyle(fontWeight: FontWeight.w900)),
+                        label: const AppText('فتح التغريدة المرتبطة', style: TextStyle(fontWeight: FontWeight.w900)),
                       ),
                     ],
                   ],
@@ -924,7 +925,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       final row = await SupabaseService.getPostById(postId);
       if (row == null) {
         if (!mounted) return;
-        NotificationService.showTopNotification('لم يتم العثور على التغريدة');
+        NotificationService.showTopNotification(context.tr('لم يتم العثور على التغريدة'));
         return;
       }
       final post = _postFromServerRow(row);
@@ -948,7 +949,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       );
     } catch (e) {
       if (!mounted) return;
-      NotificationService.showTopNotification('تعذر فتح التغريدة: $e');
+      NotificationService.showTopNotification(context.tr('تعذر فتح التغريدة: $e'));
     }
   }
 
@@ -970,9 +971,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             const SizedBox(height: 130),
             Icon(Icons.notifications_none_rounded, size: 82, color: AppColors.purple.withValues(alpha: 0.9)),
             const SizedBox(height: 14),
-            const Center(child: Text('لا توجد إشعارات بعد', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900))),
+            const Center(child: AppText('لا توجد إشعارات بعد', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900))),
             const SizedBox(height: 6),
-            Text(
+            AppText(
               'ستظهر هنا الرسائل، المنشورات، والردود أو التغريدات التي يتم ذكرك فيها بـ @.',
               textAlign: TextAlign.center,
               style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted),
@@ -1009,18 +1010,18 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                         ),
                     ],
                   ),
-                  title: Text(n.title, style: const TextStyle(fontWeight: FontWeight.w900)),
+                  title: AppText(n.title, style: const TextStyle(fontWeight: FontWeight.w900)),
                   subtitle: Padding(
                     padding: const EdgeInsets.only(top: 4),
-                    child: Text(n.body, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, height: 1.35)),
+                    child: AppText(n.body, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, height: 1.35)),
                   ),
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(n.time, style: TextStyle(fontSize: 11, color: isDark ? AppColors.darkMuted : AppColors.lightMuted)),
+                      AppText(n.time, style: TextStyle(fontSize: 11, color: isDark ? AppColors.darkMuted : AppColors.lightMuted)),
                       const SizedBox(width: 4),
                       IconButton(
-                        tooltip: 'عرض الإشعار كامل',
+                        tooltip: context.tr('عرض الإشعار كامل'),
                         visualDensity: VisualDensity.compact,
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(minWidth: 32, minHeight: 32),

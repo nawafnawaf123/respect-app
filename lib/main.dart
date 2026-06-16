@@ -12,6 +12,7 @@ import 'services/notification_service.dart';
 import 'services/push_notification_service.dart';
 import 'firebase_options.dart';
 
+import 'app/app_language.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -32,8 +33,11 @@ Future<void> main() async {
   }
 
   runApp(
-    ChangeNotifierProvider(
-      create: (context) => ThemeProvider(),
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (context) => ThemeProvider()),
+        ChangeNotifierProvider(create: (context) => AppLanguageProvider()),
+      ],
       child: const RPStreamHubApp(),
     ),
   );

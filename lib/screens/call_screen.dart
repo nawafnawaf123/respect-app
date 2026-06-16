@@ -13,6 +13,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../services/call_service.dart';
 
+import '../app/app_language.dart';
 class CallScreen extends StatefulWidget {
   final String callId;
   final String peerName;
@@ -459,12 +460,12 @@ class _CallScreenState extends State<CallScreen> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('خطأ في المكالمة'),
-        content: Text(error),
+        title: const AppText('خطأ في المكالمة'),
+        content: AppText(error),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('إغلاق'),
+            child: const AppText('إغلاق'),
           ),
         ],
       ),
@@ -530,17 +531,17 @@ class _CallScreenState extends State<CallScreen> {
               ),
             ),
             const SizedBox(height: 22),
-            Text(
+            AppText(
               widget.peerName,
               textAlign: TextAlign.center,
               style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
-            Text(_callStatus, style: const TextStyle(color: Colors.white70, fontSize: 16)),
+            AppText(_callStatus, style: const TextStyle(color: Colors.white70, fontSize: 16)),
             if (_seconds > 0)
               Padding(
                 padding: const EdgeInsets.only(top: 6),
-                child: Text(_formatTime(), style: const TextStyle(color: Colors.white60, fontSize: 16)),
+                child: AppText(_formatTime(), style: const TextStyle(color: Colors.white60, fontSize: 16)),
               ),
           ],
         ),
@@ -564,13 +565,13 @@ class _CallScreenState extends State<CallScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(widget.peerName, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+              AppText(widget.peerName, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
               const SizedBox(height: 3),
-              Text(_seconds > 0 ? _formatTime() : _callStatus, style: const TextStyle(color: Colors.white70)),
+              AppText(_seconds > 0 ? _formatTime() : _callStatus, style: const TextStyle(color: Colors.white70)),
               if (_screenShareStatus.trim().isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(top: 3),
-                  child: Text(_screenShareStatus, style: const TextStyle(color: Color(0xFFBFA7FF), fontSize: 11, fontWeight: FontWeight.w700)),
+                  child: AppText(_screenShareStatus, style: const TextStyle(color: Color(0xFFBFA7FF), fontSize: 11, fontWeight: FontWeight.w700)),
                 ),
             ],
           ),
@@ -690,7 +691,7 @@ class _CallScreenState extends State<CallScreen> {
                           children: [
                             Icon(_screenSharing ? Icons.screen_share_rounded : Icons.hourglass_top_rounded, color: const Color(0xFFBFA7FF), size: 20),
                             const SizedBox(width: 8),
-                            Expanded(child: Text(_screenShareStatus, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12))),
+                            Expanded(child: AppText(_screenShareStatus, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12))),
                           ],
                         ),
                       ),
@@ -984,8 +985,8 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                   children: [
                     Icon(widget.video ? Icons.videocam_rounded : Icons.call_rounded, color: const Color(0xFFBFA7FF)),
                     const SizedBox(width: 9),
-                    Expanded(child: Text('${widget.groupName} • ${_formatTime()}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900))),
-                    Text('${tiles.length} أشخاص', style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+                    Expanded(child: AppText('${widget.groupName} • ${_formatTime()}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900))),
+                    AppText('${tiles.length} أشخاص', style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
                   ],
                 ),
               ),
@@ -1096,7 +1097,7 @@ class _GroupCallTile extends StatelessWidget {
                     children: [
                       CircleAvatar(radius: 42, backgroundImage: avatar, backgroundColor: Colors.white12, child: avatar == null ? const Icon(Icons.person_rounded, color: Colors.white, size: 42) : null),
                       const SizedBox(height: 12),
-                      Text(status, style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+                      AppText(status, style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
                     ],
                   ),
                 ),
@@ -1108,7 +1109,7 @@ class _GroupCallTile extends StatelessWidget {
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
                 decoration: BoxDecoration(color: Colors.black.withValues(alpha: .56), borderRadius: BorderRadius.circular(14)),
-                child: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 12)),
+                child: AppText(name, maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 12)),
               ),
             ),
           ],
@@ -1159,7 +1160,7 @@ class _CallButton extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 6),
-        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+        AppText(label, style: const TextStyle(color: Colors.white70, fontSize: 12)),
       ],
     );
   }

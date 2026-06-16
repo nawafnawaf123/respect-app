@@ -11,6 +11,7 @@ import '../services/notification_service.dart';
 import 'feed_screen.dart';
 import 'chat_screen.dart';
 
+import '../app/app_language.dart';
 void _scannerSafeIgnore() {}
 
 
@@ -207,7 +208,7 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
         _searchingPosts = false;
         _searchingUsers = false;
       });
-      NotificationService.showTopNotification('تعذر تحديث البحث: $e');
+      NotificationService.showTopNotification(context.tr('تعذر تحديث البحث: $e'));
     }
   }
 
@@ -258,7 +259,7 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
 
     final isFollowing = (_following[_currentUsername] ?? const <String>[]).contains(target);
     if (!isFollowing) {
-      NotificationService.showTopNotification('تابع المستخدم أولًا لتفعيل إشعاراته');
+      NotificationService.showTopNotification(context.tr('تابع المستخدم أولًا لتفعيل إشعاراته'));
       return;
     }
 
@@ -288,7 +289,7 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
           _postNotificationTargets.add(target);
         }
       });
-      NotificationService.showTopNotification('تعذر تحديث إشعارات المستخدم');
+      NotificationService.showTopNotification(context.tr('تعذر تحديث إشعارات المستخدم'));
     }
   }
 
@@ -552,7 +553,7 @@ class _ExploreHeader extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
+                const AppText(
                   'البحث',
                   style: TextStyle(
                     fontSize: 27,
@@ -561,7 +562,7 @@ class _ExploreHeader extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 2),
-                Text(
+                AppText(
                   'بحث ذكي بالتغريدات والهاشتاقات والمجتمعات',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -617,7 +618,7 @@ class _HeaderSoftBadge extends StatelessWidget {
         children: [
           Icon(icon, color: AppColors.purple, size: 16),
           const SizedBox(width: 5),
-          Text(
+          AppText(
             value > 99 ? '+99' : '$value',
             style: const TextStyle(
               color: AppColors.purple,
@@ -688,7 +689,7 @@ class _ExploreSearchField extends StatelessWidget {
               child: const Icon(Icons.search_rounded, color: AppColors.purple, size: 21),
             ),
             prefixIconConstraints: const BoxConstraints(minWidth: 52, minHeight: 38),
-            hintText: 'بحث ذكي: عصابة الكفن، سيرفر ريسبكت، #هاشتاق...',
+            hintText: context.tr('بحث ذكي: عصابة الكفن، سيرفر ريسبكت، #هاشتاق...'),
             hintStyle: TextStyle(color: hintColor, fontWeight: FontWeight.w700, fontSize: 13.5),
             suffixIcon: searching
                 ? const Padding(
@@ -768,7 +769,7 @@ class _TimeFilterStrip extends StatelessWidget {
                 children: [
                   Icon(icon, size: 15.5, color: active ? Colors.white : AppColors.purple),
                   const SizedBox(width: 6),
-                  Text(
+                  AppText(
                     label,
                     style: TextStyle(
                       color: active ? Colors.white : (isDark ? Colors.white70 : const Color(0xFF4A4254)),
@@ -824,10 +825,10 @@ class _ExploreTabBar extends StatelessWidget {
         unselectedLabelColor: isDark ? Colors.white60 : const Color(0xFF6E6478),
         labelStyle: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12),
         unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12),
-        tabs: const [
-          Tab(child: Text('التغريدات')),
-          Tab(child: Text('الأشخاص')),
-          Tab(child: Text('المجتمعات')),
+        tabs: [
+          Tab(child: AppText('التغريدات')),
+          Tab(child: AppText('الأشخاص')),
+          Tab(child: AppText('المجتمعات')),
         ],
       ),
     );
@@ -929,7 +930,7 @@ class _SmartSearchNotice extends StatelessWidget {
           Icon(isHash ? Icons.tag_rounded : Icons.auto_awesome_rounded, color: AppColors.purple, size: 19),
           const SizedBox(width: 8),
           Expanded(
-            child: Text(
+            child: AppText(
               isHash
                   ? 'يعرض كل التغريدات المرتبطة بالهاشتاق $clean'
                   : 'بحث ذكي عن: $clean — يطابق الكلمات القريبة والمواضيع المرتبطة',
@@ -978,13 +979,13 @@ class _TrendingHashtagsSection extends StatelessWidget {
               ),
               const SizedBox(width: 10),
               const Expanded(
-                child: Text(
+                child: AppText(
                   'الهاشتاقات المتصدرة',
                   style: TextStyle(fontWeight: FontWeight.w900, fontSize: 15.5),
                 ),
               ),
               if (hashtags.isNotEmpty)
-                Text(
+                AppText(
                   '${hashtags.length}',
                   style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w900),
                 ),
@@ -992,7 +993,7 @@ class _TrendingHashtagsSection extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           if (hashtags.isEmpty)
-            Text(
+            AppText(
               'لما يكتب المستخدمون هاشتاقات داخل التغريدات ستظهر هنا بشكل مرتب.',
               style: TextStyle(color: muted, height: 1.45, fontWeight: FontWeight.w700, fontSize: 12.5),
             )
@@ -1023,9 +1024,9 @@ class _TrendingHashtagsSection extends StatelessWidget {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text(tag, style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w900)),
+                          AppText(tag, style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w900)),
                           const SizedBox(width: 7),
-                          Text(
+                          AppText(
                             '$count',
                             style: TextStyle(color: muted, fontSize: 11, fontWeight: FontWeight.w900),
                           ),
@@ -1111,7 +1112,7 @@ class _ExplorePostCard extends StatelessWidget {
                     Row(
                       children: [
                         Flexible(
-                          child: Text(
+                          child: AppText(
                             name,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -1125,7 +1126,7 @@ class _ExplorePostCard extends StatelessWidget {
                       ],
                     ),
                     const SizedBox(height: 2),
-                    Text(
+                    AppText(
                       '$username · ${_formatTime((post['created_at'] ?? post['time'] ?? '').toString())}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -1186,7 +1187,7 @@ class _ExplorePostCard extends StatelessWidget {
                 children: [
                   Icon(Icons.graphic_eq_rounded, color: AppColors.purple, size: 19),
                   SizedBox(width: 7),
-                  Text('تسجيل صوتي', style: TextStyle(color: AppColors.purple, fontWeight: FontWeight.w900, fontSize: 12.5)),
+                  AppText('تسجيل صوتي', style: TextStyle(color: AppColors.purple, fontWeight: FontWeight.w900, fontSize: 12.5)),
                 ],
               ),
             ),
@@ -1458,14 +1459,14 @@ class _HashtagPostsScreenState extends State<HashtagPostsScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
+                AppText(
                   _hashtag,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900, letterSpacing: -.4),
                 ),
                 const SizedBox(height: 2),
-                Text(
+                AppText(
                   _loading ? 'جاري تحميل التغريدات...' : '${_posts.length} تغريدة تحتوي على هذا الهاشتاق',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -1664,13 +1665,13 @@ class _EmptyExploreState extends StatelessWidget {
               child: Icon(icon, color: AppColors.purple, size: 34),
             ),
             const SizedBox(height: 14),
-            Text(
+            AppText(
               title,
               textAlign: TextAlign.center,
               style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 17),
             ),
             const SizedBox(height: 7),
-            Text(
+            AppText(
               subtitle,
               textAlign: TextAlign.center,
               style: TextStyle(color: muted, fontWeight: FontWeight.w700, height: 1.45, fontSize: 12.5),
@@ -1877,7 +1878,7 @@ class _UserResultCard extends StatelessWidget {
                     Row(
                       children: [
                         Flexible(
-                          child: Text(
+                          child: AppText(
                             name,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -1888,10 +1889,10 @@ class _UserResultCard extends StatelessWidget {
                       ],
                     ),
                     const SizedBox(height: 2),
-                    Row(children: [Expanded(child: Text(username, style: TextStyle(color: muted, fontWeight: FontWeight.w800, fontSize: 12.5))), if (tier != 'free') Container(padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3), decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: .10), borderRadius: BorderRadius.circular(999)), child: Text(SupabaseService.tierDisplayName(tier), style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w900, fontSize: 10))) ]),
+                    Row(children: [Expanded(child: AppText(username, style: TextStyle(color: muted, fontWeight: FontWeight.w800, fontSize: 12.5))), if (tier != 'free') Container(padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3), decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: .10), borderRadius: BorderRadius.circular(999)), child: AppText(SupabaseService.tierDisplayName(tier), style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w900, fontSize: 10))) ]),
                     if (bio.trim().isNotEmpty) ...[
                       const SizedBox(height: 5),
-                      Text(
+                      AppText(
                         bio,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
@@ -1903,7 +1904,7 @@ class _UserResultCard extends StatelessWidget {
                         ),
                       ),
                     ],
-                    if (tier != 'free') ...[const SizedBox(height: 5), Text(powerText, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: AppColors.purple.withValues(alpha: .92), fontWeight: FontWeight.w800, fontSize: 11.5))],
+                    if (tier != 'free') ...[const SizedBox(height: 5), AppText(powerText, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: AppColors.purple.withValues(alpha: .92), fontWeight: FontWeight.w800, fontSize: 11.5))],
                   ],
                 ),
               ),
@@ -1917,7 +1918,7 @@ class _UserResultCard extends StatelessWidget {
                       children: [
                         _CircleActionButton(
                           icon: Icons.chat_bubble_rounded,
-                          tooltip: 'دردشة',
+                          tooltip: context.tr('دردشة'),
                           isDark: isDark,
                           onTap: () => Navigator.of(context).push(
                             MaterialPageRoute(
@@ -1933,7 +1934,7 @@ class _UserResultCard extends StatelessWidget {
                           const SizedBox(width: 6),
                           _CircleActionButton(
                             icon: notificationTargets.contains(username) ? Icons.notifications_active_rounded : Icons.notifications_none_rounded,
-                            tooltip: notificationTargets.contains(username) ? 'إيقاف إشعارات التغريدات' : 'تفعيل إشعارات التغريدات',
+                            tooltip: notificationTargets.contains(username) ? context.tr('إيقاف إشعارات التغريدات') : context.tr('تفعيل إشعارات التغريدات'),
                             isDark: isDark,
                             active: notificationTargets.contains(username),
                             onTap: () => onTogglePostNotification(username),
@@ -2061,7 +2062,7 @@ class _CommunitiesResultsList extends StatelessWidget {
                         ],
                       ),
                       child: Center(
-                        child: Text(
+                        child: AppText(
                           c.name.trim().isEmpty ? 'R' : c.name.characters.first,
                           style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 21),
                         ),
@@ -2072,14 +2073,14 @@ class _CommunitiesResultsList extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
+                          AppText(
                             c.name,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16.2),
                           ),
                           const SizedBox(height: 4),
-                          Text(
+                          AppText(
                             c.description.isEmpty ? 'مجتمع Respect App' : c.description,
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
@@ -2139,7 +2140,7 @@ class _FollowButton extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 13),
           minimumSize: const Size(0, 34),
         ),
-        child: Text(
+        child: AppText(
           isFollowing ? 'متابَع' : 'متابعة',
           style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12),
         ),
@@ -2172,7 +2173,7 @@ class _MiniStatChip extends StatelessWidget {
         children: [
           Icon(icon, size: 13, color: AppColors.purple),
           const SizedBox(width: 4),
-          Text(
+          AppText(
             text,
             style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w900, fontSize: 11),
           ),

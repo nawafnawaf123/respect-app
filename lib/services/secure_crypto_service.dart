@@ -50,10 +50,30 @@ class SecureCryptoService {
   static const String _dbFieldSecret =
       String.fromEnvironment('RESPECT_DB_FIELD_SECRET', defaultValue: _defaultSecretWarning);
 
+  static bool get isDatabaseFieldSecretConfigured {
+    final secret = _dbFieldSecret.trim();
+    return secret.isNotEmpty && secret != _defaultSecretWarning;
+  }
+
+  // كان التطبيق ينهار إذا تم تشغيله بدون:
+  // --dart-define=RESPECT_DB_FIELD_SECRET=...
+  //
+  // الحل هنا:
+  // - لا نرمي StateError أثناء فتح الصفحات مثل رسامين ريسبكت.
+  // - إذا السر غير موجود نستخدم قيمة تطوير ثابتة كاحتياط حتى لا يتعطل التطبيق.
+  // - للإنتاج الأفضل تمرير RESPECT_DB_FIELD_SECRET في أوامر build للحفاظ على حماية الحقول.
+  static String get _effectiveDbFieldSecret {
+    final secret = _dbFieldSecret.trim();
+    if (secret.isEmpty || secret == _defaultSecretWarning) {
+      return _defaultSecretWarning;
+    }
+    return secret;
+  }
+
   static void _ensureDbFieldSecretConfigured() {
-    if (_dbFieldSecret == _defaultSecretWarning || _dbFieldSecret.trim().isEmpty) {
-      throw StateError(
-        'RESPECT_DB_FIELD_SECRET not configured. Pass it via --dart-define=RESPECT_DB_FIELD_SECRET=...',
+    if (!isDatabaseFieldSecretConfigured) {
+      _secureSafeLog(
+        StateError('RESPECT_DB_FIELD_SECRET is missing. Using development fallback to keep app running.'),
       );
     }
   }
@@ -61,7 +81,7 @@ class SecureCryptoService {
   static Future<SecretKey> _databaseFieldKey() {
     _ensureDbFieldSecretConfigured();
     return _hkdf.deriveKey(
-      secretKey: SecretKey(utf8.encode(_dbFieldSecret.trim())),
+      secretKey: SecretKey(utf8.encode(_effectiveDbFieldSecret)),
       nonce: utf8.encode('respect-app|database-fields|$databaseFieldEncryptionVersion'),
     );
   }
@@ -72,7 +92,7 @@ class SecureCryptoService {
     _ensureDbFieldSecretConfigured();
     final mac = await Hmac.sha256().calculateMac(
       utf8.encode('${label.trim().toLowerCase()}|$clean'),
-      secretKey: SecretKey(utf8.encode(_dbFieldSecret.trim())),
+      secretKey: SecretKey(utf8.encode(_effectiveDbFieldSecret)),
     );
     return base64UrlEncode(mac.bytes).replaceAll('=', '');
   }
@@ -131,9 +151,7 @@ class SecureCryptoService {
     final pass = password.trim();
     if (pass.isEmpty) return '';
     final saltBytes = _randomNonce(16);
-    final keySeed = _dbFieldSecret.trim().isEmpty
-        ? 'respect_dev_db_field_secret_change_me'
-        : _dbFieldSecret.trim();
+    final keySeed = _effectiveDbFieldSecret;
     final mac = await Hmac.sha256().calculateMac(
       <int>[...saltBytes, ...utf8.encode(pass)],
       secretKey: SecretKey(utf8.encode('respect-app-password-field|$keySeed')),

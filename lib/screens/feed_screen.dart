@@ -25,6 +25,7 @@ import '../services/notification_service.dart';
 import 'chat_screen.dart';
 import 'search_screen.dart';
 
+import '../app/app_language.dart';
 void _scannerSafeIgnore([Object? error, StackTrace? stackTrace]) {}
 
 
@@ -744,8 +745,7 @@ class _FeedScreenState extends State<FeedScreen> {
     unawaited(_savePosts());
 
     if (removed) {
-      NotificationService.showTopNotification(
-        'تم حذف التغريدة بواسطة Respect AI',
+      NotificationService.showTopNotification(context.tr('تم حذف التغريدة بواسطة Respect AI'),
         title: 'مراجعة المحتوى',
         icon: Icons.auto_delete_rounded,
         accentColor: AppColors.danger,
@@ -868,7 +868,7 @@ class _FeedScreenState extends State<FeedScreen> {
       final post = await SupabaseService.createRespectAiDailyPostIfNeeded();
       if (post != null && mounted) {
         await _loadPosts();
-        NotificationService.showTopSuccess('Respect AI نشر سؤال اليوم من سؤال متكرر');
+        NotificationService.showTopSuccess(context.tr('Respect AI نشر سؤال اليوم من سؤال متكرر'));
       }
     } catch (e) {
       assert(() { _scannerSafeIgnore(); return true; }());
@@ -1351,7 +1351,7 @@ class _FeedScreenState extends State<FeedScreen> {
       });
     } catch (e) {
       if (!mounted) return;
-      NotificationService.showTopNotification('تعذر تحميل المنشورات من الخادم: $e');
+      NotificationService.showTopNotification(context.tr('تعذر تحميل المنشورات من الخادم: $e'));
     } finally {
       _loadingPosts = false;
       if (mounted) setState(() => _loadingMorePosts = false);
@@ -1406,7 +1406,7 @@ class _FeedScreenState extends State<FeedScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _loadingMorePosts = false);
-      NotificationService.showTopNotification('تعذر تحميل المزيد: $e');
+      NotificationService.showTopNotification(context.tr('تعذر تحميل المزيد: $e'));
     }
   }
 
@@ -1467,7 +1467,7 @@ class _FeedScreenState extends State<FeedScreen> {
         _showRefreshAvatars = false;
         _refreshAvatars.clear();
       });
-      NotificationService.showTopNotification('الفيد محدث ولا توجد تغريدات جديدة');
+      NotificationService.showTopNotification(context.tr('الفيد محدث ولا توجد تغريدات جديدة'));
       return;
     }
 
@@ -1620,14 +1620,14 @@ class _FeedScreenState extends State<FeedScreen> {
                 const SizedBox(height: 16),
                 ListTile(
                   leading: Icon(Icons.repeat_rounded, color: post.isReposted ? AppColors.purple : AppColors.purple),
-                  title: Text(post.isReposted ? 'تمت إعادة النشر مسبقًا' : 'إعادة نشر', style: const TextStyle(fontWeight: FontWeight.w900)),
-                  subtitle: Text(post.isReposted ? 'لا يمكن إعادة نشر نفس التغريدة أكثر من مرة' : 'إظهار التغريدة لمتابعيك', style: TextStyle(color: muted, fontSize: 12)),
+                  title: AppText(post.isReposted ? 'تمت إعادة النشر مسبقًا' : 'إعادة نشر', style: const TextStyle(fontWeight: FontWeight.w900)),
+                  subtitle: AppText(post.isReposted ? 'لا يمكن إعادة نشر نفس التغريدة أكثر من مرة' : 'إظهار التغريدة لمتابعيك', style: TextStyle(color: muted, fontSize: 12)),
                   onTap: () => Navigator.pop(context, 'repost'),
                 ),
                 ListTile(
                   leading: const Icon(Icons.format_quote_rounded, color: AppColors.purple),
-                  title: const Text('اقتباس', style: TextStyle(fontWeight: FontWeight.w900)),
-                  subtitle: Text('اكتب تعليقك مع التغريدة', style: TextStyle(color: muted, fontSize: 12)),
+                  title: const AppText('اقتباس', style: TextStyle(fontWeight: FontWeight.w900)),
+                  subtitle: AppText('اكتب تعليقك مع التغريدة', style: TextStyle(color: muted, fontSize: 12)),
                   onTap: () => Navigator.pop(context, 'quote'),
                 ),
               ],
@@ -1731,7 +1731,7 @@ class _FeedScreenState extends State<FeedScreen> {
         }
         _updateLoadedPostInteraction(post.id, isReposted: previousReposted, reposts: previousReposts);
       });
-      NotificationService.showTopNotification('تعذر تحديث إعادة النشر على السيرفر');
+      NotificationService.showTopNotification(context.tr('تعذر تحديث إعادة النشر على السيرفر'));
     } finally {
       _pendingRepostPostIds.remove(post.id);
     }
@@ -1759,13 +1759,13 @@ class _FeedScreenState extends State<FeedScreen> {
                 const SizedBox(height: 16),
                 ListTile(
                   leading: const Icon(Icons.chat_rounded, color: AppColors.success),
-                  title: const Text('إرسال للواتس', style: TextStyle(fontWeight: FontWeight.w900)),
-                  subtitle: const Text('سيتم نسخ نص التغريدة لتلصقه في واتساب'),
+                  title: const AppText('إرسال للواتس', style: TextStyle(fontWeight: FontWeight.w900)),
+                  subtitle: const AppText('سيتم نسخ نص التغريدة لتلصقه في واتساب'),
                   onTap: () => Navigator.pop(context, 'whatsapp'),
                 ),
                 ListTile(
                   leading: const Icon(Icons.link_rounded, color: AppColors.purple),
-                  title: const Text('نسخ رابط التغريدة', style: TextStyle(fontWeight: FontWeight.w900)),
+                  title: const AppText('نسخ رابط التغريدة', style: TextStyle(fontWeight: FontWeight.w900)),
                   onTap: () => Navigator.pop(context, 'copy'),
                 ),
               ],
@@ -1846,7 +1846,7 @@ class _FeedScreenState extends State<FeedScreen> {
     final submitted = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(title, style: const TextStyle(fontWeight: FontWeight.w900)),
+        title: AppText(title, style: const TextStyle(fontWeight: FontWeight.w900)),
         content: StatefulBuilder(
           builder: (context, setLocal) => SingleChildScrollView(
             child: Column(
@@ -1854,14 +1854,14 @@ class _FeedScreenState extends State<FeedScreen> {
               children: [
                 DropdownButtonFormField<String>(
                   value: reason,
-                  decoration: const InputDecoration(labelText: 'نوع البلاغ'),
+                  decoration: InputDecoration(labelText: context.tr('نوع البلاغ')),
                   items: const [
-                    DropdownMenuItem(value: 'محتوى مخالف', child: Text('محتوى مخالف')),
-                    DropdownMenuItem(value: 'سرقة محتوى', child: Text('سرقة محتوى')),
-                    DropdownMenuItem(value: 'سبام أو إزعاج', child: Text('سبام أو إزعاج')),
-                    DropdownMenuItem(value: 'تحرش أو إساءة', child: Text('تحرش أو إساءة')),
-                    DropdownMenuItem(value: 'معلومات مضللة', child: Text('معلومات مضللة')),
-                    DropdownMenuItem(value: 'بلاغ مخصص', child: Text('بلاغ مخصص')),
+                    DropdownMenuItem(value: 'محتوى مخالف', child: AppText('محتوى مخالف')),
+                    DropdownMenuItem(value: 'سرقة محتوى', child: AppText('سرقة محتوى')),
+                    DropdownMenuItem(value: 'سبام أو إزعاج', child: AppText('سبام أو إزعاج')),
+                    DropdownMenuItem(value: 'تحرش أو إساءة', child: AppText('تحرش أو إساءة')),
+                    DropdownMenuItem(value: 'معلومات مضللة', child: AppText('معلومات مضللة')),
+                    DropdownMenuItem(value: 'بلاغ مخصص', child: AppText('بلاغ مخصص')),
                   ],
                   onChanged: (v) => setLocal(() => reason = v ?? reason),
                 ),
@@ -1871,8 +1871,8 @@ class _FeedScreenState extends State<FeedScreen> {
                   maxLines: 6,
                   onChanged: (value) => details = value,
                   decoration: InputDecoration(
-                    labelText: reason == 'بلاغ مخصص' ? 'اكتب البلاغ الذي تريده' : 'اشرح البلاغ بالتفصيل',
-                    hintText: reason == 'بلاغ مخصص' ? 'مثال: اشرح للمشرفين المشكلة كاملة...' : 'اختياري، لكن يساعد المشرفين والذكاء الاصطناعي',
+                    labelText: reason == 'بلاغ مخصص' ? context.tr('اكتب البلاغ الذي تريده') : context.tr('اشرح البلاغ بالتفصيل'),
+                    hintText: reason == 'بلاغ مخصص' ? context.tr('مثال: اشرح للمشرفين المشكلة كاملة...') : context.tr('اختياري، لكن يساعد المشرفين والذكاء الاصطناعي'),
                     border: const OutlineInputBorder(),
                   ),
                 ),
@@ -1881,15 +1881,15 @@ class _FeedScreenState extends State<FeedScreen> {
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('إلغاء')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('إرسال')),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const AppText('إلغاء')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const AppText('إرسال')),
         ],
       ),
     );
     details = details.trim();
     if (submitted != true) return null;
     if (reason == 'بلاغ مخصص' && details.isEmpty) {
-      NotificationService.showTopError('اكتب تفاصيل البلاغ المخصص أولاً');
+      NotificationService.showTopError(context.tr('اكتب تفاصيل البلاغ المخصص أولاً'));
       return null;
     }
     return {'reason': reason, 'details': details};
@@ -1972,8 +1972,7 @@ class _FeedScreenState extends State<FeedScreen> {
         );
       } catch (e, st) { _logIgnoredError(e, st); }
       if (!valid && SupabaseService.displayUsername(report.reporterUsername) == SupabaseService.displayUsername(_profileUsername)) {
-        NotificationService.showTopNotification(
-          'راجعنا البلاغ داخل ${community.name}، والتغريدة سليمة ولا يوجد عليها إجراء.',
+        NotificationService.showTopNotification(context.tr('راجعنا البلاغ داخل ${community.name}، والتغريدة سليمة ولا يوجد عليها إجراء.'),
           title: 'نتيجة البلاغ',
           icon: Icons.verified_user_rounded,
           accentColor: AppColors.success,
@@ -2012,19 +2011,19 @@ class _FeedScreenState extends State<FeedScreen> {
     } catch (e, st) { _logIgnoredError(e, st); }
     unawaited(_reviewCommunityReportFromFeedWithAi(community, report, post));
     if (!mounted) return;
-    NotificationService.showTopSuccess('تم إرسال البلاغ للمشرفين');
+    NotificationService.showTopSuccess(context.tr('تم إرسال البلاغ للمشرفين'));
   }
 
   Future<void> _toggleCommunityPostPinFromFeed(CityCommunity community, CityPost post) async {
     final isMod = community.ownerUsername == _profileUsername || community.moderators.contains(_profileUsername);
     if (!isMod) {
-      NotificationService.showTopError('هذا الخيار للمشرفين فقط');
+      NotificationService.showTopError(context.tr('هذا الخيار للمشرفين فقط'));
       return;
     }
 
     final pinned = community.posts.where((p) => p.pinnedInCommunity && !p.hiddenFromCommunity).length;
     if (!post.pinnedInCommunity && pinned >= 3) {
-      NotificationService.showTopError('مسموح 3 تغريدات مثبتة فقط');
+      NotificationService.showTopError(context.tr('مسموح 3 تغريدات مثبتة فقط'));
       return;
     }
 
@@ -2067,29 +2066,29 @@ class _FeedScreenState extends State<FeedScreen> {
                 const SizedBox(height: 12),
                 ListTile(
                   leading: const Icon(Icons.flag_rounded, color: Colors.orange),
-                  title: const Text('إبلاغ المشرفين', style: TextStyle(fontWeight: FontWeight.w900)),
-                  subtitle: Text('سيظهر البلاغ مباشرة داخل تبويب البلاغات في المجتمع', style: TextStyle(color: muted, fontSize: 12)),
+                  title: const AppText('إبلاغ المشرفين', style: TextStyle(fontWeight: FontWeight.w900)),
+                  subtitle: AppText('سيظهر البلاغ مباشرة داخل تبويب البلاغات في المجتمع', style: TextStyle(color: muted, fontSize: 12)),
                   onTap: () => Navigator.pop(sheetContext, 'report'),
                 ),
                 if (community.ownerUsername == _profileUsername || community.moderators.contains(_profileUsername))
                   ListTile(
                     leading: const Icon(Icons.push_pin_rounded, color: AppColors.purple),
-                    title: Text(
+                    title: AppText(
                       post.pinnedInCommunity ? 'إلغاء تثبيت التغريدة' : 'تثبيت التغريدة',
                       style: const TextStyle(fontWeight: FontWeight.w900),
                     ),
-                    subtitle: Text('تظهر التغريدة أعلى تبويب المجتمع', style: TextStyle(color: muted, fontSize: 12)),
+                    subtitle: AppText('تظهر التغريدة أعلى تبويب المجتمع', style: TextStyle(color: muted, fontSize: 12)),
                     onTap: () => Navigator.pop(sheetContext, 'pin'),
                   ),
                 ListTile(
                   leading: const Icon(Icons.open_in_new_rounded, color: AppColors.purple),
-                  title: const Text('فتح المجتمع', style: TextStyle(fontWeight: FontWeight.w900)),
-                  subtitle: Text('انتقل إلى صفحة المجتمع والإدارة', style: TextStyle(color: muted, fontSize: 12)),
+                  title: const AppText('فتح المجتمع', style: TextStyle(fontWeight: FontWeight.w900)),
+                  subtitle: AppText('انتقل إلى صفحة المجتمع والإدارة', style: TextStyle(color: muted, fontSize: 12)),
                   onTap: () => Navigator.pop(sheetContext, 'open'),
                 ),
                 ListTile(
                   leading: const Icon(Icons.more_horiz_rounded, color: AppColors.purple),
-                  title: const Text('خيارات التغريدة العامة', style: TextStyle(fontWeight: FontWeight.w900)),
+                  title: const AppText('خيارات التغريدة العامة', style: TextStyle(fontWeight: FontWeight.w900)),
                   onTap: () => Navigator.pop(sheetContext, 'general'),
                 ),
               ],
@@ -2165,8 +2164,7 @@ class _FeedScreenState extends State<FeedScreen> {
         unawaited(_savePosts());
 
         if (mounted) {
-          NotificationService.showTopNotification(
-            'تم قبول البلاغ وحذف التغريدة. السبب: $cleanReason',
+          NotificationService.showTopNotification(context.tr('تم قبول البلاغ وحذف التغريدة. السبب: $cleanReason'),
             title: 'Respect AI',
             icon: Icons.gpp_good_rounded,
             accentColor: AppColors.danger,
@@ -2174,8 +2172,7 @@ class _FeedScreenState extends State<FeedScreen> {
         }
       } else {
         if (mounted) {
-          NotificationService.showTopNotification(
-            'راجعنا البلاغ، والتغريدة سليمة ولا يوجد عليها إجراء.',
+          NotificationService.showTopNotification(context.tr('راجعنا البلاغ، والتغريدة سليمة ولا يوجد عليها إجراء.'),
             title: 'نتيجة البلاغ',
             icon: Icons.verified_user_rounded,
             accentColor: AppColors.success,
@@ -2215,11 +2212,11 @@ class _FeedScreenState extends State<FeedScreen> {
               children: [
                 Center(child: Container(width: 46, height: 5, decoration: BoxDecoration(color: isDark ? AppColors.darkBorder : AppColors.lightBorder, borderRadius: BorderRadius.circular(99)))),
                 const SizedBox(height: 16),
-                const Text('الإبلاغ عن التغريدة', textAlign: TextAlign.center, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+                const AppText('الإبلاغ عن التغريدة', textAlign: TextAlign.center, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
                 const SizedBox(height: 12),
                 ...reasons.map((r) => ListTile(
                   leading: Icon(r['icon'] as IconData, color: AppColors.danger),
-                  title: Text(r['title'] as String, style: const TextStyle(fontWeight: FontWeight.w800)),
+                  title: AppText(r['title'] as String, style: const TextStyle(fontWeight: FontWeight.w800)),
                   onTap: () => Navigator.pop(context, r['title'] as String),
                 )),
               ],
@@ -2236,22 +2233,22 @@ class _FeedScreenState extends State<FeedScreen> {
       final ok = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
-          title: const Text('بلاغ مخصص', style: TextStyle(fontWeight: FontWeight.w900)),
+          title: const AppText('بلاغ مخصص', style: TextStyle(fontWeight: FontWeight.w900)),
           content: TextField(
             minLines: 3,
             maxLines: 6,
             onChanged: (value) => reportDetails = value,
-            decoration: const InputDecoration(labelText: 'اكتب البلاغ الذي تريده', border: OutlineInputBorder()),
+            decoration: InputDecoration(labelText: context.tr('اكتب البلاغ الذي تريده'), border: OutlineInputBorder()),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('إلغاء')),
-            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('إرسال')),
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const AppText('إلغاء')),
+            FilledButton(onPressed: () => Navigator.pop(context, true), child: const AppText('إرسال')),
           ],
         ),
       );
       reportDetails = reportDetails.trim();
       if (ok != true || reportDetails.isEmpty) {
-        NotificationService.showTopError('اكتب تفاصيل البلاغ المخصص أولاً');
+        NotificationService.showTopError(context.tr('اكتب تفاصيل البلاغ المخصص أولاً'));
         return;
       }
     }
@@ -2301,7 +2298,7 @@ class _FeedScreenState extends State<FeedScreen> {
     reports.insert(0, localReport);
     await prefs.setString(_postReportsKey, jsonEncode(reports));
     if (!mounted) return;
-    NotificationService.showTopNotification('تم إرسال البلاغ للإدارة وبدأت مراجعة Respect AI');
+    NotificationService.showTopNotification(context.tr('تم إرسال البلاغ للإدارة وبدأت مراجعة Respect AI'));
     unawaited(_reviewNormalReportWithAi(
       report: localReport,
       post: post,
@@ -2321,7 +2318,7 @@ class _FeedScreenState extends State<FeedScreen> {
 
     Future<void> showSelfMessage(String action) async {
       if (!mounted) return;
-      NotificationService.showTopNotification('لا يمكنك $action حسابك أنت');
+      NotificationService.showTopNotification(context.tr('لا يمكنك $action حسابك أنت'));
     }
 
     await showModalBottomSheet<void>(
@@ -2363,13 +2360,13 @@ class _FeedScreenState extends State<FeedScreen> {
                     style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
                   ),
                 ),
-                Text(authorUsername, textAlign: TextAlign.center, style: TextStyle(color: mutedText)),
+                AppText(authorUsername, textAlign: TextAlign.center, style: TextStyle(color: mutedText)),
                 const SizedBox(height: 12),
                 if (isMe) ...[
                   ListTile(
                     leading: const Icon(Icons.edit_rounded, color: AppColors.purple),
-                    title: const Text('تعديل التغريدة'),
-                    subtitle: Text('تعديل النص وسيظهر فورًا في الفيد', style: TextStyle(color: mutedText, fontSize: 12)),
+                    title: const AppText('تعديل التغريدة'),
+                    subtitle: AppText('تعديل النص وسيظهر فورًا في الفيد', style: TextStyle(color: mutedText, fontSize: 12)),
                     onTap: () async {
                       Navigator.pop(context);
                       await _editOwnPostFromFeed(post);
@@ -2377,8 +2374,8 @@ class _FeedScreenState extends State<FeedScreen> {
                   ),
                   ListTile(
                     leading: const Icon(Icons.delete_rounded, color: AppColors.danger),
-                    title: const Text('حذف التغريدة'),
-                    subtitle: Text('حذفها من البروفايل والفيد والسيرفر', style: TextStyle(color: mutedText, fontSize: 12)),
+                    title: const AppText('حذف التغريدة'),
+                    subtitle: AppText('حذفها من البروفايل والفيد والسيرفر', style: TextStyle(color: mutedText, fontSize: 12)),
                     onTap: () async {
                       Navigator.pop(context);
                       await _deleteOwnPostFromFeed(post);
@@ -2391,8 +2388,8 @@ class _FeedScreenState extends State<FeedScreen> {
                     isMuted ? Icons.volume_up_rounded : Icons.volume_off_rounded,
                     color: isMe ? mutedText : AppColors.purple,
                   ),
-                  title: Text(isMuted ? 'إلغاء كتم المستخدم' : 'كتم المستخدم'),
-                  subtitle: Text(
+                  title: AppText(isMuted ? 'إلغاء كتم المستخدم' : 'كتم المستخدم'),
+                  subtitle: AppText(
                     isMe ? 'غير متاح على حسابك' : 'إخفاء تغريدات هذا المستخدم من الصفحة',
                     style: TextStyle(color: mutedText, fontSize: 12),
                   ),
@@ -2419,8 +2416,8 @@ class _FeedScreenState extends State<FeedScreen> {
                     isBlocked ? Icons.lock_open_rounded : Icons.block_rounded,
                     color: isMe ? mutedText : AppColors.danger,
                   ),
-                  title: Text(isBlocked ? 'إلغاء حظر المستخدم' : 'حظر المستخدم'),
-                  subtitle: Text(
+                  title: AppText(isBlocked ? 'إلغاء حظر المستخدم' : 'حظر المستخدم'),
+                  subtitle: AppText(
                     isMe ? 'غير متاح على حسابك' : 'إخفاء المستخدم وتغريداته محليًا من التطبيق',
                     style: TextStyle(color: mutedText, fontSize: 12),
                   ),
@@ -2444,8 +2441,8 @@ class _FeedScreenState extends State<FeedScreen> {
                 ),
                 ListTile(
                   leading: const Icon(Icons.share_rounded, color: AppColors.purple),
-                  title: const Text('مشاركة التغريدة'),
-                  subtitle: Text('نسخ الرابط أو إرسال التغريدة', style: TextStyle(color: mutedText, fontSize: 12)),
+                  title: const AppText('مشاركة التغريدة'),
+                  subtitle: AppText('نسخ الرابط أو إرسال التغريدة', style: TextStyle(color: mutedText, fontSize: 12)),
                   onTap: () async {
                     Navigator.pop(context);
                     await _sharePost(post);
@@ -2453,8 +2450,8 @@ class _FeedScreenState extends State<FeedScreen> {
                 ),
                 ListTile(
                   leading: const Icon(Icons.report_rounded, color: AppColors.danger),
-                  title: const Text('الإبلاغ عن التغريدة'),
-                  subtitle: Text('إرسال البلاغ إلى لوحة الإدارة', style: TextStyle(color: mutedText, fontSize: 12)),
+                  title: const AppText('الإبلاغ عن التغريدة'),
+                  subtitle: AppText('إرسال البلاغ إلى لوحة الإدارة', style: TextStyle(color: mutedText, fontSize: 12)),
                   onTap: () async {
                     Navigator.pop(context);
                     await _reportPost(post);
@@ -2515,7 +2512,7 @@ class _FeedScreenState extends State<FeedScreen> {
 
     final following = (_following[me] ?? const <String>[]).contains(target);
     if (!following) {
-      NotificationService.showTopNotification('تابع المستخدم أولًا لتفعيل إشعاراته');
+      NotificationService.showTopNotification(context.tr('تابع المستخدم أولًا لتفعيل إشعاراته'));
       return;
     }
 
@@ -2545,7 +2542,7 @@ class _FeedScreenState extends State<FeedScreen> {
           _postNotificationTargets.add(target);
         }
       });
-      NotificationService.showTopNotification('تعذر تحديث إشعارات المستخدم');
+      NotificationService.showTopNotification(context.tr('تعذر تحديث إشعارات المستخدم'));
     }
   }
 
@@ -2854,7 +2851,7 @@ class _FeedScreenState extends State<FeedScreen> {
           likes: previousLikes,
         );
       });
-      NotificationService.showTopNotification('تعذر تحديث اللايك على السيرفر');
+      NotificationService.showTopNotification(context.tr('تعذر تحديث اللايك على السيرفر'));
     } finally {
       _pendingLikePostIds.remove(post.id);
     }
@@ -2985,7 +2982,7 @@ class _FeedScreenState extends State<FeedScreen> {
     } catch (_) {
       await _savePosts();
       if (!mounted) return;
-      NotificationService.showTopNotification('تم تحديث الحفظ محليًا، وتعذرت مزامنته مع السيرفر');
+      NotificationService.showTopNotification(context.tr('تم تحديث الحفظ محليًا، وتعذرت مزامنته مع السيرفر'));
     } finally {
       _pendingSavePostIds.remove(post.id);
     }
@@ -3149,7 +3146,7 @@ class _FeedScreenState extends State<FeedScreen> {
             );
             if (mounted) {
               await _loadPosts();
-              NotificationService.showTopSuccess('Respect AI رد على التغريدة');
+              NotificationService.showTopSuccess(context.tr('Respect AI رد على التغريدة'));
             }
           } catch (e) {
             assert(() { _scannerSafeIgnore(); return true; }());
@@ -3165,7 +3162,7 @@ class _FeedScreenState extends State<FeedScreen> {
     } catch (e) {
       _hidePublishProgress();
       if (!mounted) return;
-      NotificationService.showTopNotification('تعذر نشر التغريدة على الخادم: $e');
+      NotificationService.showTopNotification(context.tr('تعذر نشر التغريدة على الخادم: $e'));
     }
   }
 
@@ -3383,7 +3380,7 @@ class _FeedScreenState extends State<FeedScreen> {
     if (text.isEmpty || text == post.text.trim()) return;
     await _editPostFromProfile(post, text);
     if (!mounted) return;
-    NotificationService.showTopNotification('تم تعديل التغريدة');
+    NotificationService.showTopNotification(context.tr('تم تعديل التغريدة'));
   }
 
   Future<void> _deleteOwnPostFromFeed(CityPost post) async {
@@ -3391,18 +3388,18 @@ class _FeedScreenState extends State<FeedScreen> {
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: Theme.of(context).brightness == Brightness.dark ? AppColors.darkCard : AppColors.lightCard,
-        title: const Text('حذف التغريدة', style: TextStyle(fontWeight: FontWeight.w900)),
-        content: const Text('هل تريد حذف هذه التغريدة نهائيًا؟'),
+        title: const AppText('حذف التغريدة', style: TextStyle(fontWeight: FontWeight.w900)),
+        content: const AppText('هل تريد حذف هذه التغريدة نهائيًا؟'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('إلغاء')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('حذف')),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const AppText('إلغاء')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const AppText('حذف')),
         ],
       ),
     );
     if (ok != true) return;
     await _deletePostFromProfile(post);
     if (!mounted) return;
-    NotificationService.showTopNotification('تم حذف التغريدة');
+    NotificationService.showTopNotification(context.tr('تم حذف التغريدة'));
   }
 
   void _openAuthorProfile(CityPost post) {
@@ -3423,10 +3420,10 @@ class _FeedScreenState extends State<FeedScreen> {
     // لك أقصى اليمين، المتابَعين بالوسط، تبويبات المجتمعات المتابعة بعدها،
     // وتبويب المجتمعات العام أقصى اليسار.
     final tabs = <Widget>[
-      const Tab(text: 'لك'),
-      const Tab(text: 'المتابَعين'),
+      const Tab(child: AppText('لك')),
+      const Tab(child: AppText('المتابَعين')),
       ...followedCommunities.map((c) => Tab(text: c.name)),
-      const Tab(text: 'المجتمعات'),
+      const Tab(child: AppText('المجتمعات')),
     ];
 
     final pages = <Widget>[
@@ -3562,7 +3559,7 @@ class _FeedScreenState extends State<FeedScreen> {
                   elevation: hovering ? 16 : 10,
                   onPressed: () => _openCompose(),
                   icon: Icon(hovering ? Icons.content_paste_go_rounded : Icons.edit_rounded),
-                  label: Text(
+                  label: AppText(
                     hovering ? 'إفلات للصق' : 'نشر',
                     style: const TextStyle(fontWeight: FontWeight.w900),
                   ),
@@ -3572,7 +3569,7 @@ class _FeedScreenState extends State<FeedScreen> {
           },
         ),
         body: Directionality(
-          textDirection: TextDirection.rtl,
+          textDirection: context.appTextDirection,
           child: Column(
             children: [
               // ===== إضافة التبويبات هنا بدلاً من AppBar =====
@@ -3637,14 +3634,14 @@ class _PublishProgressBar extends StatelessWidget {
                 ),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: Text(
+                  child: AppText(
                     status.trim().isEmpty ? 'جاري نشر التغريدة...' : status,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12.5),
                   ),
                 ),
-                Text('$pct%', style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w900)),
+                AppText('$pct%', style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w900)),
               ],
             ),
             const SizedBox(height: 7),
@@ -3772,9 +3769,9 @@ class _PostsList extends StatelessWidget {
                 const SizedBox(height: 120),
                 Icon(Icons.public_rounded, size: 76, color: AppColors.purple.withValues(alpha: 0.9)),
                 const SizedBox(height: 14),
-                Center(child: Text(emptyText, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900))),
+                Center(child: AppText(emptyText, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900))),
                 const SizedBox(height: 6),
-                Text(
+                AppText(
                   hasMore ? 'نحمّل التغريدات المناسبة تدريجيًا بدون ضغط على التطبيق' : 'اضغط زر نشر واكتب أول تغريدة في المجتمع',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted),
@@ -3791,7 +3788,7 @@ class _PostsList extends StatelessWidget {
                         : FilledButton.icon(
                       onPressed: onLoadMore,
                       icon: const Icon(Icons.keyboard_arrow_down_rounded),
-                      label: const Text('تحميل المزيد'),
+                      label: const AppText('تحميل المزيد'),
                     ),
                   ),
                 ],
@@ -3829,7 +3826,7 @@ class _PostsList extends StatelessWidget {
                       height: 26,
                       child: CircularProgressIndicator(strokeWidth: 2.6, color: AppColors.purple),
                     )
-                        : Text(
+                        : AppText(
                       hasMore ? 'جاري تجهيز المزيد...' : 'وصلت للنهاية',
                       style: TextStyle(
                         color: isDark ? AppColors.darkMuted : AppColors.lightMuted,
@@ -3944,7 +3941,7 @@ class _RefreshAvatarsStrip extends StatelessWidget {
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
-              textDirection: TextDirection.rtl,
+              textDirection: context.appTextDirection,
               children: [
                 Container(
                   width: 31,
@@ -3961,7 +3958,7 @@ class _RefreshAvatarsStrip extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
-                    Text(
+                    AppText(
                       label,
                       style: const TextStyle(
                         color: Colors.white,
@@ -3970,7 +3967,7 @@ class _RefreshAvatarsStrip extends StatelessWidget {
                         height: 1.05,
                       ),
                     ),
-                    Text(
+                    AppText(
                       'اضغط للانتقال للأعلى',
                       style: TextStyle(
                         color: Colors.white.withValues(alpha: 0.78),
@@ -4060,18 +4057,18 @@ class _CommunityQuickTab extends StatelessWidget {
           decoration: BoxDecoration(border: Border(bottom: BorderSide(color: AppColors.purple.withValues(alpha: 0.20)))),
           child: Row(
             children: [
-              Expanded(child: InkWell(onTap: onOpenCommunity, child: Text('# ${community.name}', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)))),
+              Expanded(child: InkWell(onTap: onOpenCommunity, child: AppText('# ${community.name}', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)))),
               PopupMenuButton<String>(
                 initialValue: sortMode,
                 onSelected: onSortChanged,
                 itemBuilder: (_) => const [
-                  PopupMenuItem(value: 'latest', child: Text('الأحدث')),
-                  PopupMenuItem(value: 'likes', child: Text('الأكثر إعجاباً')),
+                  PopupMenuItem(value: 'latest', child: AppText('الأحدث')),
+                  PopupMenuItem(value: 'likes', child: AppText('الأكثر إعجاباً')),
                 ],
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: 0.14), borderRadius: BorderRadius.circular(999)),
-                  child: Text(sortMode == 'likes' ? 'الأكثر إعجاباً' : 'الأحدث', style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w900)),
+                  child: AppText(sortMode == 'likes' ? 'الأكثر إعجاباً' : 'الأحدث', style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w900)),
                 ),
               ),
             ],
@@ -4143,7 +4140,7 @@ class _CommunitiesTab extends StatelessWidget {
                     child: const Icon(Icons.add_rounded, color: AppColors.purple),
                   ),
                   const SizedBox(width: 12),
-                  const Expanded(child: Text('إنشاء مجتمع جديد', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900))),
+                  const Expanded(child: AppText('إنشاء مجتمع جديد', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900))),
                 ],
               ),
             ),
@@ -4153,7 +4150,7 @@ class _CommunitiesTab extends StatelessWidget {
             if (followed.isEmpty)
               Padding(
                 padding: const EdgeInsets.only(bottom: 14),
-                child: Text('لم تتابع أي مجتمع بعد، ابحث عن مجتمع وتابعه ليظهر هنا.', style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted)),
+                child: AppText('لم تتابع أي مجتمع بعد، ابحث عن مجتمع وتابعه ليظهر هنا.', style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted)),
               )
             else
               ...followed.map((c) => _CommunityTile(community: c, currentUsername: currentUsername, isDark: isDark, onOpen: onOpen)),
@@ -4163,7 +4160,7 @@ class _CommunitiesTab extends StatelessWidget {
             if (communities.isEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 80),
-                child: Center(child: Text('لا توجد مجتمعات بعد', style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted))),
+                child: Center(child: AppText('لا توجد مجتمعات بعد', style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted))),
               )
             else
               ...[...followed, ...others].map((c) => _CommunityTile(community: c, currentUsername: currentUsername, isDark: isDark, onOpen: onOpen)),
@@ -4179,7 +4176,7 @@ class _CommunitySectionTitle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Text(title, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: isDark ? Colors.white : Colors.black87));
+    return AppText(title, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: isDark ? Colors.white : Colors.black87));
   }
 }
 
@@ -4201,7 +4198,7 @@ class _CommunityTile extends StatelessWidget {
         onTap: () => onOpen(community),
         child: Row(
           children: [
-            CircleAvatar(backgroundColor: AppColors.purple, child: Text(community.name.characters.first, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900))),
+            CircleAvatar(backgroundColor: AppColors.purple, child: AppText(community.name.characters.first, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900))),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
@@ -4209,14 +4206,14 @@ class _CommunityTile extends StatelessWidget {
                 children: [
                   Row(
                     children: [
-                      Expanded(child: Text(community.name, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 17))),
+                      Expanded(child: AppText(community.name, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 17))),
                       if (isFollowing) const Icon(Icons.check_circle_rounded, color: AppColors.success, size: 18),
                     ],
                   ),
                   const SizedBox(height: 3),
-                  Text(community.description.isEmpty ? 'مجتمع Respect App' : community.description, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted)),
+                  AppText(community.description.isEmpty ? 'مجتمع Respect App' : community.description, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted)),
                   const SizedBox(height: 6),
-                  Text('${community.members.length} عضو · ${community.moderators.length} مشرف · ${community.posts.length} تغريدة', style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w800, fontSize: 12)),
+                  AppText('${community.members.length} عضو · ${community.moderators.length} مشرف · ${community.posts.length} تغريدة', style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w800, fontSize: 12)),
                 ],
               ),
             ),
@@ -4274,7 +4271,7 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
   void _submit() {
     final name = _nameCtrl.text.trim();
     if (name.isEmpty) {
-      NotificationService.showTopNotification('اكتب اسم المجتمع أولاً');
+      NotificationService.showTopNotification(context.tr('اكتب اسم المجتمع أولاً'));
       return;
     }
 
@@ -4298,7 +4295,7 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
     return Scaffold(
       resizeToAvoidBottomInset: true,
       appBar: AppBar(
-        title: const Text('إنشاء مجتمع', style: TextStyle(fontWeight: FontWeight.w900)),
+        title: const AppText('إنشاء مجتمع', style: TextStyle(fontWeight: FontWeight.w900)),
         actions: [
           Padding(
             padding: const EdgeInsetsDirectional.only(end: 10),
@@ -4310,7 +4307,7 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
                 disabledBackgroundColor: AppColors.purple.withValues(alpha: 0.28),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
               ),
-              child: const Text('إنشاء', style: TextStyle(fontWeight: FontWeight.w900)),
+              child: const AppText('إنشاء', style: TextStyle(fontWeight: FontWeight.w900)),
             ),
           ),
         ],
@@ -4340,9 +4337,9 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Text('مجتمع جديد', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+                            const AppText('مجتمع جديد', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
                             const SizedBox(height: 4),
-                            Text(
+                            AppText(
                               'أنت المالك وسيتم إضافتك كمشرف تلقائيًا',
                               style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted),
                             ),
@@ -4357,9 +4354,9 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
                     focusNode: _nameFocus,
                     textInputAction: TextInputAction.next,
                     onSubmitted: (_) => FocusScope.of(context).requestFocus(_descFocus),
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       prefixIcon: Icon(Icons.badge_rounded),
-                      hintText: 'اسم المجتمع',
+                      hintText: context.tr('اسم المجتمع'),
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -4369,9 +4366,9 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
                     maxLines: 4,
                     textInputAction: TextInputAction.done,
                     onSubmitted: (_) => _submit(),
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       prefixIcon: Icon(Icons.short_text_rounded),
-                      hintText: 'وصف المجتمع',
+                      hintText: context.tr('وصف المجتمع'),
                     ),
                   ),
                 ],
@@ -4387,7 +4384,7 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
               ),
               icon: const Icon(Icons.add_rounded),
-              label: const Text('إنشاء المجتمع', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+              label: const AppText('إنشاء المجتمع', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
             ),
           ],
         ),
@@ -4641,7 +4638,7 @@ class _SubscriptionBoostBadge extends StatelessWidget {
             color: accent,
           ),
           const SizedBox(width: 3),
-          Text(
+          AppText(
             text,
             style: TextStyle(
               color: accent,
@@ -4759,7 +4756,7 @@ class _RepliesScreenState extends State<RepliesScreen> {
                   ),
                 ),
                 const SizedBox(height: 18),
-                const Text('إضافة للرد', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+                const AppText('إضافة للرد', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
                 const SizedBox(height: 14),
                 _SheetOption(
                   icon: Icons.mic_rounded,
@@ -4826,7 +4823,7 @@ class _RepliesScreenState extends State<RepliesScreen> {
     try {
       final hasPermission = await _replyRecorder.hasPermission();
       if (!hasPermission) {
-        NotificationService.showTopError('اسمح للمايك أولاً');
+        NotificationService.showTopError(context.tr('اسمح للمايك أولاً'));
         return;
       }
 
@@ -4853,10 +4850,10 @@ class _RepliesScreenState extends State<RepliesScreen> {
       _replyRecordTimer = Timer.periodic(const Duration(seconds: 1), (_) {
         if (mounted) setState(() => _replyVoiceSeconds++);
       });
-      NotificationService.showTopNotification('بدأ تسجيل الصوتية');
+      NotificationService.showTopNotification(context.tr('بدأ تسجيل الصوتية'));
     } catch (e) {
       assert(() { _scannerSafeIgnore(); return true; }());
-      NotificationService.showTopError('تعذر بدء التسجيل');
+      NotificationService.showTopError(context.tr('تعذر بدء التسجيل'));
     }
   }
 
@@ -4872,12 +4869,12 @@ class _RepliesScreenState extends State<RepliesScreen> {
         }
       });
       if (path != null && path.trim().isNotEmpty) {
-        NotificationService.showTopSuccess('تم حفظ الصوتية، اضغط إرسال');
+        NotificationService.showTopSuccess(context.tr('تم حفظ الصوتية، اضغط إرسال'));
       }
     } catch (e) {
       assert(() { _scannerSafeIgnore(); return true; }());
       if (mounted) setState(() => _recordingReply = false);
-      NotificationService.showTopError('تعذر إيقاف التسجيل');
+      NotificationService.showTopError(context.tr('تعذر إيقاف التسجيل'));
     }
   }
 
@@ -4963,7 +4960,7 @@ class _RepliesScreenState extends State<RepliesScreen> {
 
     final text = _replyCtrl.text.trim();
     if (_recordingReply) {
-      NotificationService.showTopNotification('اضغط إيقاف التسجيل أولًا ثم أرسل الرد');
+      NotificationService.showTopNotification(context.tr('اضغط إيقاف التسجيل أولًا ثم أرسل الرد'));
       return;
     }
     if (text.isEmpty && _selectedMedia == null && _replyVoicePath == null) return;
@@ -5045,7 +5042,7 @@ class _RepliesScreenState extends State<RepliesScreen> {
             if (aiReply != null && mounted) {
               await _refreshRepliesFromServer();
               await widget.onChanged();
-              NotificationService.showTopSuccess('Respect AI رد على تعليقك');
+              NotificationService.showTopSuccess(context.tr('Respect AI رد على تعليقك'));
             }
           } catch (e) {
             assert(() { _scannerSafeIgnore(); return true; }());
@@ -5069,7 +5066,7 @@ class _RepliesScreenState extends State<RepliesScreen> {
     } catch (e) {
       assert(() { _scannerSafeIgnore(); return true; }());
       if (mounted) setState(() => _sending = false);
-      NotificationService.showTopError('تعذر إرسال الرد');
+      NotificationService.showTopError(context.tr('تعذر إرسال الرد'));
     }
   }
 
@@ -5166,7 +5163,7 @@ class _RepliesScreenState extends State<RepliesScreen> {
         reply.isLiked = previousLiked;
         reply.likes = previousLikes;
       });
-      NotificationService.showTopError('تعذر تحديث لايك الرد');
+      NotificationService.showTopError(context.tr('تعذر تحديث لايك الرد'));
     } finally {
       _pendingReplyLikeIds.remove(reply.id);
     }
@@ -5214,11 +5211,11 @@ class _RepliesScreenState extends State<RepliesScreen> {
                     Icons.repeat_rounded,
                     color: reply.isReposted ? AppColors.purple : AppColors.purple,
                   ),
-                  title: Text(
+                  title: AppText(
                     reply.isReposted ? 'إلغاء إعادة النشر' : 'إعادة نشر الرد',
                     style: const TextStyle(fontWeight: FontWeight.w900),
                   ),
-                  subtitle: Text(
+                  subtitle: AppText(
                     'إظهار الرد لمتابعيك',
                     style: TextStyle(color: muted, fontSize: 12),
                   ),
@@ -5226,8 +5223,8 @@ class _RepliesScreenState extends State<RepliesScreen> {
                 ),
                 ListTile(
                   leading: const Icon(Icons.format_quote_rounded, color: AppColors.purple),
-                  title: const Text('اقتباس الرد', style: TextStyle(fontWeight: FontWeight.w900)),
-                  subtitle: Text(
+                  title: const AppText('اقتباس الرد', style: TextStyle(fontWeight: FontWeight.w900)),
+                  subtitle: AppText(
                     'اكتب تغريدة مقتبسة من هذا الرد',
                     style: TextStyle(color: muted, fontSize: 12),
                   ),
@@ -5241,7 +5238,7 @@ class _RepliesScreenState extends State<RepliesScreen> {
     );
 
     if (action == 'quote') {
-      NotificationService.showTopNotification('تم اختيار اقتباس الرد');
+      NotificationService.showTopNotification(context.tr('تم اختيار اقتباس الرد'));
       return;
     }
 
@@ -5281,7 +5278,7 @@ class _RepliesScreenState extends State<RepliesScreen> {
         reply.isReposted = previousReposted;
         reply.reposts = previousReposts;
       });
-      NotificationService.showTopError('تعذر حفظ إعادة نشر الرد في السيرفر: $e');
+      NotificationService.showTopError(context.tr('تعذر حفظ إعادة نشر الرد في السيرفر: $e'));
     } finally {
       _pendingReplyRepostIds.remove(reply.id);
     }
@@ -5330,8 +5327,8 @@ class _RepliesScreenState extends State<RepliesScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(opened.user, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
-                    Text(opened.username, style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted)),
+                    AppText(opened.user, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+                    AppText(opened.username, style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted)),
                   ],
                 ),
               ),
@@ -5339,7 +5336,7 @@ class _RepliesScreenState extends State<RepliesScreen> {
           ),
           if ((opened.parentUser?.trim().isNotEmpty ?? false)) ...[
             const SizedBox(height: 8),
-            Text('ردًا على ${opened.parentUser}', style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w800)),
+            AppText('ردًا على ${opened.parentUser}', style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w800)),
           ],
           if (opened.text.trim().isNotEmpty) ...[
             const SizedBox(height: 12),
@@ -5357,7 +5354,7 @@ class _RepliesScreenState extends State<RepliesScreen> {
           Row(
             children: [
               Flexible(
-                child: Text(
+                child: AppText(
                   opened.time,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -5419,17 +5416,17 @@ class _RepliesScreenState extends State<RepliesScreen> {
                           username: r.username,
                           style: const TextStyle(fontWeight: FontWeight.w900),
                         ),
-                        Text(r.username, style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, fontSize: 12)),
-                        Text(r.time, style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, fontSize: 11)),
+                        AppText(r.username, style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, fontSize: 12)),
+                        AppText(r.time, style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, fontSize: 11)),
                       ],
                     ),
                     if ((r.parentUser?.trim().isNotEmpty ?? false)) ...[
                       const SizedBox(height: 4),
-                      Text('ردًا على ${r.parentUser}', style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w700, fontSize: 12)),
+                      AppText('ردًا على ${r.parentUser}', style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w700, fontSize: 12)),
                     ],
                     if (r.text.trim().isNotEmpty) ...[
                       const SizedBox(height: 4),
-                      Text(r.text),
+                      AppText(r.text),
                     ],
                     if ((r.mediaPath ?? '').trim().isNotEmpty && r.mediaType != null) ...[
                       const SizedBox(height: 10),
@@ -5483,7 +5480,7 @@ class _RepliesScreenState extends State<RepliesScreen> {
             icon: const Icon(Icons.arrow_back_rounded),
             onPressed: () => _handleBack(),
           ),
-          title: Text(
+          title: AppText(
             _insideReplyThread ? 'ردود الرد' : 'التغريدة',
             style: const TextStyle(fontWeight: FontWeight.w900),
           ),
@@ -5505,12 +5502,12 @@ class _RepliesScreenState extends State<RepliesScreen> {
                       const SizedBox(height: 12),
                       Row(
                         children: [
-                          Text(
+                          AppText(
                             _insideReplyThread ? 'الردود على هذا الرد' : 'الردود',
                             style: TextStyle(fontWeight: FontWeight.w900, color: isDark ? Colors.white : Colors.black87),
                           ),
                           const Spacer(),
-                          Text(
+                          AppText(
                             '${visibleReplies.length}',
                             style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w900),
                           ),
@@ -5521,7 +5518,7 @@ class _RepliesScreenState extends State<RepliesScreen> {
                         Padding(
                           padding: const EdgeInsets.symmetric(vertical: 40),
                           child: Center(
-                            child: Text(
+                            child: AppText(
                               _insideReplyThread ? 'لا توجد ردود على هذا الرد بعد' : 'لا توجد ردود بعد',
                               style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted),
                             ),
@@ -5545,7 +5542,7 @@ class _RepliesScreenState extends State<RepliesScreen> {
                     if (targetName != null && targetName.trim().isNotEmpty) ...[
                       Row(
                         children: [
-                          Expanded(child: Text('ردًا على $targetName', style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w800))),
+                          Expanded(child: AppText('ردًا على $targetName', style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w800))),
                           IconButton(
                             visualDensity: VisualDensity.compact,
                             onPressed: () => setState(() => _replyingToReply = _openedReply),
@@ -5567,9 +5564,9 @@ class _RepliesScreenState extends State<RepliesScreen> {
                           children: [
                             Icon(_recordingReply ? Icons.fiber_manual_record_rounded : Icons.mic_rounded, color: _recordingReply ? AppColors.danger : AppColors.purple, size: 18),
                             const SizedBox(width: 8),
-                            Expanded(child: Text(_recordingReply ? 'جاري التسجيل $_replyVoiceSeconds ث' : 'صوتية جاهزة $_replyVoiceSeconds ث', style: const TextStyle(fontWeight: FontWeight.w800))),
+                            Expanded(child: AppText(_recordingReply ? 'جاري التسجيل $_replyVoiceSeconds ث' : 'صوتية جاهزة $_replyVoiceSeconds ث', style: const TextStyle(fontWeight: FontWeight.w800))),
                             if (_recordingReply)
-                              TextButton(onPressed: _stopReplyRecording, child: const Text('إيقاف'))
+                              TextButton(onPressed: _stopReplyRecording, child: const AppText('إيقاف'))
                             else
                               IconButton(
                                 visualDensity: VisualDensity.compact,
@@ -5616,7 +5613,7 @@ class _RepliesScreenState extends State<RepliesScreen> {
                     ],
                     Row(
                       children: [
-                        _SmallPurpleAction(icon: Icons.add_rounded, tooltip: 'صوت / صورة / فيديو', onTap: _pickReplyAttachment),
+                        _SmallPurpleAction(icon: Icons.add_rounded, tooltip: context.tr('صوت / صورة / فيديو'), onTap: _pickReplyAttachment),
                         const SizedBox(width: 8),
                         Expanded(
                           child: TextField(
@@ -5625,7 +5622,7 @@ class _RepliesScreenState extends State<RepliesScreen> {
                             textInputAction: TextInputAction.send,
                             onSubmitted: (_) => _addReply(),
                             decoration: InputDecoration(
-                              hintText: targetName == null ? 'اكتب رد...' : 'اكتب ردك على $targetName...',
+                              hintText: targetName == null ? context.tr('اكتب رد...') : context.tr('اكتب ردك على $targetName...'),
                               filled: true,
                               fillColor: isDark ? AppColors.darkCard : AppColors.lightCard,
                               border: OutlineInputBorder(borderRadius: BorderRadius.circular(22), borderSide: BorderSide.none),
@@ -5929,7 +5926,7 @@ class _LuxuryActionButtonState extends State<_LuxuryActionButton> with SingleTic
                   opacity: animation,
                   child: ScaleTransition(scale: animation, child: child),
                 ),
-                child: Text(
+                child: AppText(
                   widget.count!,
                   key: ValueKey(widget.count),
                   style: TextStyle(
@@ -6013,7 +6010,7 @@ class _PostDetailsHeader extends StatelessWidget {
                       subscriptionTier: post.subscriptionTier,
                       style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
                     ),
-                    Text(post.username, style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted)),
+                    AppText(post.username, style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted)),
                   ],
                 ),
               ),
@@ -6039,7 +6036,7 @@ class _PostDetailsHeader extends StatelessWidget {
           Row(
             children: [
               Flexible(
-                child: Text(
+                child: AppText(
                   post.time,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -6121,7 +6118,7 @@ class _MentionText extends StatelessWidget {
     return v;
   }
 
-  Future<void> _openUrl(String rawUrl) async {
+  Future<void> _openUrl(BuildContext context, String rawUrl) async {
     final clean = _stripTrailingUrlPunctuation(rawUrl.trim());
     if (clean.isEmpty) return;
     final normalized = clean.startsWith('http://') || clean.startsWith('https://') ? clean : 'https://$clean';
@@ -6132,11 +6129,11 @@ class _MentionText extends StatelessWidget {
       final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
       if (!opened) {
         await Clipboard.setData(ClipboardData(text: normalized));
-        NotificationService.showTopError('تعذر فتح الرابط، تم نسخه بدلًا من ذلك');
+        NotificationService.showTopError(context.tr('تعذر فتح الرابط، تم نسخه بدلًا من ذلك'));
       }
     } catch (_) {
       await Clipboard.setData(ClipboardData(text: normalized));
-      NotificationService.showTopError('تعذر فتح الرابط، تم نسخه بدلًا من ذلك');
+      NotificationService.showTopError(context.tr('تعذر فتح الرابط، تم نسخه بدلًا من ذلك'));
     }
   }
 
@@ -6157,7 +6154,7 @@ class _MentionText extends StatelessWidget {
         final trailing = _trailingPart(token, cleanUrl);
         spans.add(TextSpan(
           text: cleanUrl,
-          recognizer: TapGestureRecognizer()..onTap = () => _openUrl(cleanUrl),
+          recognizer: TapGestureRecognizer()..onTap = () => _openUrl(context, cleanUrl),
           style: const TextStyle(
             color: Colors.blueAccent,
             fontWeight: FontWeight.w800,
@@ -6249,7 +6246,7 @@ class _MentionSuggestionsBox extends StatelessWidget {
           : users.isEmpty
           ? Padding(
         padding: const EdgeInsets.all(14),
-        child: Text('لا يوجد مستخدمين مطابقين', style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, fontWeight: FontWeight.w700)),
+        child: AppText('لا يوجد مستخدمين مطابقين', style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, fontWeight: FontWeight.w700)),
       )
           : ListView.separated(
         shrinkWrap: true,
@@ -6268,8 +6265,8 @@ class _MentionSuggestionsBox extends StatelessWidget {
               backgroundImage: avatarProvider(avatar),
               child: avatarProvider(avatar) == null ? const Icon(Icons.person_rounded, color: Colors.white) : null,
             ),
-            title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900)),
-            subtitle: Text(username, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted)),
+            title: AppText(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900)),
+            subtitle: AppText(username, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted)),
             onTap: () => onPick(username),
           );
         },
@@ -6318,7 +6315,7 @@ class _HashtagQuickChips extends StatelessWidget {
                     borderRadius: BorderRadius.circular(999),
                     border: Border.all(color: AppColors.purple.withValues(alpha: 0.22)),
                   ),
-                  child: Text(
+                  child: AppText(
                     tag,
                     style: const TextStyle(
                       color: AppColors.purple,
@@ -6361,7 +6358,7 @@ class _PostCharacterLimitCircle extends StatelessWidget {
           _RespectAiVerifiedBadge(tier: subscriptionTier == 'free' ? 'premium' : subscriptionTier),
           const SizedBox(width: 5),
         ],
-        Text('$remaining', style: TextStyle(fontWeight: FontWeight.w900, color: danger ? AppColors.danger : AppColors.purple)),
+        AppText('$remaining', style: TextStyle(fontWeight: FontWeight.w900, color: danger ? AppColors.danger : AppColors.purple)),
         const SizedBox(width: 8),
         SizedBox(
           width: 34,
@@ -6619,7 +6616,7 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
                   ),
                 ),
                 const SizedBox(height: 18),
-                const Text('اختر مرفق', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+                const AppText('اختر مرفق', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
                 const SizedBox(height: 14),
                 _SheetOption(
                   icon: Icons.image_rounded,
@@ -6683,7 +6680,7 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
     final hasPermission = await _recorder.hasPermission();
     if (!hasPermission) {
       if (!mounted) return;
-      NotificationService.showTopNotification('يجب السماح للتطبيق باستخدام المايكروفون');
+      NotificationService.showTopNotification(context.tr('يجب السماح للتطبيق باستخدام المايكروفون'));
       return;
     }
 
@@ -6768,19 +6765,19 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
               children: [
                 Center(child: Container(width: 46, height: 5, decoration: BoxDecoration(color: isDark ? AppColors.darkBorder : AppColors.lightBorder, borderRadius: BorderRadius.circular(99)))),
                 const SizedBox(height: 16),
-                const Text('مكان نشر التغريدة', textAlign: TextAlign.center, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+                const AppText('مكان نشر التغريدة', textAlign: TextAlign.center, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
                 const SizedBox(height: 10),
                 ListTile(
                   leading: const Icon(Icons.public_rounded, color: AppColors.purple),
-                  title: const Text('تغريدة عامة', style: TextStyle(fontWeight: FontWeight.w900)),
-                  subtitle: Text('تظهر في تبويب لك والملف الشخصي', style: TextStyle(color: muted, fontSize: 12)),
+                  title: const AppText('تغريدة عامة', style: TextStyle(fontWeight: FontWeight.w900)),
+                  subtitle: AppText('تظهر في تبويب لك والملف الشخصي', style: TextStyle(color: muted, fontSize: 12)),
                   trailing: _audience == 'public' ? const Icon(Icons.check_circle_rounded, color: AppColors.success) : null,
                   onTap: () => Navigator.pop(context, {'audience': 'public', 'communityId': '', 'communityName': ''}),
                 ),
                 ListTile(
                   leading: const Icon(Icons.group_rounded, color: AppColors.purple),
-                  title: const Text('للمتابعين فقط', style: TextStyle(fontWeight: FontWeight.w900)),
-                  subtitle: Text('تظهر فقط في تبويب المتابعين', style: TextStyle(color: muted, fontSize: 12)),
+                  title: const AppText('للمتابعين فقط', style: TextStyle(fontWeight: FontWeight.w900)),
+                  subtitle: AppText('تظهر فقط في تبويب المتابعين', style: TextStyle(color: muted, fontSize: 12)),
                   trailing: _audience == 'followers' ? const Icon(Icons.check_circle_rounded, color: AppColors.success) : null,
                   onTap: () => Navigator.pop(context, {'audience': 'followers', 'communityId': '', 'communityName': ''}),
                 ),
@@ -6788,12 +6785,12 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
                   Divider(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    child: Text('المجتمعات المنضم لها', style: TextStyle(color: muted, fontWeight: FontWeight.w800)),
+                    child: AppText('المجتمعات المنضم لها', style: TextStyle(color: muted, fontWeight: FontWeight.w800)),
                   ),
                   ...joined.map((c) => ListTile(
                     leading: const Icon(Icons.forum_rounded, color: AppColors.purple),
-                    title: Text(c.name, style: const TextStyle(fontWeight: FontWeight.w900)),
-                    subtitle: Text('${c.members.length} عضو · ${c.moderators.length} مشرف', style: TextStyle(color: muted, fontSize: 12)),
+                    title: AppText(c.name, style: const TextStyle(fontWeight: FontWeight.w900)),
+                    subtitle: AppText('${c.members.length} عضو · ${c.moderators.length} مشرف', style: TextStyle(color: muted, fontSize: 12)),
                     trailing: _audience == 'community' && _communityId == c.id ? const Icon(Icons.check_circle_rounded, color: AppColors.success) : null,
                     onTap: () => Navigator.pop(context, {'audience': 'community', 'communityId': c.id, 'communityName': c.name}),
                   )),
@@ -6833,7 +6830,7 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
       await controller.initialize();
       final seconds = controller.value.duration.inSeconds;
       if (seconds > maxSeconds) {
-        NotificationService.showTopError('حد الفيديو لهذه الباقة $maxSeconds ثانية. مدة الفيديو الحالية $seconds ثانية.');
+        NotificationService.showTopError(context.tr('حد الفيديو لهذه الباقة $maxSeconds ثانية. مدة الفيديو الحالية $seconds ثانية.'));
         return false;
       }
     } catch (_) {
@@ -6853,7 +6850,7 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
     if (!mounted) return;
     if (text.isEmpty && _selectedMedia == null && _voicePath == null) return;
     if (text.runes.length > widget.maxChars) {
-      NotificationService.showTopError('تجاوزت حد ${widget.maxChars} حرف');
+      NotificationService.showTopError(context.tr('تجاوزت حد ${widget.maxChars} حرف'));
       return;
     }
     if (!await _validateSelectedVideoPowerLimit()) return;
@@ -6984,7 +6981,7 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
+                            AppText(
                               widget.editMode ? 'تعديل التغريدة' : 'نشر تغريدة',
                               style: TextStyle(
                                 color: textColor,
@@ -6994,7 +6991,7 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
                               ),
                             ),
                             const SizedBox(height: 2),
-                            Text(
+                            AppText(
                               widget.editMode ? 'رتّبها وخليها تظهر بأفضل شكل' : 'اكتب شيئًا يستحق الظهور',
                               style: TextStyle(
                                 color: muted,
@@ -7025,7 +7022,7 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
                           child: FilledButton.icon(
                             onPressed: hasContent ? _publish : null,
                             icon: Icon(widget.editMode ? Icons.check_rounded : Icons.send_rounded, size: 18),
-                            label: Text(widget.editMode ? 'حفظ' : 'نشر'),
+                            label: AppText(widget.editMode ? 'حفظ' : 'نشر'),
                             style: FilledButton.styleFrom(
                               backgroundColor: AppColors.purple,
                               foregroundColor: Colors.white,
@@ -7090,7 +7087,7 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
                                   Row(
                                     children: [
                                       Flexible(
-                                        child: Text(
+                                        child: AppText(
                                           widget.profileName,
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
@@ -7108,7 +7105,7 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
                                     ],
                                   ),
                                   const SizedBox(height: 3),
-                                  Text(
+                                  AppText(
                                     widget.username,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
@@ -7140,7 +7137,7 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
                                         size: 17,
                                       ),
                                       const SizedBox(width: 6),
-                                      Text(
+                                      AppText(
                                         _audienceLabel,
                                         style: const TextStyle(
                                           color: AppColors.purple,
@@ -7195,7 +7192,7 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
                                     children: [
                                       Icon(Icons.auto_awesome_rounded, color: AppColors.purple, size: 16),
                                       SizedBox(width: 5),
-                                      Text(
+                                      AppText(
                                         'Respect Compose',
                                         style: TextStyle(color: AppColors.purple, fontWeight: FontWeight.w900, fontSize: 11.5),
                                       ),
@@ -7227,7 +7224,7 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
                               cursorColor: AppColors.purple,
                               cursorWidth: 2.3,
                               decoration: InputDecoration(
-                                hintText: 'وش ودك تنشر اليوم؟',
+                                hintText: context.tr('وش ودك تنشر اليوم؟'),
                                 hintStyle: TextStyle(
                                   color: muted.withValues(alpha: 0.78),
                                   fontSize: 22,
@@ -7325,7 +7322,7 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
                   children: [
                     _SmallPurpleAction(
                       icon: Icons.add_photo_alternate_rounded,
-                      tooltip: 'إضافة صورة أو فيديو',
+                      tooltip: context.tr('إضافة صورة أو فيديو'),
                       onTap: _pickAttachment,
                     ),
                     const SizedBox(width: 8),
@@ -7345,7 +7342,7 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
                       ),
                       child: _SmallPurpleAction(
                         icon: _isRecording ? Icons.stop_rounded : Icons.mic_rounded,
-                        tooltip: _isRecording ? 'إيقاف التسجيل' : 'تسجيل صوتي',
+                        tooltip: _isRecording ? context.tr('إيقاف التسجيل') : context.tr('تسجيل صوتي'),
                         onTap: _toggleRecording,
                       ),
                     ),
@@ -7366,13 +7363,13 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
                               ),
                             ).animate(onPlay: (controller) => controller.repeat(reverse: true)).fade(begin: 0.35, end: 1, duration: 520.ms),
                             const SizedBox(width: 8),
-                            Text(
+                            AppText(
                               'تسجيل ${_formatSeconds(_recordSeconds)}',
                               style: const TextStyle(color: AppColors.danger, fontWeight: FontWeight.w900, fontSize: 12.5),
                             ),
                           ],
                         )
-                            : Text(
+                            : AppText(
                           _selectedMedia != null
                               ? (_selectedMediaType == CityMediaType.video
                               ? 'الفيديو جاهز للنشر'
@@ -7397,7 +7394,7 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
                         textStyle: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13),
                       ),
-                      child: Text(widget.editMode ? 'حفظ' : 'نشر'),
+                      child: AppText(widget.editMode ? 'حفظ' : 'نشر'),
                     ),
                   ],
                 ),
@@ -7605,17 +7602,17 @@ class _UserProfileViewScreenState extends State<UserProfileViewScreen> with Sing
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: Theme.of(context).brightness == Brightness.dark ? AppColors.darkCard : AppColors.lightCard,
-        title: const Text('تعديل التغريدة', style: TextStyle(fontWeight: FontWeight.w900)),
+        title: const AppText('تعديل التغريدة', style: TextStyle(fontWeight: FontWeight.w900)),
         content: TextFormField(
           initialValue: post.text,
           maxLines: 5,
           autofocus: true,
           onChanged: (value) => draftText = value,
-          decoration: const InputDecoration(hintText: 'اكتب نص التغريدة'),
+          decoration: InputDecoration(hintText: context.tr('اكتب نص التغريدة')),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('إلغاء')),
-          FilledButton(onPressed: () => Navigator.pop(context, draftText), child: const Text('حفظ')),
+          TextButton(onPressed: () => Navigator.pop(context), child: const AppText('إلغاء')),
+          FilledButton(onPressed: () => Navigator.pop(context, draftText), child: const AppText('حفظ')),
         ],
       ),
     );
@@ -7656,11 +7653,11 @@ class _UserProfileViewScreenState extends State<UserProfileViewScreen> with Sing
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: Theme.of(context).brightness == Brightness.dark ? AppColors.darkCard : AppColors.lightCard,
-        title: const Text('حذف التغريدة', style: TextStyle(fontWeight: FontWeight.w900)),
-        content: const Text('هل تريد حذف هذه التغريدة نهائيًا؟'),
+        title: const AppText('حذف التغريدة', style: TextStyle(fontWeight: FontWeight.w900)),
+        content: const AppText('هل تريد حذف هذه التغريدة نهائيًا؟'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('إلغاء')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('حذف')),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const AppText('إلغاء')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const AppText('حذف')),
         ],
       ),
     );
@@ -7770,11 +7767,11 @@ class _UserProfileViewScreenState extends State<UserProfileViewScreen> with Sing
               Container(width: 44, height: 5, decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: 0.45), borderRadius: BorderRadius.circular(99))),
               Padding(
                 padding: const EdgeInsets.all(16),
-                child: Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+                child: AppText(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
               ),
               Expanded(
                 child: users.isEmpty
-                    ? Center(child: Text(_loadingFollowLists ? 'جاري التحميل...' : 'لا توجد نتائج'))
+                    ? Center(child: AppText(_loadingFollowLists ? 'جاري التحميل...' : 'لا توجد نتائج'))
                     : ListView.separated(
                   padding: const EdgeInsets.fromLTRB(14, 0, 14, 20),
                   itemCount: users.length,
@@ -7786,8 +7783,8 @@ class _UserProfileViewScreenState extends State<UserProfileViewScreen> with Sing
                     final avatar = (u['avatar_url'] ?? u['imagePath'] ?? u['profileImagePath'])?.toString();
                     return ListTile(
                       leading: CircleAvatar(backgroundColor: AppColors.purple, backgroundImage: _avatar(avatar), child: _avatar(avatar) == null ? const Icon(Icons.person, color: Colors.white) : null),
-                      title: Text(name, style: const TextStyle(fontWeight: FontWeight.w900)),
-                      subtitle: Text(username),
+                      title: AppText(name, style: const TextStyle(fontWeight: FontWeight.w900)),
+                      subtitle: AppText(username),
                       onTap: () {
                         Navigator.pop(context);
                         widget.onMentionTap?.call(username);
@@ -7862,7 +7859,7 @@ class _UserProfileViewScreenState extends State<UserProfileViewScreen> with Sing
           children: [
             Icon(icon, size: 15, color: muted),
             const SizedBox(width: 5),
-            Text(text, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: muted, fontSize: 12.5, fontWeight: FontWeight.w800)),
+            AppText(text, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: muted, fontSize: 12.5, fontWeight: FontWeight.w800)),
           ],
         ),
       );
@@ -7880,7 +7877,7 @@ class _UserProfileViewScreenState extends State<UserProfileViewScreen> with Sing
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
         ),
         icon: Icon(icon, size: 17),
-        label: Text(text, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12.5)),
+        label: AppText(text, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12.5)),
       );
     }
 
@@ -8001,8 +7998,8 @@ class _UserProfileViewScreenState extends State<UserProfileViewScreen> with Sing
                             }
                           },
                           itemBuilder: (_) => [
-                            PopupMenuItem(value: 'mute', child: Text(_muted ? 'إلغاء الكتم' : 'كتم')),
-                            PopupMenuItem(value: 'block', child: Text(_blocked ? 'إلغاء الحظر' : 'حظر')),
+                            PopupMenuItem(value: 'mute', child: AppText(_muted ? 'إلغاء الكتم' : 'كتم')),
+                            PopupMenuItem(value: 'block', child: AppText(_blocked ? 'إلغاء الحظر' : 'حظر')),
                           ],
                           child: Material(
                             color: Colors.black.withValues(alpha: .38),
@@ -8034,7 +8031,7 @@ class _UserProfileViewScreenState extends State<UserProfileViewScreen> with Sing
                               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
                             ),
                             icon: Icon(_isFollowing ? Icons.person_remove_alt_1_rounded : Icons.person_add_alt_1_rounded, size: 17),
-                            label: Text(_isFollowing ? 'إلغاء المتابعة' : 'متابعة', style: const TextStyle(fontWeight: FontWeight.w900)),
+                            label: AppText(_isFollowing ? 'إلغاء المتابعة' : 'متابعة', style: const TextStyle(fontWeight: FontWeight.w900)),
                           ),
                         ),
                     ],
@@ -8052,7 +8049,7 @@ class _UserProfileViewScreenState extends State<UserProfileViewScreen> with Sing
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
                                   Flexible(
-                                    child: Text(
+                                    child: AppText(
                                       displayName,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
@@ -8069,7 +8066,7 @@ class _UserProfileViewScreenState extends State<UserProfileViewScreen> with Sing
                         const SizedBox(height: 2),
                         Row(
                           children: [
-                            Text(username, style: TextStyle(color: muted, fontWeight: FontWeight.w700)),
+                            AppText(username, style: TextStyle(color: muted, fontWeight: FontWeight.w700)),
                             if (normalizedTier != 'free') ...[
                               const SizedBox(width: 8),
                               _MiniChip(text: normalizedTier == 'premium' ? 'Premium' : normalizedTier == 'gold' ? 'Gold' : 'Silver', color: _RespectAiVerifiedBadge.accentForTier(normalizedTier)),
@@ -8077,7 +8074,7 @@ class _UserProfileViewScreenState extends State<UserProfileViewScreen> with Sing
                           ],
                         ),
                         const SizedBox(height: 10),
-                        Text(
+                        AppText(
                           widget.bio.trim().isEmpty ? 'لا توجد نبذة شخصية' : widget.bio.trim(),
                           style: const TextStyle(height: 1.42, fontSize: 14.5, fontWeight: FontWeight.w600),
                         ),
@@ -8137,7 +8134,7 @@ class _UserProfileViewScreenState extends State<UserProfileViewScreen> with Sing
                                 _RespectAiVerifiedBadge(tier: normalizedTier, large: true),
                                 const SizedBox(width: 9),
                                 Expanded(
-                                  child: Text(
+                                  child: AppText(
                                     SupabaseService.tierPowerDescription(normalizedTier),
                                     maxLines: 2,
                                     overflow: TextOverflow.ellipsis,
@@ -8164,7 +8161,7 @@ class _UserProfileViewScreenState extends State<UserProfileViewScreen> with Sing
                 unselectedLabelColor: muted,
                 indicatorColor: AppColors.purple,
                 indicatorWeight: 3,
-                tabs: const [Tab(text: 'المنشورات'), Tab(text: 'الردود'), Tab(text: 'الوسائط')],
+                tabs: [Tab(child: AppText('المنشورات')), Tab(child: AppText('الردود')), Tab(child: AppText('الوسائط'))],
               ),
               isDark: isDark,
             ),
@@ -8236,7 +8233,7 @@ class _MiniChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(999),
         border: Border.all(color: color.withValues(alpha: 0.35)),
       ),
-      child: Text(text, style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w900)),
+      child: AppText(text, style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w900)),
     );
   }
 }
@@ -8333,7 +8330,7 @@ class _ProfilePostsList extends StatelessWidget {
             SizedBox(
               height: 230,
               child: Center(
-                child: Text(
+                child: AppText(
                   empty,
                   style: TextStyle(color: muted, fontWeight: FontWeight.w900),
                 ),
@@ -8485,7 +8482,7 @@ class _RoundProfileButton extends StatelessWidget {
           children: [
             Icon(icon, size: 18, color: color),
             const SizedBox(width: 7),
-            Flexible(child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13.5, color: color))),
+            Flexible(child: AppText(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13.5, color: color))),
           ],
         ),
       ),
@@ -8532,7 +8529,7 @@ class _RepliesList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    if (replies.isEmpty) return const Center(child: Text('لا توجد ردود'));
+    if (replies.isEmpty) return const Center(child: AppText('لا توجد ردود'));
     return ListView.builder(
       padding: const EdgeInsets.fromLTRB(14, 10, 14, 20),
       itemCount: replies.length,
@@ -8549,11 +8546,11 @@ class _RepliesList extends StatelessWidget {
               ),
               const SizedBox(width: 10),
               Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                InkWell(onTap: () => onMentionTap?.call(r.username), child: Text('${r.user}  ${r.username}', style: const TextStyle(fontWeight: FontWeight.w900))),
+                InkWell(onTap: () => onMentionTap?.call(r.username), child: AppText('${r.user}  ${r.username}', style: const TextStyle(fontWeight: FontWeight.w900))),
                 const SizedBox(height: 4),
                 _MentionText(r.text, onMentionTap: onMentionTap),
                 const SizedBox(height: 4),
-                Text(r.time, style: TextStyle(fontSize: 11, color: isDark ? AppColors.darkMuted : AppColors.lightMuted)),
+                AppText(r.time, style: TextStyle(fontSize: 11, color: isDark ? AppColors.darkMuted : AppColors.lightMuted)),
               ])),
             ]),
           ),
@@ -8611,7 +8608,7 @@ class _QuotedPostPreview extends StatelessWidget {
                       ),
                       const SizedBox(width: 4),
                       Flexible(
-                        child: Text(
+                        child: AppText(
                           post.username,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -8635,7 +8632,7 @@ class _QuotedPostPreview extends StatelessWidget {
               ),
             ],
             const SizedBox(height: 6),
-            Text(post.time, style: TextStyle(color: muted, fontSize: 11)),
+            AppText(post.time, style: TextStyle(color: muted, fontSize: 11)),
           ],
         ),
       ),
@@ -8747,7 +8744,7 @@ class _PostCard extends StatelessWidget {
                     children: [
                       Icon(Icons.push_pin_rounded, size: 15, color: AppColors.purple),
                       SizedBox(width: 5),
-                      Text(
+                      AppText(
                         'تغريدة مثبتة من قبل المشرفين',
                         style: TextStyle(color: AppColors.purple, fontSize: 12.5, fontWeight: FontWeight.w900),
                       ),
@@ -8764,7 +8761,7 @@ class _PostCard extends StatelessWidget {
                       const Icon(Icons.repeat_rounded, size: 17, color: AppColors.purple),
                       const SizedBox(width: 6),
                       Flexible(
-                        child: Text(
+                        child: AppText(
                           '${post.repostedByName ?? post.repostedByUsername} أعاد النشر',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -8822,14 +8819,14 @@ class _PostCard extends StatelessWidget {
                                         ),
                                         ConstrainedBox(
                                           constraints: BoxConstraints(maxWidth: constraints.maxWidth * 0.35),
-                                          child: Text(
+                                          child: AppText(
                                             post.username,
                                             maxLines: 1,
                                             overflow: TextOverflow.ellipsis,
                                             style: TextStyle(color: mutedColor),
                                           ),
                                         ),
-                                        Text('· ${post.time}', style: TextStyle(color: mutedColor, fontSize: 12)),
+                                        AppText('· ${post.time}', style: TextStyle(color: mutedColor, fontSize: 12)),
                                         if (post.authorSubscriptionPriority > 0 && post.subscriptionTier != 'free')
                                           _SubscriptionBoostBadge(
                                             tier: post.subscriptionTier,
@@ -8861,7 +8858,7 @@ class _PostCard extends StatelessWidget {
                                   width: 36,
                                   height: 36,
                                   child: IconButton(
-                                    tooltip: 'حذف التغريدة',
+                                    tooltip: context.tr('حذف التغريدة'),
                                     onPressed: onDelete,
                                     padding: EdgeInsets.zero,
                                     constraints: const BoxConstraints.tightFor(width: 36, height: 36),
@@ -9005,16 +9002,16 @@ class _PostTextDragFeedback extends StatelessWidget {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text(
+                      const AppText(
                         'اسحب للنشر',
                         style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w900),
                       ),
                       const SizedBox(height: 2),
-                      Text(
+                      AppText(
                         shortPreview,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        textDirection: TextDirection.rtl,
+                        textDirection: context.appTextDirection,
                         style: TextStyle(color: Colors.white.withValues(alpha: 0.92), fontSize: 12.5, height: 1.25),
                       ),
                     ],
@@ -9071,9 +9068,9 @@ class _SheetOption extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(title, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15)),
+                  AppText(title, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15)),
                   const SizedBox(height: 2),
-                  Text(
+                  AppText(
                     subtitle,
                     style: TextStyle(
                       color: isDark ? AppColors.darkMuted : AppColors.lightMuted,
@@ -9146,7 +9143,7 @@ class _BrokenMedia extends StatelessWidget {
         children: [
           Icon(Icons.broken_image_rounded, color: isDark ? AppColors.darkMuted : AppColors.lightMuted, size: 34),
           const SizedBox(height: 8),
-          Text(
+          AppText(
             'تعذر عرض الملف',
             style: TextStyle(
               color: isDark ? AppColors.darkMuted : AppColors.lightMuted,
@@ -9200,7 +9197,7 @@ class _PostAction extends StatelessWidget {
             Icon(icon, color: color, size: 19),
             if (label.trim().isNotEmpty) ...[
               const SizedBox(width: 3),
-              Text(label, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w800)),
+              AppText(label, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w800)),
             ],
           ],
         ),
@@ -9265,7 +9262,7 @@ class _MediaPreview extends StatelessWidget {
                 children: [
                   Icon(Icons.videocam_rounded, color: Colors.white, size: 16),
                   SizedBox(width: 5),
-                  Text('فيديو', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12)),
+                  AppText('فيديو', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12)),
                 ],
               ),
             ),
@@ -9303,13 +9300,13 @@ class _VoicePreview extends StatelessWidget {
           Icon(isRecording ? Icons.fiber_manual_record_rounded : Icons.mic_rounded, color: isRecording ? AppColors.danger : AppColors.purple),
           const SizedBox(width: 10),
           Expanded(
-            child: Text(
+            child: AppText(
               isRecording ? 'جاري التسجيل... $durationText' : 'تسجيل صوتي $durationText',
               style: const TextStyle(fontWeight: FontWeight.w900),
             ),
           ),
           IconButton(
-            tooltip: 'حذف التسجيل',
+            tooltip: context.tr('حذف التسجيل'),
             onPressed: onRemove,
             icon: const Icon(Icons.close_rounded),
           ),
@@ -9429,7 +9426,7 @@ class _VoiceBubbleState extends State<_VoiceBubble> {
                   ),
                 ),
                 const SizedBox(height: 5),
-                Text('$pos / $total', style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, fontSize: 11.5, fontWeight: FontWeight.w800)),
+                AppText('$pos / $total', style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, fontSize: 11.5, fontWeight: FontWeight.w800)),
               ],
             ),
           ),
@@ -9646,7 +9643,7 @@ class _VideoPlayerBox extends StatelessWidget {
                     children: [
                       Icon(Icons.videocam_rounded, color: Colors.white, size: 16),
                       SizedBox(width: 6),
-                      Text(
+                      AppText(
                         'فيديو',
                         style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 12),
                       ),
@@ -9655,7 +9652,7 @@ class _VideoPlayerBox extends StatelessWidget {
                 ),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: Text(
+                  child: AppText(
                     _isRemote ? 'اضغط للتشغيل' : _cleanFileName,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -9817,7 +9814,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
         _comments = int.tryParse((result['comments'] ?? _comments).toString()) ?? _comments;
       });
     } catch (_) {
-      if (mounted) NotificationService.showTopError('تعذر تحديث إعجاب الستوري');
+      if (mounted) NotificationService.showTopError(context.tr('تعذر تحديث إعجاب الستوري'));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -9837,9 +9834,9 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
       );
       if (!mounted) return;
       setState(() => _comments++);
-      NotificationService.showTopNotification('تم إرسال التعليق');
+      NotificationService.showTopNotification(context.tr('تم إرسال التعليق'));
     } catch (e) {
-      if (mounted) NotificationService.showTopError('تعذر إرسال التعليق: $e');
+      if (mounted) NotificationService.showTopError(context.tr('تعذر إرسال التعليق: $e'));
     }
   }
 
@@ -9859,7 +9856,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
         children: [
           Icon(Icons.lock_rounded, color: Colors.white70, size: 74),
           SizedBox(height: 12),
-          Text('هذا الستوري مشفر وغير متاح لهذا الحساب', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w800)),
+          AppText('هذا الستوري مشفر وغير متاح لهذا الحساب', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w800)),
         ],
       );
     }
@@ -9979,8 +9976,8 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 15)),
-                              Text(username, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: Colors.white.withValues(alpha: .65), fontWeight: FontWeight.w700, fontSize: 12)),
+                              AppText(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 15)),
+                              AppText(username, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: Colors.white.withValues(alpha: .65), fontWeight: FontWeight.w700, fontSize: 12)),
                             ],
                           ),
                         ),
@@ -10010,7 +10007,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
                           maxLines: 3,
                           style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
                           decoration: InputDecoration(
-                            hintText: 'اكتب تعليق...',
+                            hintText: context.tr('اكتب تعليق...'),
                             hintStyle: TextStyle(color: Colors.white.withValues(alpha: .58)),
                             border: InputBorder.none,
                             contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -10036,7 +10033,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
                     borderRadius: BorderRadius.circular(999),
                     border: Border.all(color: Colors.white.withValues(alpha: .13)),
                   ),
-                  child: Text('$_likes إعجاب · $_comments تعليق', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 12)),
+                  child: AppText('$_likes إعجاب · $_comments تعليق', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 12)),
                 ),
               ),
             ],
@@ -10418,8 +10415,8 @@ class _FullscreenVideoPlayerState extends State<_FullscreenVideoPlayer> {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text(_format(position), style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w800)),
-                        Text(_format(duration), style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w800)),
+                        AppText(_format(position), style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w800)),
+                        AppText(_format(duration), style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w800)),
                       ],
                     ),
                   ],
@@ -10476,23 +10473,23 @@ class _FullscreenTweetInfo extends StatelessWidget {
                 child: _avatarProvider(post.avatarPath) == null ? const Icon(Icons.person_rounded, color: Colors.white, size: 18) : null,
               ),
               const SizedBox(width: 10),
-              Expanded(child: Text(post.user, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 16))),
-              Text(post.username, style: const TextStyle(color: Colors.white60, fontWeight: FontWeight.w700)),
+              Expanded(child: AppText(post.user, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 16))),
+              AppText(post.username, style: const TextStyle(color: Colors.white60, fontWeight: FontWeight.w700)),
             ],
           ),
           if (text.isNotEmpty) ...[
             const SizedBox(height: 10),
-            Text(
+            AppText(
               text,
               maxLines: expanded ? 12 : 2,
               overflow: expanded ? TextOverflow.visible : TextOverflow.ellipsis,
               style: const TextStyle(color: Colors.white, fontSize: 16, height: 1.35),
-              textDirection: TextDirection.rtl,
+              textDirection: context.appTextDirection,
             ),
             if (hasMore)
               TextButton(
                 onPressed: onToggle,
-                child: Text(expanded ? 'عرض أقل' : 'المزيد', style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w900)),
+                child: AppText(expanded ? 'عرض أقل' : 'المزيد', style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w900)),
               ),
           ],
           const SizedBox(height: 6),
@@ -10568,7 +10565,7 @@ class _FullscreenAction extends StatelessWidget {
       children: [
         Icon(icon, color: color, size: 22),
         const SizedBox(width: 5),
-        Text(label, style: TextStyle(color: color, fontWeight: FontWeight.w800)),
+        AppText(label, style: TextStyle(color: color, fontWeight: FontWeight.w800)),
       ],
     );
     if (onTap == null) return child;
@@ -10704,7 +10701,7 @@ class _PostDetailsScreenState extends State<PostDetailsScreen> {
 
     final hasPermission = await _replyRecorder.hasPermission();
     if (!hasPermission) {
-      NotificationService.showTopNotification('يجب السماح للتطبيق باستخدام المايكروفون');
+      NotificationService.showTopNotification(context.tr('يجب السماح للتطبيق باستخدام المايكروفون'));
       return;
     }
 
@@ -10783,7 +10780,7 @@ class _PostDetailsScreenState extends State<PostDetailsScreen> {
         reply.isLiked = previousLiked;
         reply.likes = previousLikes;
       });
-      NotificationService.showTopError('تعذر تحديث لايك الرد');
+      NotificationService.showTopError(context.tr('تعذر تحديث لايك الرد'));
     }
   }
 
@@ -10821,7 +10818,7 @@ class _PostDetailsScreenState extends State<PostDetailsScreen> {
         reply.isReposted = previousReposted;
         reply.reposts = previousReposts;
       });
-      NotificationService.showTopError('تعذر حفظ إعادة نشر الرد في السيرفر: $e');
+      NotificationService.showTopError(context.tr('تعذر حفظ إعادة نشر الرد في السيرفر: $e'));
     }
   }
 
@@ -10856,7 +10853,7 @@ class _PostDetailsScreenState extends State<PostDetailsScreen> {
               children: [
                 Container(width: 46, height: 5, decoration: BoxDecoration(color: isDark ? AppColors.darkBorder : AppColors.lightBorder, borderRadius: BorderRadius.circular(99))),
                 const SizedBox(height: 18),
-                const Text('إضافة مع الرد', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+                const AppText('إضافة مع الرد', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
                 const SizedBox(height: 14),
                 _SheetOption(icon: Icons.image_rounded, title: 'إضافة صورة', subtitle: 'إرفاق صورة مع الرد', onTap: () => Navigator.pop(context, _AttachmentChoice.image)),
                 const SizedBox(height: 10),
@@ -10881,7 +10878,7 @@ class _PostDetailsScreenState extends State<PostDetailsScreen> {
   Future<void> _sendInlineReply() async {
     if (_sendingReply) return;
     if (_recordingReply) {
-      NotificationService.showTopNotification('اضغط إيقاف التسجيل أولًا ثم أرسل الرد');
+      NotificationService.showTopNotification(context.tr('اضغط إيقاف التسجيل أولًا ثم أرسل الرد'));
       return;
     }
     final text = _replyCtrl.text.trim();
@@ -10940,11 +10937,11 @@ class _PostDetailsScreenState extends State<PostDetailsScreen> {
 
       await _refreshReplies();
       if (!mounted) return;
-      NotificationService.showTopSuccess('تم نشر الرد');
+      NotificationService.showTopSuccess(context.tr('تم نشر الرد'));
     } catch (e) {
       assert(() { _scannerSafeIgnore(); return true; }());
       if (mounted) {
-        NotificationService.showTopError('تعذر نشر الرد');
+        NotificationService.showTopError(context.tr('تعذر نشر الرد'));
       }
     } finally {
       if (mounted) setState(() => _sendingReply = false);
@@ -10982,7 +10979,7 @@ class _PostDetailsScreenState extends State<PostDetailsScreen> {
                     const Icon(Icons.reply_rounded, color: AppColors.purple, size: 18),
                     const SizedBox(width: 8),
                     Expanded(
-                      child: Text(
+                      child: AppText(
                         'ردًا على ${_replyingToUser!}${(_replyingToUsername ?? '').trim().isNotEmpty ? '  ${_replyingToUsername}' : ''}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -11022,7 +11019,7 @@ class _PostDetailsScreenState extends State<PostDetailsScreen> {
             ],
             Row(
               children: [
-                _SmallPurpleAction(icon: Icons.add_rounded, tooltip: 'إضافة مع الرد', onTap: _showInlineReplyPlusMenu),
+                _SmallPurpleAction(icon: Icons.add_rounded, tooltip: context.tr('إضافة مع الرد'), onTap: _showInlineReplyPlusMenu),
                 const SizedBox(width: 10),
                 Expanded(
                   child: TextField(
@@ -11033,7 +11030,7 @@ class _PostDetailsScreenState extends State<PostDetailsScreen> {
                     textInputAction: TextInputAction.send,
                     onSubmitted: (_) => _sendInlineReply(),
                     decoration: InputDecoration(
-                      hintText: _replyingToUser == null ? 'نشر ردّك' : 'اكتب ردك على ${_replyingToUser!}',
+                      hintText: _replyingToUser == null ? context.tr('نشر ردّك') : context.tr('اكتب ردك على ${_replyingToUser!}'),
                       hintStyle: TextStyle(color: muted, fontWeight: FontWeight.w700),
                       border: InputBorder.none,
                       isDense: true,
@@ -11074,7 +11071,7 @@ class _PostDetailsScreenState extends State<PostDetailsScreen> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     return Scaffold(
-      appBar: AppBar(title: const Text('تفاصيل التغريدة', style: TextStyle(fontWeight: FontWeight.w900))),
+      appBar: AppBar(title: const AppText('تفاصيل التغريدة', style: TextStyle(fontWeight: FontWeight.w900))),
       body: RefreshIndicator(
         onRefresh: _refreshReplies,
         child: ListView(
@@ -11110,12 +11107,12 @@ class _PostDetailsScreenState extends State<PostDetailsScreen> {
             Divider(color: AppColors.purple.withValues(alpha: 0.28)),
             Padding(
               padding: const EdgeInsets.all(16),
-              child: Text('الردود', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18, color: isDark ? Colors.white : Colors.black87)),
+              child: AppText('الردود', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18, color: isDark ? Colors.white : Colors.black87)),
             ),
             if (widget.post.replies.isEmpty)
               Padding(
                 padding: const EdgeInsets.all(24),
-                child: Center(child: Text('لا توجد ردود بعد', style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted))),
+                child: Center(child: AppText('لا توجد ردود بعد', style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted))),
               )
             else
               ...List.generate(_sortedReplies(widget.post.replies).length, (index) {
@@ -11161,13 +11158,13 @@ class _PostDetailsScreenState extends State<PostDetailsScreen> {
                                         style: const TextStyle(fontWeight: FontWeight.w900),
                                       ),
                                     ),
-                                    Text(r.username, style: TextStyle(color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
-                                    Text(r.time, style: TextStyle(color: muted, fontSize: 11, fontWeight: FontWeight.w700)),
+                                    AppText(r.username, style: TextStyle(color: muted, fontSize: 12, fontWeight: FontWeight.w700)),
+                                    AppText(r.time, style: TextStyle(color: muted, fontSize: 11, fontWeight: FontWeight.w700)),
                                   ],
                                 ),
                                 if ((r.parentUser?.trim().isNotEmpty ?? false)) ...[
                                   const SizedBox(height: 4),
-                                  Text('ردًا على ${r.parentUser}', style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w800, fontSize: 12)),
+                                  AppText('ردًا على ${r.parentUser}', style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w800, fontSize: 12)),
                                 ],
                                 if (r.text.trim().isNotEmpty) ...[
                                   const SizedBox(height: 5),
@@ -11239,7 +11236,7 @@ class _ReplyActionBar extends StatelessWidget {
             children: [
               Icon(icon, size: 17, color: c),
               const SizedBox(width: 4),
-              Text(label, style: TextStyle(color: c, fontWeight: FontWeight.w900, fontSize: 12)),
+              AppText(label, style: TextStyle(color: c, fontWeight: FontWeight.w900, fontSize: 12)),
             ],
           ),
         ),
@@ -11339,12 +11336,12 @@ class _InlineReplyVoicePreview extends StatelessWidget {
         children: [
           Icon(isRecording ? Icons.fiber_manual_record_rounded : Icons.mic_rounded, color: isRecording ? AppColors.danger : AppColors.purple),
           const SizedBox(width: 8),
-          Expanded(child: Text(isRecording ? 'جاري التسجيل $durationText' : 'صوتية مرفقة $durationText', style: const TextStyle(fontWeight: FontWeight.w900))),
+          Expanded(child: AppText(isRecording ? 'جاري التسجيل $durationText' : 'صوتية مرفقة $durationText', style: const TextStyle(fontWeight: FontWeight.w900))),
           if (isRecording)
             TextButton.icon(
               onPressed: onStop,
               icon: const Icon(Icons.stop_rounded, size: 18),
-              label: const Text('إيقاف'),
+              label: const AppText('إيقاف'),
               style: TextButton.styleFrom(
                 foregroundColor: Colors.white,
                 backgroundColor: AppColors.danger,
@@ -11369,7 +11366,7 @@ class _StatPill extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
     decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: 0.14), borderRadius: BorderRadius.circular(999)),
-    child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(icon, color: AppColors.purple, size: 17), const SizedBox(width: 5), Text(text, style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w900, fontSize: 12))]),
+    child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(icon, color: AppColors.purple, size: 17), const SizedBox(width: 5), AppText(text, style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w900, fontSize: 12))]),
   );
 }
 
@@ -11790,7 +11787,7 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
         }
       } else {
         if (widget.community.kickedMembers.contains(widget.currentUsername)) {
-          NotificationService.showTopError('تم طردك من هذا المجتمع ولا يمكنك الرجوع');
+          NotificationService.showTopError(context.tr('تم طردك من هذا المجتمع ولا يمكنك الرجوع'));
           return;
         }
         widget.community.members.add(widget.currentUsername);
@@ -11829,13 +11826,13 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
                   ),
                 ),
                 const SizedBox(height: 16),
-                const Text('إضافة مشرف', textAlign: TextAlign.center, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+                const AppText('إضافة مشرف', textAlign: TextAlign.center, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
                 const SizedBox(height: 12),
                 if (candidates.isEmpty)
-                  const ListTile(title: Text('لا يوجد أعضاء لإضافتهم كمشرفين'))
+                  const ListTile(title: AppText('لا يوجد أعضاء لإضافتهم كمشرفين'))
                 else
                   ...candidates.map((u) => ListTile(
-                    title: Text(u),
+                    title: AppText(u),
                     leading: const Icon(Icons.person_add_alt_1_rounded, color: AppColors.purple),
                     onTap: () => Navigator.pop(context, u),
                   )),
@@ -11868,7 +11865,7 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
 
   Future<void> _composeCommunityPost() async {
     if (!_isMember) {
-      NotificationService.showTopNotification('تابع المجتمع أولاً حتى تستطيع النشر');
+      NotificationService.showTopNotification(context.tr('تابع المجتمع أولاً حتى تستطيع النشر'));
       return;
     }
 
@@ -11957,14 +11954,14 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
                 const SizedBox(height: 16),
                 ListTile(
                   leading: Icon(Icons.repeat_rounded, color: post.isReposted ? AppColors.purple : AppColors.purple),
-                  title: Text(post.isReposted ? 'تمت إعادة النشر مسبقًا' : 'إعادة نشر', style: const TextStyle(fontWeight: FontWeight.w900)),
-                  subtitle: Text(post.isReposted ? 'لا يمكن إعادة نشر نفس التغريدة أكثر من مرة' : 'إظهار التغريدة لمتابعيك', style: TextStyle(color: muted, fontSize: 12)),
+                  title: AppText(post.isReposted ? 'تمت إعادة النشر مسبقًا' : 'إعادة نشر', style: const TextStyle(fontWeight: FontWeight.w900)),
+                  subtitle: AppText(post.isReposted ? 'لا يمكن إعادة نشر نفس التغريدة أكثر من مرة' : 'إظهار التغريدة لمتابعيك', style: TextStyle(color: muted, fontSize: 12)),
                   onTap: () => Navigator.pop(context, 'repost'),
                 ),
                 ListTile(
                   leading: const Icon(Icons.format_quote_rounded, color: AppColors.purple),
-                  title: const Text('اقتباس', style: TextStyle(fontWeight: FontWeight.w900)),
-                  subtitle: Text('اكتب تعليقك مع التغريدة', style: TextStyle(color: muted, fontSize: 12)),
+                  title: const AppText('اقتباس', style: TextStyle(fontWeight: FontWeight.w900)),
+                  subtitle: AppText('اكتب تعليقك مع التغريدة', style: TextStyle(color: muted, fontSize: 12)),
                   onTap: () => Navigator.pop(context, 'quote'),
                 ),
               ],
@@ -11997,13 +11994,13 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
     if (action != 'repost') return;
     if (post.isReposted) {
       if (!mounted) return;
-      NotificationService.showTopNotification('أنت أعدت نشر هذه التغريدة مسبقًا');
+      NotificationService.showTopNotification(context.tr('أنت أعدت نشر هذه التغريدة مسبقًا'));
       return;
     }
     setState(() { post.isReposted = true; post.reposts += 1; });
     await widget.onChanged();
     if (!mounted) return;
-    NotificationService.showTopNotification('تمت إعادة النشر');
+    NotificationService.showTopNotification(context.tr('تمت إعادة النشر'));
   }
 
   Future<void> _sharePost(CityPost post) async {
@@ -12026,8 +12023,8 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
               children: [
                 Container(width: 46, height: 5, decoration: BoxDecoration(color: isDark ? AppColors.darkBorder : AppColors.lightBorder, borderRadius: BorderRadius.circular(99))),
                 const SizedBox(height: 16),
-                ListTile(leading: const Icon(Icons.chat_rounded, color: AppColors.success), title: const Text('إرسال للواتس', style: TextStyle(fontWeight: FontWeight.w900)), subtitle: const Text('سيتم نسخ نص التغريدة لتلصقه في واتساب'), onTap: () => Navigator.pop(context, 'whatsapp')),
-                ListTile(leading: const Icon(Icons.link_rounded, color: AppColors.purple), title: const Text('نسخ رابط التغريدة', style: TextStyle(fontWeight: FontWeight.w900)), onTap: () => Navigator.pop(context, 'copy')),
+                ListTile(leading: const Icon(Icons.chat_rounded, color: AppColors.success), title: const AppText('إرسال للواتس', style: TextStyle(fontWeight: FontWeight.w900)), subtitle: const AppText('سيتم نسخ نص التغريدة لتلصقه في واتساب'), onTap: () => Navigator.pop(context, 'whatsapp')),
+                ListTile(leading: const Icon(Icons.link_rounded, color: AppColors.purple), title: const AppText('نسخ رابط التغريدة', style: TextStyle(fontWeight: FontWeight.w900)), onTap: () => Navigator.pop(context, 'copy')),
               ],
             ),
           ),
@@ -12082,21 +12079,21 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
   }
 
   void _openAuthorFromCommunity(CityPost post) {
-    NotificationService.showTopNotification('${post.user} ${post.username}');
+    NotificationService.showTopNotification(context.tr('${post.user} ${post.username}'));
   }
 
   Future<void> _hidePost(CityPost post) async {
     if (!_isMod && post.username != widget.currentUsername) return;
     setState(() => post.hiddenFromCommunity = true);
     await widget.onChanged();
-    if (mounted) NotificationService.showTopSuccess('تم إخفاء التغريدة من المجتمع');
+    if (mounted) NotificationService.showTopSuccess(context.tr('تم إخفاء التغريدة من المجتمع'));
   }
 
   Future<void> _togglePinPost(CityPost post) async {
     if (!_isMod) return;
     final pinned = widget.community.posts.where((p) => p.pinnedInCommunity && !p.hiddenFromCommunity).length;
     if (!post.pinnedInCommunity && pinned >= 3) {
-      NotificationService.showTopError('مسموح 3 تغريدات مثبتة فقط');
+      NotificationService.showTopError(context.tr('مسموح 3 تغريدات مثبتة فقط'));
       return;
     }
     setState(() => post.pinnedInCommunity = !post.pinnedInCommunity);
@@ -12146,7 +12143,7 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
     final submitted = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('بلاغ للمشرفين', style: TextStyle(fontWeight: FontWeight.w900)),
+        title: const AppText('بلاغ للمشرفين', style: TextStyle(fontWeight: FontWeight.w900)),
         content: StatefulBuilder(
           builder: (context, setLocal) => SingleChildScrollView(
             child: Column(
@@ -12154,14 +12151,14 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
               children: [
                 DropdownButtonFormField<String>(
                   value: reason,
-                  decoration: const InputDecoration(labelText: 'نوع البلاغ'),
+                  decoration: InputDecoration(labelText: context.tr('نوع البلاغ')),
                   items: const [
-                    DropdownMenuItem(value: 'محتوى مخالف', child: Text('محتوى مخالف')),
-                    DropdownMenuItem(value: 'سرقة محتوى', child: Text('سرقة محتوى')),
-                    DropdownMenuItem(value: 'سبام أو إزعاج', child: Text('سبام أو إزعاج')),
-                    DropdownMenuItem(value: 'تحرش أو إساءة', child: Text('تحرش أو إساءة')),
-                    DropdownMenuItem(value: 'معلومات مضللة', child: Text('معلومات مضللة')),
-                    DropdownMenuItem(value: 'بلاغ مخصص', child: Text('بلاغ مخصص')),
+                    DropdownMenuItem(value: 'محتوى مخالف', child: AppText('محتوى مخالف')),
+                    DropdownMenuItem(value: 'سرقة محتوى', child: AppText('سرقة محتوى')),
+                    DropdownMenuItem(value: 'سبام أو إزعاج', child: AppText('سبام أو إزعاج')),
+                    DropdownMenuItem(value: 'تحرش أو إساءة', child: AppText('تحرش أو إساءة')),
+                    DropdownMenuItem(value: 'معلومات مضللة', child: AppText('معلومات مضللة')),
+                    DropdownMenuItem(value: 'بلاغ مخصص', child: AppText('بلاغ مخصص')),
                   ],
                   onChanged: (v) => setLocal(() => reason = v ?? reason),
                 ),
@@ -12171,8 +12168,8 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
                   maxLines: 6,
                   onChanged: (value) => details = value,
                   decoration: InputDecoration(
-                    labelText: reason == 'بلاغ مخصص' ? 'اكتب البلاغ الذي تريده' : 'اشرح البلاغ بالتفصيل',
-                    hintText: reason == 'بلاغ مخصص' ? 'اكتب بلاغك كامل هنا' : 'اختياري، لكنه يساعد المشرفين والذكاء الاصطناعي',
+                    labelText: reason == 'بلاغ مخصص' ? context.tr('اكتب البلاغ الذي تريده') : context.tr('اشرح البلاغ بالتفصيل'),
+                    hintText: reason == 'بلاغ مخصص' ? context.tr('اكتب بلاغك كامل هنا') : context.tr('اختياري، لكنه يساعد المشرفين والذكاء الاصطناعي'),
                     border: const OutlineInputBorder(),
                   ),
                 ),
@@ -12181,15 +12178,15 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('إلغاء')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('إرسال')),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const AppText('إلغاء')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const AppText('إرسال')),
         ],
       ),
     );
     details = details.trim();
     if (submitted != true) return;
     if (reason == 'بلاغ مخصص' && details.isEmpty) {
-      NotificationService.showTopError('اكتب تفاصيل البلاغ المخصص أولاً');
+      NotificationService.showTopError(context.tr('اكتب تفاصيل البلاغ المخصص أولاً'));
       return;
     }
     final report = CommunityReport(
@@ -12218,7 +12215,7 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
       );
     } catch (e, st) { _logIgnoredError(e, st); }
     unawaited(_reviewCommunityReportWithAi(report, post));
-    if (mounted) NotificationService.showTopSuccess('تم إرسال البلاغ للمشرفين');
+    if (mounted) NotificationService.showTopSuccess(context.tr('تم إرسال البلاغ للمشرفين'));
   }
 
   Future<void> _reviewCommunityReportWithAi(CommunityReport report, CityPost post) async {
@@ -12278,8 +12275,7 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
         );
       } catch (e, st) { _logIgnoredError(e, st); }
       if (!valid && SupabaseService.displayUsername(report.reporterUsername) == SupabaseService.displayUsername(widget.currentUsername)) {
-        NotificationService.showTopNotification(
-          'راجعنا البلاغ داخل ${widget.community.name}، والتغريدة سليمة ولا يوجد عليها أي مشكلة.',
+        NotificationService.showTopNotification(context.tr('راجعنا البلاغ داخل ${widget.community.name}، والتغريدة سليمة ولا يوجد عليها أي مشكلة.'),
           title: 'نتيجة البلاغ',
           icon: Icons.verified_user_rounded,
           accentColor: AppColors.success,
@@ -12296,11 +12292,11 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
     return Scaffold(
       backgroundColor: isDark ? AppColors.darkBg : AppColors.lightBg,
       appBar: AppBar(
-        title: Text(widget.community.name, style: const TextStyle(fontWeight: FontWeight.w900)),
+        title: AppText(widget.community.name, style: const TextStyle(fontWeight: FontWeight.w900)),
         actions: [
           if (_isMod)
             IconButton(
-              tooltip: 'إضافة مشرف',
+              tooltip: context.tr('إضافة مشرف'),
               onPressed: _addModerator,
               icon: const Icon(Icons.admin_panel_settings_rounded),
             ),
@@ -12312,7 +12308,7 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
         foregroundColor: Colors.white,
         onPressed: _composeCommunityPost,
         icon: const Icon(Icons.edit_rounded),
-        label: const Text('نشر', style: TextStyle(fontWeight: FontWeight.w900)),
+        label: const AppText('نشر', style: TextStyle(fontWeight: FontWeight.w900)),
       ),
       body: NestedScrollView(
         headerSliverBuilder: (context, innerBoxIsScrolled) => [
@@ -12336,12 +12332,12 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
                 labelColor: AppColors.purple,
                 unselectedLabelColor: isDark ? AppColors.darkMuted : AppColors.lightMuted,
                 indicatorColor: AppColors.purple,
-                tabs: const [
-                  Tab(text: 'التغريدات'),
-                  Tab(text: 'الوسائط'),
-                  Tab(text: 'الأعضاء'),
-                  Tab(text: 'البلاغات'),
-                  Tab(text: 'المطرودين'),
+                tabs: [
+                  Tab(child: AppText('التغريدات')),
+                  Tab(child: AppText('الوسائط')),
+                  Tab(child: AppText('الأعضاء')),
+                  Tab(child: AppText('البلاغات')),
+                  Tab(child: AppText('المطرودين')),
                 ],
               ),
               isDark: isDark,
@@ -12456,7 +12452,7 @@ class _CommunityHeroCard extends StatelessWidget {
                 Row(
                   children: [
                     Expanded(
-                      child: Text(
+                      child: AppText(
                         community.name,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -12468,7 +12464,7 @@ class _CommunityHeroCard extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 6),
-                Text(
+                AppText(
                   community.description.isEmpty ? 'مجتمع Respect App للنقاش والتغريدات والوسائط' : community.description,
                   style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, height: 1.45),
                 ),
@@ -12495,7 +12491,7 @@ class _CommunityHeroCard extends StatelessWidget {
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
                     ),
                     icon: Icon(isOwner ? Icons.workspace_premium_rounded : (isMember ? Icons.check_circle_rounded : Icons.group_add_rounded)),
-                    label: Text(
+                    label: AppText(
                       isOwner ? 'أنت مالك المجتمع' : (isMember ? 'أنت عضو - إلغاء المتابعة' : 'متابعة المجتمع'),
                       style: const TextStyle(fontWeight: FontWeight.w900),
                     ),
@@ -12585,22 +12581,22 @@ class _CommunityPostsTab extends StatelessWidget {
                 const SizedBox(height: 12),
                 ListTile(
                   leading: const Icon(Icons.flag_rounded, color: Colors.orange),
-                  title: const Text('إبلاغ المشرفين', style: TextStyle(fontWeight: FontWeight.w900)),
-                  subtitle: Text('إرسال بلاغ عن هذه التغريدة داخل المجتمع', style: TextStyle(color: muted, fontSize: 12)),
+                  title: const AppText('إبلاغ المشرفين', style: TextStyle(fontWeight: FontWeight.w900)),
+                  subtitle: AppText('إرسال بلاغ عن هذه التغريدة داخل المجتمع', style: TextStyle(color: muted, fontSize: 12)),
                   onTap: () => Navigator.pop(sheetContext, 'report'),
                 ),
                 if (canModerate)
                   ListTile(
                     leading: const Icon(Icons.push_pin_rounded, color: AppColors.purple),
-                    title: Text(post.pinnedInCommunity ? 'إلغاء التثبيت' : 'تثبيت التغريدة', style: const TextStyle(fontWeight: FontWeight.w900)),
-                    subtitle: Text('يمكن تثبيت حتى 3 تغريدات داخل المجتمع', style: TextStyle(color: muted, fontSize: 12)),
+                    title: AppText(post.pinnedInCommunity ? 'إلغاء التثبيت' : 'تثبيت التغريدة', style: const TextStyle(fontWeight: FontWeight.w900)),
+                    subtitle: AppText('يمكن تثبيت حتى 3 تغريدات داخل المجتمع', style: TextStyle(color: muted, fontSize: 12)),
                     onTap: () => Navigator.pop(sheetContext, 'pin'),
                   ),
                 if (canDelete || canModerate)
                   ListTile(
                     leading: const Icon(Icons.visibility_off_rounded, color: AppColors.danger),
-                    title: const Text('إخفاء من المجتمع', style: TextStyle(fontWeight: FontWeight.w900)),
-                    subtitle: Text('لن تظهر هذه التغريدة داخل المجتمع', style: TextStyle(color: muted, fontSize: 12)),
+                    title: const AppText('إخفاء من المجتمع', style: TextStyle(fontWeight: FontWeight.w900)),
+                    subtitle: AppText('لن تظهر هذه التغريدة داخل المجتمع', style: TextStyle(color: muted, fontSize: 12)),
                     onTap: () => Navigator.pop(sheetContext, 'hide'),
                   ),
               ],
@@ -12625,9 +12621,9 @@ class _CommunityPostsTab extends StatelessWidget {
           const SizedBox(height: 90),
           Icon(Icons.mode_comment_rounded, size: 76, color: AppColors.purple.withValues(alpha: 0.9)),
           const SizedBox(height: 14),
-          Center(child: Text(emptyText, textAlign: TextAlign.center, style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w900))),
+          Center(child: AppText(emptyText, textAlign: TextAlign.center, style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w900))),
           const SizedBox(height: 6),
-          Text(
+          AppText(
             'انشر تغريدة، صورة، فيديو، GIF أو تسجيل صوتي داخل المجتمع.',
             textAlign: TextAlign.center,
             style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted),
@@ -12705,8 +12701,8 @@ class _CommunityReportsTab extends StatelessWidget {
   const _CommunityReportsTab({required this.community, required this.isMod, required this.isDark});
   @override
   Widget build(BuildContext context) {
-    if (!isMod) return const Center(child: Text('قسم البلاغات للمشرفين فقط'));
-    if (community.reports.isEmpty) return const Center(child: Text('لا توجد بلاغات داخل المجتمع'));
+    if (!isMod) return const Center(child: AppText('قسم البلاغات للمشرفين فقط'));
+    if (community.reports.isEmpty) return const Center(child: AppText('لا توجد بلاغات داخل المجتمع'));
     final muted = isDark ? AppColors.darkMuted : AppColors.lightMuted;
     return ListView.builder(
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 110),
@@ -12720,14 +12716,14 @@ class _CommunityReportsTab extends StatelessWidget {
               Row(children: [
                 const Icon(Icons.report_rounded, color: AppColors.danger),
                 const SizedBox(width: 8),
-                Expanded(child: Text(r.reason, style: const TextStyle(fontWeight: FontWeight.w900))),
+                Expanded(child: AppText(r.reason, style: const TextStyle(fontWeight: FontWeight.w900))),
                 _MiniChip(text: r.status == 'accepted' ? 'صحيح' : r.status == 'rejected' ? 'مرفوض' : 'قيد المراجعة', color: r.status == 'accepted' ? AppColors.success : r.status == 'rejected' ? AppColors.danger : AppColors.purple),
               ]),
               const SizedBox(height: 8),
-              Text('على: ${r.postUser} ${r.postUsername}', style: const TextStyle(fontWeight: FontWeight.w800)),
-              Text('من: ${r.reporterName} ${r.reporterUsername}', style: TextStyle(color: muted, fontSize: 12)),
-              if (r.details.trim().isNotEmpty) Padding(padding: const EdgeInsets.only(top: 8), child: Text(r.details)),
-              if (r.aiReason.trim().isNotEmpty) Padding(padding: const EdgeInsets.only(top: 8), child: Text('قرار AI: ${r.aiReason}', style: TextStyle(color: muted, fontSize: 12))),
+              AppText('على: ${r.postUser} ${r.postUsername}', style: const TextStyle(fontWeight: FontWeight.w800)),
+              AppText('من: ${r.reporterName} ${r.reporterUsername}', style: TextStyle(color: muted, fontSize: 12)),
+              if (r.details.trim().isNotEmpty) Padding(padding: const EdgeInsets.only(top: 8), child: AppText(r.details)),
+              if (r.aiReason.trim().isNotEmpty) Padding(padding: const EdgeInsets.only(top: 8), child: AppText('قرار AI: ${r.aiReason}', style: TextStyle(color: muted, fontSize: 12))),
             ]),
           ),
         );
@@ -12744,8 +12740,8 @@ class _CommunityKickedTab extends StatelessWidget {
   const _CommunityKickedTab({required this.community, required this.isMod, required this.isDark, required this.onUnkick});
   @override
   Widget build(BuildContext context) {
-    if (!isMod) return const Center(child: Text('قسم المطرودين للمشرفين فقط'));
-    if (community.kickedMembers.isEmpty) return const Center(child: Text('لا يوجد أعضاء مطرودين'));
+    if (!isMod) return const Center(child: AppText('قسم المطرودين للمشرفين فقط'));
+    if (community.kickedMembers.isEmpty) return const Center(child: AppText('لا يوجد أعضاء مطرودين'));
     final muted = isDark ? AppColors.darkMuted : AppColors.lightMuted;
     return ListView(
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 110),
@@ -12756,10 +12752,10 @@ class _CommunityKickedTab extends StatelessWidget {
             const CircleAvatar(backgroundColor: AppColors.danger, child: Icon(Icons.person_off_rounded, color: Colors.white)),
             const SizedBox(width: 12),
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(u, style: const TextStyle(fontWeight: FontWeight.w900)),
-              Text('لا يستطيع الرجوع للمجتمع إلا إذا أزلت الطرد', style: TextStyle(color: muted, fontSize: 12)),
+              AppText(u, style: const TextStyle(fontWeight: FontWeight.w900)),
+              AppText('لا يستطيع الرجوع للمجتمع إلا إذا أزلت الطرد', style: TextStyle(color: muted, fontSize: 12)),
             ])),
-            TextButton(onPressed: () => onUnkick(u), child: const Text('إلغاء الطرد')),
+            TextButton(onPressed: () => onUnkick(u), child: const AppText('إلغاء الطرد')),
           ]),
         ),
       )).toList(),
@@ -12809,12 +12805,12 @@ class _CommunityMembersTab extends StatelessWidget {
                   child: const Icon(Icons.add_moderator_rounded, color: AppColors.purple),
                 ),
                 const SizedBox(width: 12),
-                const Expanded(child: Text('إضافة مشرف من الأعضاء', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900))),
+                const Expanded(child: AppText('إضافة مشرف من الأعضاء', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900))),
               ],
             ),
           ),
         const SizedBox(height: 12),
-        Text('المالك والمشرفون', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: isDark ? Colors.white : Colors.black87)),
+        AppText('المالك والمشرفون', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: isDark ? Colors.white : Colors.black87)),
         const SizedBox(height: 10),
         ...moderators.map((u) => _CommunityMemberTile(
           username: u,
@@ -12826,12 +12822,12 @@ class _CommunityMembersTab extends StatelessWidget {
               : null,
         )),
         const SizedBox(height: 14),
-        Text('الأعضاء', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: isDark ? Colors.white : Colors.black87)),
+        AppText('الأعضاء', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: isDark ? Colors.white : Colors.black87)),
         const SizedBox(height: 10),
         if (members.isEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 20),
-            child: Text('لا يوجد أعضاء عاديين بعد', style: TextStyle(color: muted)),
+            child: AppText('لا يوجد أعضاء عاديين بعد', style: TextStyle(color: muted)),
           )
         else
           ...members.map((u) => _CommunityMemberTile(
@@ -12879,9 +12875,9 @@ class _CommunityMemberTile extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(username, style: const TextStyle(fontWeight: FontWeight.w900)),
+                  AppText(username, style: const TextStyle(fontWeight: FontWeight.w900)),
                   const SizedBox(height: 2),
-                  Text(subtitle, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w700)),
+                  AppText(subtitle, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w700)),
                 ],
               ),
             ),

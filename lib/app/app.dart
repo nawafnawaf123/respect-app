@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 
 import '../screens/home_screen.dart';
 import '../screens/feed_screen.dart';
@@ -19,6 +20,7 @@ import '../services/call_action_handler.dart';
 import '../theme/app_theme.dart';
 import 'theme_provider.dart';
 
+import 'app_language.dart';
 void _respectSafeLog(Object error, [StackTrace? stackTrace]) {
   if (kDebugMode) {
     developer.log('Respect safe catch', error: error, stackTrace: stackTrace, name: 'respect.safe');
@@ -32,11 +34,19 @@ class RPStreamHubApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final themeMode = context.watch<ThemeProvider>().themeMode;
+    final languageProvider = context.watch<AppLanguageProvider>();
 
     return MaterialApp(
       navigatorKey: NotificationService.navigatorKey,
       debugShowCheckedModeBanner: false,
       title: 'Respect App',
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      supportedLocales: AppLanguageProvider.supportedLocales,
+      locale: languageProvider.locale,
       theme: AppTheme.lightTheme.copyWith(
         textTheme: GoogleFonts.cairoTextTheme(AppTheme.lightTheme.textTheme),
       ),
@@ -44,6 +54,13 @@ class RPStreamHubApp extends StatelessWidget {
         textTheme: GoogleFonts.cairoTextTheme(AppTheme.darkTheme.textTheme),
       ),
       themeMode: themeMode,
+
+      builder: (context, child) {
+        return Directionality(
+          textDirection: languageProvider.textDirection,
+          child: child ?? const SizedBox.shrink(),
+        );
+      },
 
       // مهم جدًا للويب و TestSprite:
       // لا نستخدم home فقط، لأن فتح /login مباشرة قد يعطي صفحة بيضاء.
@@ -227,13 +244,13 @@ class BlockedDeviceScreen extends StatelessWidget {
                 child: const Icon(Icons.phonelink_lock_rounded, color: AppColors.danger, size: 56),
               ),
               const SizedBox(height: 24),
-              const Text(
+              const AppText(
                 'تم حظر هذا الجهاز',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 26, fontWeight: FontWeight.w900),
               ),
               const SizedBox(height: 10),
-              Text(
+              AppText(
                 reason.trim().isEmpty ? 'لا يمكنك فتح Respect App من هذا الجهاز.' : reason,
                 textAlign: TextAlign.center,
                 style: TextStyle(
@@ -251,7 +268,7 @@ class BlockedDeviceScreen extends StatelessWidget {
                   color: AppColors.purple.withValues(alpha: 0.10),
                   border: Border.all(color: AppColors.purple.withValues(alpha: 0.22)),
                 ),
-                child: const Text(
+                child: const AppText(
                   'تواصل مع إدارة Respect إذا تعتقد أن الحظر تم بالخطأ.',
                   textAlign: TextAlign.center,
                   style: TextStyle(fontWeight: FontWeight.w800),

@@ -15,6 +15,7 @@ import '../services/notification_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/glass_card.dart';
 
+import '../app/app_language.dart';
 void _logIgnoredError(Object error, StackTrace stackTrace) {
   if (kDebugMode) {
     debugPrint('Ignored error: $error\n$stackTrace');
@@ -92,13 +93,13 @@ class _RespectLiveScreenState extends State<RespectLiveScreen> {
                     children: [
                       Container(width: 46, height: 5, decoration: BoxDecoration(color: isDark ? AppColors.darkBorder : AppColors.lightBorder, borderRadius: BorderRadius.circular(99))),
                       const SizedBox(height: 18),
-                      const Text('ابدأ بث جديد', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
+                      const AppText('ابدأ بث جديد', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
                       const SizedBox(height: 12),
                       TextField(
                         controller: titleCtrl,
                         decoration: InputDecoration(
                           prefixIcon: const Icon(Icons.title_rounded),
-                          hintText: 'عنوان البث',
+                          hintText: context.tr('عنوان البث'),
                           border: OutlineInputBorder(borderRadius: BorderRadius.circular(18)),
                         ),
                       ),
@@ -106,8 +107,8 @@ class _RespectLiveScreenState extends State<RespectLiveScreen> {
                       SwitchListTile(
                         value: video,
                         onChanged: (v) => setSheet(() => video = v),
-                        title: const Text('تشغيل الكاميرا', style: TextStyle(fontWeight: FontWeight.w900)),
-                        subtitle: const Text('يمكنك قلب الكاميرا وتشغيل الفلاش من داخل البث'),
+                        title: const AppText('تشغيل الكاميرا', style: TextStyle(fontWeight: FontWeight.w900)),
+                        subtitle: const AppText('يمكنك قلب الكاميرا وتشغيل الفلاش من داخل البث'),
                         activeThumbColor: AppColors.purple,
                       ),
                       const SizedBox(height: 14),
@@ -122,7 +123,7 @@ class _RespectLiveScreenState extends State<RespectLiveScreen> {
                           ),
                           onPressed: () => Navigator.pop(context, {'title': titleCtrl.text, 'video': video}),
                           icon: const Icon(Icons.sensors_rounded),
-                          label: const Text('بدء البث الآن', style: TextStyle(fontWeight: FontWeight.w900)),
+                          label: const AppText('بدء البث الآن', style: TextStyle(fontWeight: FontWeight.w900)),
                         ),
                       ),
                     ],
@@ -155,7 +156,7 @@ class _RespectLiveScreenState extends State<RespectLiveScreen> {
       await _load();
     } catch (e) {
       if (!mounted) return;
-      NotificationService.showTopNotification('تعذر بدء البث: $e');
+      NotificationService.showTopNotification(context.tr('تعذر بدء البث: $e'));
     }
   }
 
@@ -176,7 +177,7 @@ class _RespectLiveScreenState extends State<RespectLiveScreen> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     return Directionality(
-      textDirection: TextDirection.rtl,
+      textDirection: context.appTextDirection,
       child: Scaffold(
         backgroundColor: isDark ? AppColors.darkBg : AppColors.lightBg,
         appBar: null,
@@ -185,7 +186,7 @@ class _RespectLiveScreenState extends State<RespectLiveScreen> {
           foregroundColor: Colors.white,
           onPressed: _startLive,
           icon: const Icon(Icons.sensors_rounded),
-          label: const Text('ابدأ بث', style: TextStyle(fontWeight: FontWeight.w900)),
+          label: const AppText('ابدأ بث', style: TextStyle(fontWeight: FontWeight.w900)),
         ),
         body: RefreshIndicator(
           onRefresh: _load,
@@ -221,9 +222,9 @@ class _EmptyLiveList extends StatelessWidget {
       children: [
         Icon(Icons.live_tv_rounded, size: 80, color: AppColors.purple.withValues(alpha: 0.85)),
         const SizedBox(height: 18),
-        const Text('لا توجد بثوث مباشرة الآن', textAlign: TextAlign.center, style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900)),
+        const AppText('لا توجد بثوث مباشرة الآن', textAlign: TextAlign.center, style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900)),
         const SizedBox(height: 8),
-        Text('ابدأ بثك وسيظهر للجميع. حاليًا مفتوح للجميع للتجربة.', textAlign: TextAlign.center, style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, height: 1.5)),
+        AppText('ابدأ بثك وسيظهر للجميع. حاليًا مفتوح للجميع للتجربة.', textAlign: TextAlign.center, style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, height: 1.5)),
       ],
     );
   }
@@ -265,7 +266,7 @@ class _LiveStreamCard extends StatelessWidget {
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                   decoration: BoxDecoration(color: Colors.redAccent, borderRadius: BorderRadius.circular(99)),
-                  child: const Text('LIVE', style: TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w900)),
+                  child: const AppText('LIVE', style: TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w900)),
                 ),
               ),
             ],
@@ -275,15 +276,15 @@ class _LiveStreamCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900)),
+                AppText(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900)),
                 const SizedBox(height: 4),
-                Text(hostName, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, fontWeight: FontWeight.w700)),
+                AppText(hostName, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 8),
                 Row(
                   children: [
                     const Icon(Icons.visibility_rounded, size: 16, color: AppColors.purple),
                     const SizedBox(width: 4),
-                    Text('$viewers مشاهدة', style: const TextStyle(fontWeight: FontWeight.w900)),
+                    AppText('$viewers مشاهدة', style: const TextStyle(fontWeight: FontWeight.w900)),
                     const SizedBox(width: 10),
                     Icon((stream['video_enabled'] ?? true) == true ? Icons.videocam_rounded : Icons.mic_rounded, size: 16, color: AppColors.purple),
                   ],
@@ -464,7 +465,7 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
       onStreamChanged: (row) {
         if (!mounted) return;
         if (row['is_live'] == false && !widget.isHost) {
-          NotificationService.showTopNotification('انتهى البث');
+          NotificationService.showTopNotification(context.tr('انتهى البث'));
           Navigator.of(context).maybePop();
           return;
         }
@@ -655,7 +656,7 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
       'action': 'add',
       'username': username,
     });
-    if (mounted) NotificationService.showTopNotification('تم تعيين المشرف');
+    if (mounted) NotificationService.showTopNotification(context.tr('تم تعيين المشرف'));
   }
 
   Future<void> _removeModerator(String username) async {
@@ -664,7 +665,7 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
       'action': 'remove',
       'username': username,
     });
-    if (mounted) NotificationService.showTopNotification('تمت إزالة المشرف');
+    if (mounted) NotificationService.showTopNotification(context.tr('تمت إزالة المشرف'));
   }
 
   Future<void> _deleteMessage(String messageId) async {
@@ -788,7 +789,7 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
     }
     if (type == 'viewer_kick' && !widget.isHost && to == _myId) {
       if (mounted) {
-        NotificationService.showTopNotification('تم إخراجك من البث');
+        NotificationService.showTopNotification(context.tr('تم إخراجك من البث'));
         Navigator.of(context).maybePop();
       }
       return;
@@ -923,7 +924,7 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
   Widget build(BuildContext context) {
     final isHost = widget.isHost;
     return Directionality(
-      textDirection: TextDirection.rtl,
+      textDirection: context.appTextDirection,
       child: Scaffold(
         key: _roomScaffoldKey,
         backgroundColor: Colors.black,
@@ -955,7 +956,7 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
   }
 
   Widget _loadingOverlay() => const Center(
-    child: Text('جاري الاتصال...', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
+    child: AppText('جاري الاتصال...', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
   );
 
   Widget _videoStage() {
@@ -1036,7 +1037,7 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
                 borderRadius: BorderRadius.circular(99),
                 border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
               ),
-              child: Text(name, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w900)),
+              child: AppText(name, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w900)),
             ),
           ),
       ],
@@ -1124,7 +1125,7 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
                   color: Colors.black.withValues(alpha: 0.42),
                   borderRadius: BorderRadius.circular(99),
                 ),
-                child: Text(
+                child: AppText(
                   name,
                   style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
                   textAlign: TextAlign.center,
@@ -1249,15 +1250,15 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
               decoration: BoxDecoration(gradient: const LinearGradient(colors: [Colors.redAccent, Colors.pinkAccent]), borderRadius: BorderRadius.circular(99)),
-              child: const Text('LIVE', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 12)),
+              child: const AppText('LIVE', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 12)),
             ),
             const SizedBox(width: 10),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 16)),
-                  Text(widget.stream['host_name'] ?? '', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                  AppText(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 16)),
+                  AppText(widget.stream['host_name'] ?? '', style: TextStyle(color: Colors.white70, fontSize: 12)),
                 ],
               ),
             ),
@@ -1329,7 +1330,7 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
             padding: EdgeInsets.zero,
           ),
         ),
-        if (label.isNotEmpty) Text(label, style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
+        if (label.isNotEmpty) AppText(label, style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
       ],
     );
   }
@@ -1354,7 +1355,7 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
       return Container(
         padding: const EdgeInsets.all(12),
         color: Colors.black.withValues(alpha: 0.6),
-        child: const Text('التعليقات متوقفة من صاحب البث', style: TextStyle(color: Colors.white70)),
+        child: const AppText('التعليقات متوقفة من صاحب البث', style: TextStyle(color: Colors.white70)),
       );
     }
     return Container(
@@ -1421,7 +1422,7 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
               maxLength: 180,
               buildCounter: (_, {required currentLength, required isFocused, maxLength}) => const SizedBox.shrink(),
               decoration: InputDecoration(
-                hintText: 'اكتب تعليق...',
+                hintText: context.tr('اكتب تعليق...'),
                 hintStyle: const TextStyle(color: Colors.white70),
                 filled: true,
                 fillColor: Colors.white.withValues(alpha: 0.15),
@@ -1453,7 +1454,7 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
           children: [
             const Icon(Icons.visibility_rounded, size: 16, color: AppColors.purple),
             const SizedBox(width: 5),
-            Text(_compactNumber(_viewersCount), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            AppText(_compactNumber(_viewersCount), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
           ],
         ),
       ),
@@ -1488,7 +1489,7 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
               child: Row(
                 children: [
                   const Expanded(
-                    child: Text('لوحة التحكم', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white)),
+                    child: AppText('لوحة التحكم', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white)),
                   ),
                   IconButton(
                     onPressed: () => _roomScaffoldKey.currentState?.closeEndDrawer(),
@@ -1513,14 +1514,14 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
             const Divider(color: Colors.white12),
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Text('المشاهدون والمشرفون', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold)),
+              child: AppText('المشاهدون والمشرفون', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold)),
             ),
             Expanded(
               child: viewers.isEmpty
                   ? const Center(
                 child: Padding(
                   padding: EdgeInsets.all(20),
-                  child: Text('لا يوجد مشاهدون بعد', style: TextStyle(color: Colors.white54, fontWeight: FontWeight.w800)),
+                  child: AppText('لا يوجد مشاهدون بعد', style: TextStyle(color: Colors.white54, fontWeight: FontWeight.w800)),
                 ),
               )
                   : ListView.separated(
@@ -1538,8 +1539,8 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
                       backgroundImage: v.avatarPath.startsWith('http') ? NetworkImage(v.avatarPath) : null,
                       child: v.avatarPath.startsWith('http') ? null : const Icon(Icons.person, color: Colors.white),
                     ),
-                    title: Text(v.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
-                    subtitle: Text(
+                    title: AppText(v.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
+                    subtitle: AppText(
                       isHostUser ? 'صاحب البث' : (isMod ? 'مشرف' : (v.role == _ViewerRole.guest ? 'ضيف' : 'مشاهد')),
                       style: TextStyle(color: isMod ? Colors.amberAccent : Colors.white54),
                     ),
@@ -1554,9 +1555,9 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
                         if (action == 'kick') _sendLiveEvent(type: 'viewer_kick', to: v.username);
                       },
                       itemBuilder: (_) => [
-                        if (!isMod) const PopupMenuItem(value: 'mod', child: Text('تعيين مشرف')),
-                        if (isMod) const PopupMenuItem(value: 'unmod', child: Text('إزالة مشرف')),
-                        const PopupMenuItem(value: 'kick', child: Text('طرد')),
+                        if (!isMod) const PopupMenuItem(value: 'mod', child: AppText('تعيين مشرف')),
+                        if (isMod) const PopupMenuItem(value: 'unmod', child: AppText('إزالة مشرف')),
+                        const PopupMenuItem(value: 'kick', child: AppText('طرد')),
                       ],
                     ),
                   );
@@ -1582,7 +1583,7 @@ class _RespectLiveRoomScreenState extends State<RespectLiveRoomScreen> with Tick
         children: [
           Icon(icon, size: 16, color: AppColors.purple),
           const SizedBox(width: 5),
-          Text(text, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 12)),
+          AppText(text, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 12)),
         ],
       ),
     );
@@ -2055,7 +2056,7 @@ class _GuestManagementSheet extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 14),
-              const Text(
+              const AppText(
                 'إدارة الضيوف',
                 style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
               ),
@@ -2065,7 +2066,7 @@ class _GuestManagementSheet extends StatelessWidget {
                     ? const Padding(
                   padding: EdgeInsets.symmetric(vertical: 36),
                   child: Center(
-                    child: Text(
+                    child: AppText(
                       'لا توجد طلبات ضيوف الآن',
                       style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w800),
                     ),
@@ -2137,7 +2138,7 @@ class _GuestTile extends StatelessWidget {
           CircleAvatar(radius: 16, child: Icon(Icons.person, color: Colors.white)),
           const SizedBox(width: 8),
           Expanded(
-            child: Text(guest.name, style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+            child: AppText(guest.name, style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
           ),
           if (!guest.accepted) ...[
             IconButton(icon: Icon(Icons.picture_in_picture_alt, color: Colors.greenAccent), onPressed: onAcceptFloating),
