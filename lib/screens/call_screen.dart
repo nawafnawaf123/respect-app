@@ -13,6 +13,8 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../services/call_service.dart';
 
+import '../widgets/app_dialog.dart';
+
 import '../app/app_language.dart';
 class CallScreen extends StatefulWidget {
   final String callId;
@@ -457,18 +459,11 @@ class _CallScreenState extends State<CallScreen> {
 
   void _showError(String error) {
     if (!mounted) return;
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const AppText('خطأ في المكالمة'),
-        content: AppText(error),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const AppText('إغلاق'),
-          ),
-        ],
-      ),
+    AppDialog.error(
+      context,
+      title: 'خطأ في المكالمة',
+      message: error,
+      buttonText: 'إغلاق',
     );
   }
 

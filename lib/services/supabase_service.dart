@@ -29,6 +29,48 @@ void _safeDebugLog(Object? message) {
 }
 
 
+
+class RespectAiAnswerResult {
+  final bool ok;
+  final String reply;
+  final String model;
+  final bool memoryUsed;
+  final String source;
+  final String memoryId;
+  final double confidence;
+  final String category;
+
+  const RespectAiAnswerResult({
+    required this.ok,
+    required this.reply,
+    required this.model,
+    required this.memoryUsed,
+    required this.source,
+    required this.memoryId,
+    required this.confidence,
+    required this.category,
+  });
+
+  factory RespectAiAnswerResult.fromJson(Map<String, dynamic> json) {
+    final answer = (json['answer'] ?? json['text'] ?? json['reply'] ?? '').toString().trim();
+    final rawMemoryUsed = json['memoryUsed'] ?? json['memory_used'] ?? json['qaMemoryUsed'];
+    final parsedMemoryUsed = rawMemoryUsed == true ||
+        rawMemoryUsed.toString().toLowerCase() == 'true' ||
+        rawMemoryUsed.toString() == '1';
+    final parsedConfidence = double.tryParse((json['confidence'] ?? json['score'] ?? 0).toString()) ?? 0.0;
+    return RespectAiAnswerResult(
+      ok: json['ok'] == true || answer.isNotEmpty,
+      reply: answer,
+      model: (json['model'] ?? '').toString(),
+      memoryUsed: parsedMemoryUsed,
+      source: (json['source'] ?? (parsedMemoryUsed ? 'qa_memory' : 'respect_ai')).toString(),
+      memoryId: (json['memoryId'] ?? json['memory_id'] ?? '').toString(),
+      confidence: parsedConfidence,
+      category: (json['category'] ?? '').toString(),
+    );
+  }
+}
+
 class SupabaseService {
   SupabaseService._();
 
@@ -68,6 +110,70 @@ class SupabaseService {
     if (clean.startsWith('ru')) return 'ru';
     if (clean.startsWith('pt')) return 'pt';
     return 'ar';
+  }
+
+  static String normalizeArabicDialectCode(String value) {
+    final clean = value.trim().toLowerCase().replaceAll('_', '-');
+    if (clean.isEmpty) return 'auto';
+    const aliases = <String, String>{
+      'msa': 'fusha',
+      'formal': 'fusha',
+      'standard': 'fusha',
+      'sa': 'saudi',
+      'ksa': 'saudi',
+      'saudi-arabia': 'saudi',
+      'gulf-saudi': 'saudi',
+      'riyadh': 'najdi',
+      'qassim': 'najdi',
+      'jeddah': 'hijazi',
+      'makkah': 'hijazi',
+      'mecca': 'hijazi',
+      'madinah': 'hijazi',
+      'medina': 'hijazi',
+      'levant': 'levantine',
+      'levantine-arabic': 'levantine',
+      'shami': 'levantine',
+      'lebanon': 'lebanese',
+      'syria': 'syrian',
+      'palestine': 'palestinian',
+      'jordan': 'jordanian',
+      'egypt': 'egyptian',
+      'iraq': 'iraqi',
+      'yemen': 'yemeni',
+      'sudan': 'sudanese',
+      'morocco': 'moroccan',
+      'algeria': 'algerian',
+      'tunisia': 'tunisian',
+      'libya': 'libyan',
+    };
+    final aliased = aliases[clean] ?? clean;
+    const supported = <String>{
+      'auto',
+      'fusha',
+      'saudi',
+      'najdi',
+      'hijazi',
+      'gulf',
+      'kuwaiti',
+      'emirati',
+      'qatari',
+      'bahraini',
+      'omani',
+      'levantine',
+      'lebanese',
+      'syrian',
+      'palestinian',
+      'jordanian',
+      'egyptian',
+      'iraqi',
+      'yemeni',
+      'sudanese',
+      'moroccan',
+      'algerian',
+      'tunisian',
+      'libyan',
+    };
+    return supported.contains(aliased) ? aliased : 'auto';
   }
 
   static Future<String> currentAppLanguageCode() async {
@@ -200,12 +306,18 @@ class SupabaseService {
 
   static String get respectAiBackendUrl => _backendEndpoint('/respect-ai/reply');
   static String get respectAiModerationBackendUrl => _backendEndpoint('/respect-ai/moderate');
+  static String get respectAiPostPrecheckBackendUrl => _backendEndpoint('/respect-ai/precheck-post');
   static String get respectAiPostModerationBackendUrl => _backendEndpoint('/respect-ai/moderate-post');
   static String get respectAiStoryModerationBackendUrl => _backendEndpoint('/respect-ai/moderate-story');
   static String get respectAiReportReviewBackendUrl => _backendEndpoint('/respect-ai/review-report');
   static String get respectAiSearchExpandBackendUrl => _backendEndpoint('/respect-ai/search-expand');
+  static String get respectAiChatTranslateBackendUrl => _backendEndpoint('/respect-ai/chat-translate');
+  static String get respectAiPostClassifyBackendUrl => _backendEndpoint('/respect-ai/classify-post');
   static String get respectAiAppFeedbackSubmitBackendUrl => _backendEndpoint('/respect-ai/app-feedback/submit');
   static String get respectAiAppFeedbackApproveBackendUrl => _backendEndpoint('/respect-ai/app-feedback/approve');
+  static String get appFeedbackListBackendUrl => _backendEndpoint('/respect-ai/app-feedback/list');
+  static String get appFeedbackResolveBackendUrl => _backendEndpoint('/respect-ai/app-feedback/resolve');
+  static String get appFeedbackDeleteBackendUrl => _backendEndpoint('/respect-ai/app-feedback/delete');
   static String get authOtpBackendBaseUrl => respectApiBaseUrl;
   static const String respectAiUsername = '@respectai';
   static const String respectAiName = 'Respect AI';
@@ -1097,6 +1209,13 @@ class SupabaseService {
     if (value == true) return true;
     final v = (value ?? '').toString().trim().toLowerCase();
     return v == 'true' || v == '1' || v == 'yes' || v == 'verified' || v == 'active';
+  }
+
+  static bool moderationQueuedResult(Map<String, dynamic> result) {
+    return truthy(result['queued']) ||
+        truthy(result['moderationQueued']) ||
+        (result['category'] ?? '').toString().trim().toLowerCase() == 'queued' ||
+        (result['provider'] ?? '').toString().trim().toLowerCase().contains('background-moderation');
   }
 
   static Map<String, dynamic> subscriptionTierById(String tierId) {
@@ -2358,7 +2477,7 @@ class SupabaseService {
     }
   }
 
-  static Future<String> askRespectAi({
+  static Future<RespectAiAnswerResult> askRespectAiDetailed({
     required String userText,
     required String askerUsername,
     String postText = '',
@@ -2382,8 +2501,8 @@ class SupabaseService {
     final askerAiLimit = respectAiDailyLimitForUser(askerUser);
 
     final response = await _postSignedJson(
-  Uri.parse(endpoint),
-  {
+      Uri.parse(endpoint),
+      {
         'text': finalQuestion,
         'askerUsername': displayUsername(askerUsername),
         'username': displayUsername(askerUsername),
@@ -2399,8 +2518,8 @@ class SupabaseService {
         'aiDailyLimit': askerAiLimit,
         'premiumMode': askerTier == 'premium',
       },
-  timeout: const Duration(seconds: 60),
-);
+      timeout: const Duration(seconds: 60),
+    );
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw Exception('Respect AI server error: ${response.statusCode} ${response.body}');
@@ -2408,13 +2527,35 @@ class SupabaseService {
 
     final decoded = jsonDecode(utf8.decode(response.bodyBytes));
     if (decoded is Map) {
-      final answer = (decoded['answer'] ?? decoded['text'] ?? decoded['reply'] ?? '').toString().trim();
-      if (answer.isNotEmpty) {
+      final result = RespectAiAnswerResult.fromJson(Map<String, dynamic>.from(decoded));
+      if (result.reply.isNotEmpty) {
         await _incrementRespectAiUsage(askerUsername);
-        return answer;
+        _safeDebugLog(
+          'Respect AI answer source=${result.source} memory=${result.memoryUsed} model=${result.model} confidence=${result.confidence}',
+        );
+        return result;
       }
     }
     throw Exception('Respect AI empty answer');
+  }
+
+  static Future<String> askRespectAi({
+    required String userText,
+    required String askerUsername,
+    String postText = '',
+    String parentReplyText = '',
+    String recentRepliesText = '',
+    String mode = 'reply',
+  }) async {
+    final result = await askRespectAiDetailed(
+      userText: userText,
+      askerUsername: askerUsername,
+      postText: postText,
+      parentReplyText: parentReplyText,
+      recentRepliesText: recentRepliesText,
+      mode: mode,
+    );
+    return result.reply;
   }
 
 
@@ -2426,11 +2567,74 @@ class SupabaseService {
     required String note,
     String screen = '',
     String appVersion = '1.0.0',
+    String mediaUrl = '',
+    String mediaType = '',
+    String mediaName = '',
+    List<Map<String, dynamic>> mediaAttachments = const <Map<String, dynamic>>[],
+  }) async {
+    return submitAppFeedbackReport(
+      username: username,
+      name: name,
+      title: title,
+      note: note,
+      screen: screen,
+      appVersion: appVersion,
+      mediaUrl: mediaUrl,
+      mediaType: mediaType,
+      mediaName: mediaName,
+      mediaAttachments: mediaAttachments,
+    );
+  }
+
+  static Future<Map<String, dynamic>> submitAppFeedbackReport({
+    required String username,
+    required String name,
+    required String title,
+    required String note,
+    String screen = '',
+    String appVersion = '1.0.0',
+    String mediaUrl = '',
+    String mediaType = '',
+    String mediaName = '',
+    List<Map<String, dynamic>> mediaAttachments = const <Map<String, dynamic>>[],
   }) async {
     final cleanNote = note.trim();
     if (cleanNote.length < 8) {
       throw Exception('اكتب وصف المشكلة بتفاصيل أكثر');
     }
+
+    final cleanMediaUrl = mediaUrl.trim();
+    final safeMediaType = mediaType.trim().toLowerCase() == 'video' ? 'video' : (mediaType.trim().toLowerCase() == 'image' ? 'image' : '');
+    final attachments = <Map<String, dynamic>>[];
+    for (final item in mediaAttachments) {
+      final url = (item['url'] ?? item['mediaUrl'] ?? '').toString().trim();
+      if (url.isEmpty) continue;
+      final rawType = (item['type'] ?? item['mediaType'] ?? '').toString().trim().toLowerCase();
+      final type = rawType == 'video' ? 'video' : (rawType == 'image' ? 'image' : 'file');
+      attachments.add({
+        'url': url,
+        'type': type,
+        'name': (item['name'] ?? item['mediaName'] ?? '').toString().trim(),
+      });
+    }
+    if (cleanMediaUrl.isNotEmpty) {
+      attachments.insert(0, {
+        'url': cleanMediaUrl,
+        'type': safeMediaType.isEmpty ? 'file' : safeMediaType,
+        'name': mediaName.trim(),
+      });
+    }
+
+    final imageUrls = attachments
+        .where((item) => (item['type'] ?? '').toString() == 'image')
+        .map((item) => (item['url'] ?? '').toString())
+        .where((url) => url.trim().isNotEmpty)
+        .toList();
+    final videoUrls = attachments
+        .where((item) => (item['type'] ?? '').toString() == 'video')
+        .map((item) => (item['url'] ?? '').toString())
+        .where((url) => url.trim().isNotEmpty)
+        .toList();
 
     final endpoint = respectAiAppFeedbackSubmitBackendUrl.trim();
     final payload = <String, dynamic>{
@@ -2440,28 +2644,120 @@ class SupabaseService {
       'note': cleanNote,
       'screen': screen.trim(),
       'appVersion': appVersion.trim(),
+      'mediaUrl': cleanMediaUrl,
+      'mediaType': safeMediaType,
+      'mediaName': mediaName.trim(),
+      'mediaAttachments': attachments,
+      'mediaUrls': attachments.map((item) => (item['url'] ?? '').toString()).where((url) => url.trim().isNotEmpty).toList(),
+      'imageUrls': imageUrls,
+      'videoUrls': videoUrls,
       'deviceInfo': <String, dynamic>{
         'platform': _safeDevicePlatform,
         'isWeb': kIsWeb,
         'apiBaseUrl': respectApiBaseUrl,
         'sentAt': DateTime.now().toUtc().toIso8601String(),
+        'feedbackMedia': <String, dynamic>{
+          'mediaUrl': cleanMediaUrl,
+          'mediaType': safeMediaType,
+          'mediaName': mediaName.trim(),
+          'attachments': attachments,
+          'imageUrls': imageUrls,
+          'videoUrls': videoUrls,
+        },
       },
-      'language': 'ar',
+      'language': await currentAppLanguageCode(),
     };
 
     final response = await _postSignedJson(
       Uri.parse(endpoint),
       payload,
-      timeout: const Duration(seconds: 160),
+      timeout: const Duration(seconds: 35),
     );
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw Exception('Respect AI feedback error: ${response.statusCode} ${response.body}');
+      throw Exception('App feedback error: ${response.statusCode} ${response.body}');
     }
 
     final decoded = jsonDecode(utf8.decode(response.bodyBytes));
     if (decoded is Map) return Map<String, dynamic>.from(decoded);
     throw Exception('استجابة غير مفهومة من سيرفر البلاغات');
+  }
+
+  static Future<List<Map<String, dynamic>>> listAppFeedbackReports({
+    String adminUsername = '',
+    String status = 'all',
+    int limit = 120,
+  }) async {
+    final response = await _postSignedJson(
+      Uri.parse(appFeedbackListBackendUrl),
+      <String, dynamic>{
+        'adminUsername': displayUsername(adminUsername.trim().isEmpty ? ((await currentUser())?['username']?.toString() ?? '') : adminUsername),
+        'status': status.trim().isEmpty ? 'all' : status.trim(),
+        'limit': limit.clamp(1, 300),
+      },
+      timeout: const Duration(seconds: 25),
+    );
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('App feedback list error: ${response.statusCode} ${response.body}');
+    }
+    final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+    if (decoded is Map) {
+      final raw = decoded['items'] ?? decoded['reports'] ?? decoded['rows'];
+      if (raw is List) {
+        return raw.whereType<Map>().map((e) => e.map((k, v) => MapEntry(k.toString(), v))).toList();
+      }
+    }
+    if (decoded is List) {
+      return decoded.whereType<Map>().map((e) => e.map((k, v) => MapEntry(k.toString(), v))).toList();
+    }
+    return <Map<String, dynamic>>[];
+  }
+
+  static Future<Map<String, dynamic>> deleteAppFeedbackReport({
+    required String reportId,
+    required String adminUsername,
+  }) async {
+    final cleanId = reportId.trim();
+    if (cleanId.isEmpty) throw Exception('reportId مطلوب');
+    final response = await _postSignedJson(
+      Uri.parse(appFeedbackDeleteBackendUrl),
+      <String, dynamic>{
+        'reportId': cleanId,
+        'adminUsername': displayUsername(adminUsername),
+      },
+      timeout: const Duration(seconds: 25),
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('App feedback delete error: ${response.statusCode} ${response.body}');
+    }
+    final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+    if (decoded is Map) return Map<String, dynamic>.from(decoded);
+    return <String, dynamic>{'ok': true, 'id': cleanId};
+  }
+
+  static Future<Map<String, dynamic>> resolveAppFeedbackReport({
+    required String reportId,
+    required String adminUsername,
+    String adminNote = '',
+  }) async {
+    final cleanId = reportId.trim();
+    if (cleanId.isEmpty) throw Exception('reportId مطلوب');
+    final response = await _postSignedJson(
+      Uri.parse(appFeedbackResolveBackendUrl),
+      <String, dynamic>{
+        'reportId': cleanId,
+        'adminUsername': displayUsername(adminUsername),
+        'adminNote': adminNote.trim(),
+      },
+      timeout: const Duration(seconds: 30),
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('App feedback resolve error: ${response.statusCode} ${response.body}');
+    }
+    final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+    if (decoded is Map) return Map<String, dynamic>.from(decoded);
+    return <String, dynamic>{'ok': true, 'id': cleanId, 'status': 'resolved'};
   }
 
   static Future<Map<String, dynamic>> approveRespectAiAppFeedbackFix({
@@ -2478,7 +2774,7 @@ class SupabaseService {
         'reportId': cleanId,
         'approvedBy': displayUsername(approvedBy),
       },
-      timeout: const Duration(seconds: 220),
+      timeout: const Duration(seconds: 300),
     );
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -2490,9 +2786,322 @@ class SupabaseService {
     throw Exception('استجابة غير مفهومة من سيرفر التصحيح');
   }
 
+  static const String _localAiModerationMemoryKey = 'respect_ai_moderation_memory_local_v1';
+  static const int _localAiModerationMemoryMaxRows = 350;
+  static List<Map<String, dynamic>>? _localAiModerationMemoryCache;
+
+  static String _collapseLocalModerationRepeats(String value) {
+    return value.replaceAllMapped(
+      RegExp(r'([a-zA-Zء-ي])\1{2,}'),
+      (match) {
+        final ch = match.group(1) ?? '';
+        return '$ch$ch';
+      },
+    );
+  }
+
+  static Map<String, String> _localModerationTerms(String value) {
+    var raw = value.toLowerCase().trim();
+    raw = raw.replaceAll(RegExp(r'[\u200b-\u200f\u202a-\u202e\ufeff]'), '');
+    raw = raw
+        .replaceAll('أ', 'ا')
+        .replaceAll('إ', 'ا')
+        .replaceAll('آ', 'ا')
+        .replaceAll('ى', 'ي')
+        .replaceAll('ة', 'ه');
+    var spaced = raw.replaceAll(RegExp(r'[^0-9a-zA-Z\u0600-\u06FF]+'), ' ').trim();
+    spaced = spaced.replaceAll(RegExp(r'\s+'), ' ');
+    spaced = spaced
+        .split(' ')
+        .where((e) => e.trim().isNotEmpty)
+        .map(_collapseLocalModerationRepeats)
+        .join(' ');
+    final compact = _collapseLocalModerationRepeats(
+      raw.replaceAll(RegExp(r'[^0-9a-zA-Z\u0600-\u06FF]+'), ''),
+    );
+    return <String, String>{'spaced': spaced, 'compact': compact};
+  }
+
+  static const Set<String> _localStrongModerationTokens = <String>{
+    'زب', 'زبي', 'زبك', 'زبه', 'زبها', 'كس', 'كسمك', 'كسم',
+    'طيز', 'طيزي', 'طيزك', 'طيزه', 'طيزها', 'طيزهم',
+    'نيك', 'منيوك', 'منيوكة', 'شرموط', 'شرموطه', 'شرموطة',
+    'قحبة', 'قحبه', 'عرص', 'خرا', 'زق', 'كلب', 'حمار', 'وسخ',
+    'fuck', 'bitch', 'asshole', 'slut', 'whore', 'pussy', 'dick',
+  };
+
+  static const Set<String> _localModerationGenericWords = <String>{
+    'انا', 'انت', 'انتي', 'انتم', 'هو', 'هي', 'هم', 'نحن', 'احنا',
+    'هذا', 'هذه', 'هذي', 'الي', 'اللي', 'الى', 'على', 'في', 'من', 'عن', 'مع',
+    'واحد', 'احد', 'فيكم', 'فيك', 'فيهم', 'احط', 'حط', 'حطيت', 'ابي', 'ابغى',
+    'جدا', 'مرة', 'مره', 'اليوم', 'امس', 'بكرا', 'الان',
+    'the', 'and', 'for', 'with', 'this', 'that', 'you', 'post', 'tweet',
+  };
+
+  static bool _isLocalStrongModerationToken(String value) {
+    final terms = _localModerationTerms(value);
+    final spaced = terms['spaced'] ?? '';
+    final compact = terms['compact'] ?? '';
+    if (compact.isEmpty) return false;
+    if (_localStrongModerationTokens.contains(compact) || _localStrongModerationTokens.contains(spaced)) return true;
+    final tokens = spaced.split(' ').where((e) => e.isNotEmpty);
+    for (final token in tokens) {
+      if (_localStrongModerationTokens.contains(token)) return true;
+      for (final root in const <String>['زب', 'طيز', 'كسم', 'كس', 'نيك']) {
+        if (token.startsWith(root) && token.length >= 2 && token.length <= 12) return true;
+      }
+    }
+    for (final token in _localStrongModerationTokens) {
+      final tokenCompact = _localModerationTerms(token)['compact'] ?? '';
+      if (tokenCompact.isNotEmpty && compact.contains(tokenCompact)) return true;
+    }
+    return false;
+  }
+
+  static bool _isLocalModerationGenericPhrase(String value) {
+    final terms = _localModerationTerms(value);
+    final spaced = terms['spaced'] ?? '';
+    final compact = terms['compact'] ?? '';
+    final tokens = spaced.split(' ').where((e) => e.isNotEmpty).toList();
+    if (compact.isEmpty || tokens.isEmpty) return true;
+    if (_localModerationGenericWords.contains(compact) || _localModerationGenericWords.contains(spaced)) return true;
+    return tokens.every(_localModerationGenericWords.contains);
+  }
+
+  static String _safeLocalModerationSample(String value, {int maxLen = 500}) {
+    final clean = value.trim().replaceAll(RegExp(r'\s+'), ' ');
+    if (clean.length <= maxLen) return clean;
+    return clean.substring(0, maxLen);
+  }
+
+  static List<String> _extractLocalModerationProfanityTerms(String text) {
+    final spaced = _localModerationTerms(text)['spaced'] ?? '';
+    final tokens = spaced.split(' ').where((e) => e.trim().isNotEmpty).toList();
+    final out = <String>[];
+
+    void add(String value) {
+      final clean = _safeLocalModerationSample(value, maxLen: 90);
+      if (clean.isEmpty) return;
+      if (_isLocalModerationGenericPhrase(clean)) return;
+      if (!_isLocalStrongModerationToken(clean)) return;
+      final compact = _localModerationTerms(clean)['compact'] ?? '';
+      if (compact.isEmpty) return;
+      final exists = out.any((e) => (_localModerationTerms(e)['compact'] ?? '') == compact);
+      if (!exists) out.add(clean);
+    }
+
+    for (final token in tokens) {
+      add(token);
+    }
+    for (final strong in _localStrongModerationTokens) {
+      final strongCompact = _localModerationTerms(strong)['compact'] ?? '';
+      final textCompact = _localModerationTerms(text)['compact'] ?? '';
+      if (strongCompact.isNotEmpty && textCompact.contains(strongCompact)) add(strong);
+    }
+    return out.take(12).toList();
+  }
+
+  static Future<List<Map<String, dynamic>>> _readLocalAiModerationMemory() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_localAiModerationMemoryKey);
+      if (raw == null || raw.trim().isEmpty) return <Map<String, dynamic>>[];
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return <Map<String, dynamic>>[];
+      return decoded.whereType<Map>().map((e) => e.map((k, v) => MapEntry(k.toString(), v))).toList();
+    } catch (e, st) {
+      _logIgnoredError(e, st);
+      return <Map<String, dynamic>>[];
+    }
+  }
+
+  static Future<void> _writeLocalAiModerationMemory(List<Map<String, dynamic>> rows) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_localAiModerationMemoryKey, jsonEncode(rows.take(_localAiModerationMemoryMaxRows).toList()));
+      _localAiModerationMemoryCache = rows.take(_localAiModerationMemoryMaxRows).toList();
+    } catch (e, st) {
+      _logIgnoredError(e, st);
+    }
+  }
+
+  static Future<void> _ensureLocalAiModerationMemoryLoaded() async {
+    if (_localAiModerationMemoryCache != null) return;
+    _localAiModerationMemoryCache = await _readLocalAiModerationMemory();
+  }
+
+  static Map<String, dynamic>? _localAiModerationMemoryHitFromCache(String text) {
+    final rows = _localAiModerationMemoryCache;
+    if (rows == null || rows.isEmpty) return null;
+    final clean = text.trim();
+    if (clean.isEmpty) return null;
+    final textTerms = _localModerationTerms(clean);
+    final textSpaced = textTerms['spaced'] ?? '';
+    final textCompact = textTerms['compact'] ?? '';
+    final textTokens = textSpaced.split(' ').where((e) => e.isNotEmpty).toSet();
+    if (textCompact.isEmpty) return null;
+
+    for (final raw in rows) {
+      final row = Map<String, dynamic>.from(raw);
+      if (row['active'] == false) continue;
+      final decision = (row['decision'] ?? 'delete').toString().toLowerCase().trim();
+      if (decision != 'delete' && decision != 'block' && decision != 'remove') continue;
+      final type = (row['memoryType'] ?? row['memory_type'] ?? 'phrase').toString().toLowerCase().trim();
+      final sample = (row['sampleText'] ?? row['sample_text'] ?? '').toString();
+      final normalizedCompact = ((row['normalizedCompact'] ?? row['normalized_compact'] ?? '').toString().trim().isNotEmpty)
+          ? (row['normalizedCompact'] ?? row['normalized_compact']).toString().trim()
+          : (_localModerationTerms(sample)['compact'] ?? '');
+      final normalizedSpaced = ((row['normalizedSpaced'] ?? row['normalized_spaced'] ?? '').toString().trim().isNotEmpty)
+          ? (row['normalizedSpaced'] ?? row['normalized_spaced']).toString().trim()
+          : (_localModerationTerms(sample)['spaced'] ?? '');
+      if (normalizedCompact.isEmpty) continue;
+
+      if (type == 'exact') {
+        if (textCompact == normalizedCompact) return row;
+        continue;
+      }
+
+      if (_isLocalModerationGenericPhrase(sample) && !_isLocalStrongModerationToken(sample)) continue;
+      if (normalizedSpaced.isNotEmpty && textTokens.contains(normalizedSpaced)) return row;
+      if (normalizedCompact.length >= 3 && textCompact.contains(normalizedCompact)) return row;
+    }
+    return null;
+  }
+
+  static Future<void> _learnLocalModerationMemoryFromServerResult({
+    required String text,
+    required Map<String, dynamic> result,
+  }) async {
+    final clean = text.trim();
+    if (clean.isEmpty) return;
+    final shouldDelete = result['shouldDelete'] == true || result['delete'] == true || result['blocked'] == true || result['deleted'] == true;
+    if (!shouldDelete) return;
+
+    await _ensureLocalAiModerationMemoryLoaded();
+    final now = DateTime.now().toUtc().toIso8601String();
+    final category = (result['category'] ?? 'violation').toString();
+    final confidence = double.tryParse((result['confidence'] ?? 0.99).toString()) ?? 0.99;
+    final incomingRows = <Map<String, dynamic>>[];
+
+    void addMemoryRow({
+      required String memoryType,
+      required String sampleText,
+      String decision = 'delete',
+      String? rowCategory,
+      double? rowConfidence,
+    }) {
+      final sample = _safeLocalModerationSample(sampleText);
+      if (sample.isEmpty) return;
+      final normalized = _localModerationTerms(sample);
+      final compact = normalized['compact'] ?? '';
+      if (compact.length < 2) return;
+      if (memoryType == 'phrase') {
+        if (_isLocalModerationGenericPhrase(sample)) return;
+        if (!_isLocalStrongModerationToken(sample)) return;
+      }
+      incomingRows.add(<String, dynamic>{
+        'memoryType': memoryType,
+        'decision': decision,
+        'category': rowCategory ?? category,
+        'confidence': rowConfidence ?? confidence,
+        'sampleText': sample,
+        'normalizedSpaced': normalized['spaced'] ?? '',
+        'normalizedCompact': compact,
+        'source': 'server_delete_response',
+        'active': true,
+        'hits': 1,
+        'updatedAt': now,
+        'createdAt': now,
+      });
+    }
+
+    // الجملة كاملة دائمًا كـ exact.
+    addMemoryRow(memoryType: 'exact', sampleText: clean);
+
+    void addFromServerRow(dynamic rawRow) {
+      if (rawRow is! Map) return;
+      final row = rawRow.map((k, v) => MapEntry(k.toString(), v));
+      final type = (row['memoryType'] ?? row['memory_type'] ?? '').toString().trim().toLowerCase();
+      final sample = (row['sampleText'] ?? row['sample_text'] ?? '').toString();
+      if (type == 'exact' || type == 'phrase') {
+        addMemoryRow(
+          memoryType: type,
+          sampleText: sample,
+          decision: (row['decision'] ?? 'delete').toString(),
+          rowCategory: (row['category'] ?? category).toString(),
+          rowConfidence: double.tryParse((row['confidence'] ?? confidence).toString()) ?? confidence,
+        );
+      }
+    }
+
+    final localRows = result['localMemoryRows'];
+    if (localRows is List) {
+      for (final row in localRows) addFromServerRow(row);
+    }
+    final memoryLearnResult = result['memoryLearnResult'];
+    if (memoryLearnResult is Map) {
+      final nestedRows = memoryLearnResult['localMemoryRows'] ?? memoryLearnResult['learnedRows'];
+      if (nestedRows is List) {
+        for (final row in nestedRows) addFromServerRow(row);
+      }
+      final learnedTerms = memoryLearnResult['learnedTerms'];
+      if (learnedTerms is List) {
+        for (final term in learnedTerms) addMemoryRow(memoryType: 'phrase', sampleText: term.toString());
+      }
+    }
+    final learnedTerms = result['learnedTerms'];
+    if (learnedTerms is List) {
+      for (final term in learnedTerms) addMemoryRow(memoryType: 'phrase', sampleText: term.toString());
+    }
+    final matchedTerm = (result['matchedTerm'] ?? '').toString();
+    if (matchedTerm.trim().isNotEmpty) addMemoryRow(memoryType: 'phrase', sampleText: matchedTerm);
+    final matchedTerms = result['matchedTerms'];
+    if (matchedTerms is List) {
+      for (final term in matchedTerms) addMemoryRow(memoryType: 'phrase', sampleText: term.toString());
+    }
+    for (final term in _extractLocalModerationProfanityTerms(clean)) {
+      addMemoryRow(memoryType: 'phrase', sampleText: term);
+    }
+
+    if (incomingRows.isEmpty) return;
+
+    final existing = <Map<String, dynamic>>[...?_localAiModerationMemoryCache];
+    final byKey = <String, Map<String, dynamic>>{};
+    for (final row in existing) {
+      final type = (row['memoryType'] ?? row['memory_type'] ?? 'phrase').toString().toLowerCase();
+      final compact = (row['normalizedCompact'] ?? row['normalized_compact'] ?? '').toString().trim();
+      if (compact.isEmpty) continue;
+      byKey['$type:$compact'] = Map<String, dynamic>.from(row);
+    }
+    for (final row in incomingRows) {
+      final type = (row['memoryType'] ?? 'phrase').toString().toLowerCase();
+      final compact = (row['normalizedCompact'] ?? '').toString().trim();
+      final key = '$type:$compact';
+      final old = byKey[key];
+      if (old == null) {
+        byKey[key] = row;
+      } else {
+        old['hits'] = (int.tryParse((old['hits'] ?? 0).toString()) ?? 0) + 1;
+        old['confidence'] = max(
+          double.tryParse((old['confidence'] ?? 0).toString()) ?? 0,
+          double.tryParse((row['confidence'] ?? 0).toString()) ?? 0,
+        );
+        old['updatedAt'] = now;
+        old['sampleText'] = row['sampleText'];
+        old['category'] = row['category'];
+        byKey[key] = old;
+      }
+    }
+
+    final merged = byKey.values.toList()
+      ..sort((a, b) => (b['updatedAt'] ?? '').toString().compareTo((a['updatedAt'] ?? '').toString()));
+    await _writeLocalAiModerationMemory(merged);
+  }
+
   static bool _localObviousViolation(String text) {
     final t = text.toLowerCase().replaceAll(RegExp(r'\s+'), ' ').trim();
     if (t.isEmpty) return false;
+    if (_localAiModerationMemoryHitFromCache(t) != null) return true;
 
     // فلتر محلي سريع جدًا قبل النشر فقط.
     // لا نحذف بسبب كلمة مفردة مثل "حيوان" أو "كلب" إلا إذا كانت سبًا مباشرًا.
@@ -2501,19 +3110,220 @@ class SupabaseService {
       RegExp(r'(اقتل|اقتلوه|اقتلو|لازم\s+ينضرب|موتوا|تحريض\s+على\s+القتل)', caseSensitive: false),
       RegExp(r'(سب\s*الدين|سب\s*الله|إهانة\s*الدين|اهانة\s*الدين)', caseSensitive: false),
       RegExp(r'(يا\s*كلب|يا\s*حمار|أنت\s*حيوان|انت\s*حيوان|كل\s*خرا|كل\s*زق)', caseSensitive: false),
+      RegExp(r'(^|[^ء-يa-zA-Z0-9])(زبي|زبك|زبه|زبها|زب|طيزي|طيزك|طيزه|طيزها|طيز|كس|كسمك|كسم|نيك|شرموط|شرموطة|قحبة|قحبه)($|[^ء-يa-zA-Z0-9])', caseSensitive: false),
     ];
     return obviousPatterns.any((r) => r.hasMatch(t));
   }
 
-  static void _enforceLocalObviousModeration({
+  static Future<void> _enforceLocalObviousModeration({
     required String text,
     required String authorUsername,
-  }) {
+  }) async {
     final clean = text.trim();
     if (clean.isEmpty || isRespectAiUsername(authorUsername)) return;
-    if (_localObviousViolation(clean)) {
-      throw Exception('تم رفض المحتوى لأنه يحتوي مخالفة واضحة قبل النشر');
+    await _ensureLocalAiModerationMemoryLoaded();
+    final memoryHit = _localAiModerationMemoryHitFromCache(clean);
+    if (memoryHit != null || _localObviousViolation(clean)) {
+      throw Exception('تم رفض المحتوى لأنه يحتوي مخالفة واضحة تعلمها Respect AI');
     }
+  }
+
+
+  static Map<String, dynamic> _localModerationBlockResult({
+    required String text,
+    required String source,
+    Map<String, dynamic>? memoryHit,
+  }) {
+    final terms = _extractLocalModerationProfanityTerms(text);
+    final matched = (memoryHit == null
+            ? (terms.isNotEmpty ? terms.first : '')
+            : (memoryHit['sampleText'] ?? memoryHit['sample_text'] ?? '').toString())
+        .trim();
+    final category = (memoryHit == null
+            ? 'local_obvious_violation'
+            : (memoryHit['category'] ?? 'local_moderation_memory').toString())
+        .trim();
+    final confidence = double.tryParse((memoryHit == null ? 0.99 : (memoryHit['confidence'] ?? 0.99)).toString()) ?? 0.99;
+    final reason = memoryHit == null
+        ? 'لم يتم نشر التغريدة لأنها تحتوي على سب أو شتم واضح.'
+        : 'لم يتم نشر التغريدة لأنها تطابق عبارة مخالفة تعلمتها ذاكرة Respect AI سابقًا.';
+    return <String, dynamic>{
+      'ok': true,
+      'blocked': true,
+      'shouldDelete': true,
+      'prePublishBlocked': true,
+      'deleted': false,
+      'category': category.isEmpty ? 'local_moderation_memory' : category,
+      'reason': reason,
+      'confidence': confidence,
+      'decisionSource': source,
+      'decisionSourceKind': memoryHit == null ? 'local' : 'memory',
+      'decisionSourceLabel': memoryHit == null ? 'حماية محلية' : 'ذاكرة Respect AI',
+      'moderationMemoryUsed': memoryHit != null,
+      'memoryUsed': memoryHit != null,
+      'matchedTerm': matched,
+      'matchedTerms': terms,
+      'localMemoryRows': memoryHit == null ? const <Map<String, dynamic>>[] : <Map<String, dynamic>>[memoryHit],
+      'learnedTerms': terms,
+    };
+  }
+
+  static Future<Map<String, dynamic>> checkPostBeforePublish({
+    required String text,
+    required String authorUsername,
+    String audience = 'public',
+    String communityId = '',
+  }) async {
+    final clean = text.trim();
+    final author = displayUsername(authorUsername);
+    if (clean.isEmpty || isRespectAiUsername(author)) {
+      return <String, dynamic>{
+        'ok': true,
+        'blocked': false,
+        'shouldDelete': false,
+        'prePublishBlocked': false,
+        'category': 'safe',
+        'reason': '',
+        'confidence': 0.0,
+      };
+    }
+
+    await _ensureLocalAiModerationMemoryLoaded();
+    final memoryHit = _localAiModerationMemoryHitFromCache(clean);
+    if (memoryHit != null) {
+      return _localModerationBlockResult(
+        text: clean,
+        source: 'local_moderation_memory',
+        memoryHit: memoryHit,
+      );
+    }
+
+    if (_localObviousViolation(clean)) {
+      final localResult = _localModerationBlockResult(
+        text: clean,
+        source: 'local_obvious_violation',
+      );
+      await _learnLocalModerationMemoryFromServerResult(text: clean, result: localResult);
+      return localResult;
+    }
+
+    final endpoint = respectAiPostPrecheckBackendUrl.trim();
+    if (endpoint.isEmpty || endpoint.contains('YOUR_SERVER_URL')) {
+      return <String, dynamic>{
+        'ok': true,
+        'blocked': false,
+        'shouldDelete': false,
+        'prePublishBlocked': false,
+        'category': 'safe',
+        'reason': '',
+        'confidence': 0.0,
+        'serverPrecheckSkipped': true,
+      };
+    }
+
+    try {
+      final response = await _postSignedJson(
+        Uri.parse(endpoint),
+        <String, dynamic>{
+          'text': clean,
+          'username': author,
+          'authorUsername': author,
+          'contentType': 'post_pre_publish',
+          'postId': '',
+          'audience': audience.trim().isEmpty ? 'public' : audience.trim(),
+          'communityId': communityId.trim(),
+          'language': 'ar',
+        },
+        timeout: const Duration(seconds: 65),
+      );
+
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw Exception('Pre-publish moderation server error: ${response.statusCode} ${response.body}');
+      }
+
+      final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+      if (decoded is Map) {
+        final result = Map<String, dynamic>.from(decoded);
+        await _learnLocalModerationMemoryFromServerResult(text: clean, result: result);
+        final blocked = result['blocked'] == true ||
+            result['prePublishBlocked'] == true ||
+            result['shouldDelete'] == true ||
+            result['delete'] == true ||
+            result['blocked'] == 'true';
+        return <String, dynamic>{
+          ...result,
+          'ok': result['ok'] != false,
+          'blocked': blocked,
+          'prePublishBlocked': blocked,
+          'shouldDelete': blocked,
+        };
+      }
+    } catch (e, st) {
+      _logIgnoredError(e, st);
+      // لا نوقف النشر بسبب تعطل السيرفر إذا الذاكرة المحلية والفلتر الصارم لم يجدا مخالفة.
+      return <String, dynamic>{
+        'ok': false,
+        'blocked': false,
+        'shouldDelete': false,
+        'prePublishBlocked': false,
+        'category': 'moderation_precheck_unavailable',
+        'reason': 'تعذر فحص ما قبل النشر، وتم السماح لأن النص لا يطابق الذاكرة المحلية.',
+        'confidence': 0.0,
+        'error': e.toString(),
+      };
+    }
+
+    return <String, dynamic>{
+      'ok': true,
+      'blocked': false,
+      'shouldDelete': false,
+      'prePublishBlocked': false,
+      'category': 'safe',
+      'reason': '',
+      'confidence': 0.0,
+    };
+  }
+
+  static Future<String> translateChatMessage({
+    required String text,
+    required String targetLanguage,
+    String sourceLanguage = 'auto',
+    String targetDialect = 'auto',
+    String username = '',
+  }) async {
+    final clean = text.trim();
+    if (clean.isEmpty) return '';
+
+    final target = normalizeAppLanguageCode(targetLanguage);
+    final dialect = target == 'ar' ? normalizeArabicDialectCode(targetDialect) : 'auto';
+    final endpoint = respectAiChatTranslateBackendUrl.trim();
+    if (endpoint.isEmpty || endpoint.contains('YOUR_SERVER_URL')) {
+      throw Exception('ضع رابط سيرفر Respect AI داخل SupabaseService.respectApiBaseUrl');
+    }
+
+    final response = await _postSignedJson(
+      Uri.parse(endpoint),
+      <String, dynamic>{
+        'text': clean,
+        'targetLanguage': target,
+        'targetDialect': dialect,
+        'sourceLanguage': sourceLanguage.trim().isEmpty ? 'auto' : sourceLanguage.trim(),
+        'username': displayUsername(username),
+        'context': 'chat',
+      },
+      timeout: const Duration(seconds: 35),
+    );
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('Chat translation server error: ${response.statusCode} ${response.body}');
+    }
+
+    final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+    if (decoded is Map) {
+      final translated = (decoded['translatedText'] ?? decoded['translation'] ?? decoded['text'] ?? '').toString().trim();
+      if (translated.isNotEmpty) return translated;
+    }
+    return clean;
   }
 
   static Future<Map<String, dynamic>> moderateRespectContent({
@@ -2565,18 +3375,34 @@ class SupabaseService {
       }
 
       final decoded = jsonDecode(utf8.decode(response.bodyBytes));
-      if (decoded is Map) return Map<String, dynamic>.from(decoded);
+      if (decoded is Map) {
+        final result = Map<String, dynamic>.from(decoded);
+        if (moderationQueuedResult(result)) {
+          return <String, dynamic>{
+            ...result,
+            'ok': result['ok'] != false,
+            'shouldDelete': false,
+            'deleted': false,
+            'queued': true,
+            'moderationQueued': true,
+          };
+        }
+        await _learnLocalModerationMemoryFromServerResult(text: clean, result: result);
+        return result;
+      }
     } catch (e) {
       // إذا تعطل سيرفر المراجعة لا نرفض التغريدات العادية مثل "مرحبا".
       // نستخدم فلتر محلي صارم جدًا للمخالف الواضح فقط، وما عداه نسمح به حتى لا يتعطل النشر.
-      final localBlock = _localObviousViolation(clean);
+      await _ensureLocalAiModerationMemoryLoaded();
+      final memoryBlock = _localAiModerationMemoryHitFromCache(clean) != null;
+      final localBlock = memoryBlock || _localObviousViolation(clean);
       return <String, dynamic>{
         'ok': false,
         'shouldDelete': localBlock,
         'deleteParentReply': false,
-        'category': localBlock ? 'local_obvious_violation' : 'moderation_unavailable_safe',
+        'category': memoryBlock ? 'local_moderation_memory' : (localBlock ? 'local_obvious_violation' : 'moderation_unavailable_safe'),
         'reason': localBlock
-            ? 'تم رفض المحتوى محليًا لأنه يحتوي مخالفة واضحة'
+            ? 'تم رفض المحتوى محليًا لأنه يحتوي مخالفة واضحة تعلمها Respect AI'
             : 'تعذر فحص المحتوى بواسطة Respect AI، وتم السماح به لأنه لا يحتوي مخالفة واضحة',
         'confidence': localBlock ? 0.95 : 0.0,
       };
@@ -2672,7 +3498,7 @@ class SupabaseService {
           'contentType': 'story',
           'language': 'ar',
         },
-  timeout: const Duration(seconds: 240),
+  timeout: const Duration(seconds: 45),
 );
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -2680,7 +3506,20 @@ class SupabaseService {
       }
 
       final decoded = jsonDecode(utf8.decode(response.bodyBytes));
-      if (decoded is Map) return Map<String, dynamic>.from(decoded);
+      if (decoded is Map) {
+        final result = Map<String, dynamic>.from(decoded);
+        if (moderationQueuedResult(result)) {
+          return <String, dynamic>{
+            ...result,
+            'ok': result['ok'] != false,
+            'shouldDelete': false,
+            'deleted': false,
+            'queued': true,
+            'moderationQueued': true,
+          };
+        }
+        return result;
+      }
     } catch (e) {
       _safeDebugLog('Respect AI story moderation failed for $id: $e');
       return <String, dynamic>{
@@ -2717,7 +3556,12 @@ class SupabaseService {
         authorUsername: authorUsername,
         mediaUrl: url,
         mediaType: mediaType,
-      ).timeout(const Duration(seconds: 260));
+      ).timeout(const Duration(seconds: 75));
+
+      if (moderationQueuedResult(result)) {
+        _safeDebugLog('Respect AI queued story moderation for $id');
+        return;
+      }
 
       final shouldDelete = result['shouldDelete'] == true ||
           result['delete'] == true ||
@@ -2807,7 +3651,7 @@ class SupabaseService {
           'premiumReview': authorTier == 'premium',
           'language': 'ar',
         },
-  timeout: const Duration(seconds: 180),
+  timeout: const Duration(seconds: 45),
 );
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -2815,7 +3659,21 @@ class SupabaseService {
       }
 
       final decoded = jsonDecode(utf8.decode(response.bodyBytes));
-      if (decoded is Map) return Map<String, dynamic>.from(decoded);
+      if (decoded is Map) {
+        final result = Map<String, dynamic>.from(decoded);
+        if (moderationQueuedResult(result)) {
+          return <String, dynamic>{
+            ...result,
+            'ok': result['ok'] != false,
+            'shouldDelete': false,
+            'deleted': false,
+            'queued': true,
+            'moderationQueued': true,
+          };
+        }
+        await _learnLocalModerationMemoryFromServerResult(text: clean, result: result);
+        return result;
+      }
     } catch (e) {
       _safeDebugLog('Respect AI server-side post moderation failed for $id: $e');
 
@@ -2834,11 +3692,13 @@ class SupabaseService {
             result['blocked'] == true;
         if (shouldDelete) {
           await deletePost(id);
-          return <String, dynamic>{
+          final learnedResult = <String, dynamic>{
             ...result,
             'deleted': true,
             'fallbackClientDelete': true,
           };
+          await _learnLocalModerationMemoryFromServerResult(text: clean, result: learnedResult);
+          return learnedResult;
         }
         return <String, dynamic>{
           ...result,
@@ -2890,7 +3750,12 @@ class SupabaseService {
         authorUsername: authorUsername,
         imageUrls: safeImageUrls,
         videoUrl: safeVideoUrl,
-      ).timeout(const Duration(seconds: 240));
+      ).timeout(const Duration(seconds: 75));
+
+      if (moderationQueuedResult(result)) {
+        _safeDebugLog('Respect AI queued post moderation for $id');
+        return;
+      }
 
       final shouldDelete = result['shouldDelete'] == true ||
           result['delete'] == true ||
@@ -3288,20 +4153,51 @@ $examples
   static Future<void> registerCurrentDeviceForUser(String username) async {
     final user = displayUsername(username);
     final clean = normalizeUsername(user);
-    if (clean.isEmpty) return;
+    if (clean.isEmpty || clean == 'user') return;
     final payload = await _devicePayload(username: user);
-    try {
+    final prefs = await SharedPreferences.getInstance();
+
+    Future<void> updateByUsername(String value) async {
+      if (value.trim().isEmpty) return;
       await client
           .from('users')
           .update(payload)
-          .or('username.eq.$user,username.eq.$clean')
+          .eq('username', value)
           .timeout(const Duration(seconds: 8));
-    } catch (_) {
-      // لو الأعمدة غير موجودة، التطبيق لا يتوقف. شغّل ملف SQL المرفق لتفعيل الحظر على الجهاز.
     }
 
-    final prefs = await SharedPreferences.getInstance();
+    try {
+      await updateByUsername(user);
+    } catch (e, st) {
+      _logIgnoredError(e, st);
+      try { await updateByUsername(clean); } catch (e2, st2) { _logIgnoredError(e2, st2); }
+    }
+
+    // نحدث النسخة المحلية حتى صفحة الأدمن المحلية وأي شاشة تعتمد على SharedPreferences تشوف الجهاز فورًا.
+    try {
+      final localRaw = prefs.getString('respect_current_user');
+      if (localRaw != null && localRaw.trim().isNotEmpty) {
+        final decoded = jsonDecode(localRaw);
+        if (decoded is Map) {
+          final local = Map<String, dynamic>.from(decoded as Map);
+          final localUser = normalizeUsername((local['username'] ?? '').toString());
+          if (localUser == clean) {
+            local.addAll(payload);
+            await prefs.setString('respect_current_user', jsonEncode(local));
+          }
+        }
+      }
+    } catch (e, st) { _logIgnoredError(e, st); }
+
     await prefs.setString('respect_last_logged_device_username', user);
+  }
+
+  static Future<void> touchCurrentDeviceForCurrentUser() async {
+    try {
+      final id = await currentUserId();
+      if (id == null || id.trim().isEmpty) return;
+      await registerCurrentDeviceForUser(id);
+    } catch (e, st) { _logIgnoredError(e, st); }
   }
 
   static Future<Map<String, dynamic>?> currentDeviceBan() async {
@@ -3363,6 +4259,7 @@ $examples
     required bool blocked,
     String reason = '',
     String adminUsername = '',
+    String deviceId = '',
   }) async {
     final user = displayUsername(username);
     final clean = normalizeUsername(user);
@@ -3371,7 +4268,25 @@ $examples
     Map<String, dynamic>? target;
     try { target = await getUserByUsername(user); } catch (e, st) { _logIgnoredError(e, st); }
 
-    final deviceId = (target?['current_device_id'] ?? target?['device_id'] ?? target?['last_device_id'] ?? '').toString().trim();
+    var targetDeviceId = deviceId.trim();
+    targetDeviceId = targetDeviceId.isNotEmpty
+        ? targetDeviceId
+        : (target?['current_device_id'] ?? target?['device_id'] ?? target?['last_device_id'] ?? '').toString().trim();
+
+    // احتياط: إذا getUserByUsername رجع أعمدة قديمة أو ناقصة، نبحث في قائمة المستخدمين الكاملة.
+    if (targetDeviceId.isEmpty) {
+      try {
+        final users = await getUsers();
+        for (final item in users) {
+          final u = displayUsername((item['username'] ?? '').toString());
+          if (normalizeUsername(u) == clean) {
+            targetDeviceId = (item['current_device_id'] ?? item['device_id'] ?? item['last_device_id'] ?? '').toString().trim();
+            break;
+          }
+        }
+      } catch (e, st) { _logIgnoredError(e, st); }
+    }
+
     final now = DateTime.now().toUtc().toIso8601String();
     final cleanReason = reason.trim().isEmpty ? 'Blocked by admin' : reason.trim();
 
@@ -3402,11 +4317,11 @@ $examples
       } catch (e2, st2) { _logIgnoredError(e2, st2); }
     }
 
-    if (deviceId.isNotEmpty) {
+    if (targetDeviceId.isNotEmpty) {
       if (blocked) {
         try {
           await client.from('respect_device_bans').upsert({
-            'device_id': deviceId,
+            'device_id': targetDeviceId,
             'username': user,
             'reason': cleanReason,
             'banned_by': adminUsername.trim().isEmpty ? 'admin' : displayUsername(adminUsername),
@@ -3420,7 +4335,7 @@ $examples
           await client
               .from('respect_device_bans')
               .update({'is_active': false, 'updated_at': now})
-              .eq('device_id', deviceId)
+              .eq('device_id', targetDeviceId)
               .timeout(const Duration(seconds: 8));
         } catch (e, st) { _logIgnoredError(e, st); }
       }
@@ -3500,6 +4415,57 @@ $examples
       default:
         return 'audio/mp4';
     }
+  }
+
+  static Future<String> uploadAppFeedbackMedia({
+    required String username,
+    required String filePath,
+    required bool video,
+  }) async {
+    return uploadRespectAiFeedbackMedia(
+      username: username,
+      filePath: filePath,
+      video: video,
+    );
+  }
+
+  static Future<String> uploadRespectAiFeedbackMedia({
+    required String username,
+    required String filePath,
+    required bool video,
+  }) async {
+    final raw = filePath.trim();
+    if (raw.isEmpty) return '';
+    if (_isRemoteUrl(raw)) return raw;
+
+    final file = File(raw);
+    if (!await file.exists()) throw Exception('feedback media file not found');
+
+    final sizeMb = await file.length() / (1024 * 1024);
+    if (video && sizeMb > 120) {
+      throw Exception('الفيديو كبير جدًا، اختر فيديو أقل من 120MB');
+    }
+    if (!video && sizeMb > 20) {
+      throw Exception('الصورة كبيرة جدًا، اختر صورة أقل من 20MB');
+    }
+
+    final clean = normalizeUsername(username);
+    if (clean.isEmpty) throw Exception('username is empty');
+
+    final ext = _postMediaExtFromPath(raw, video: video);
+    final storagePath = 'app-feedback/$clean/${video ? 'videos' : 'images'}/${DateTime.now().microsecondsSinceEpoch}.$ext';
+
+    await client.storage.from('post-media').upload(
+      storagePath,
+      file,
+      fileOptions: FileOptions(
+        contentType: _postMediaContentType(ext, video: video),
+        cacheControl: '604800',
+        upsert: true,
+      ),
+    );
+
+    return client.storage.from('post-media').getPublicUrl(storagePath);
   }
 
   static Future<String> uploadPostMedia({
@@ -3932,7 +4898,9 @@ $examples
         },
       );
 
-      return Map<String, dynamic>.from(res as Map);
+      final result = Map<String, dynamic>.from(res as Map);
+      if (liked) unawaited(trackTopicInteraction(postId: id, username: user, interactionType: 'like'));
+      return result;
     } catch (_) {
       // Fallback ثابت وليس toggle:
       // إذا المطلوب liked=true نضمن وجود الصف، وإذا false نضمن حذفه.
@@ -3952,6 +4920,7 @@ $examples
       }
 
       final counters = await _readGlobalPostCounters(id);
+      if (liked) unawaited(trackTopicInteraction(postId: id, username: user, interactionType: 'like'));
       return {
         'success': true,
         'isLiked': liked,
@@ -3979,7 +4948,9 @@ $examples
         },
       );
 
-      return Map<String, dynamic>.from(res as Map);
+      final result = Map<String, dynamic>.from(res as Map);
+      if (result['isLiked'] == true) unawaited(trackTopicInteraction(postId: id, username: user, interactionType: 'like'));
+      return result;
     } catch (_) {
       // Fallback مهم حتى لو RPC غير موجودة أو حصل خطأ مؤقت في Supabase.
       // بهذا الشكل التطبيق لا يتعطل ويرجع يستخدم النظام القديم.
@@ -4035,7 +5006,9 @@ $examples
         },
       );
 
-      return Map<String, dynamic>.from(res as Map);
+      final result = Map<String, dynamic>.from(res as Map);
+      if (reposted) unawaited(trackTopicInteraction(postId: id, username: user, interactionType: 'repost'));
+      return result;
     } catch (_) {
       // Fallback ثابت وليس toggle:
       // إذا المطلوب reposted=true نضمن وجود الصف، وإذا false نضمن حذفه.
@@ -4055,6 +5028,7 @@ $examples
       }
 
       final counters = await _readGlobalPostCounters(id);
+      if (reposted) unawaited(trackTopicInteraction(postId: id, username: user, interactionType: 'repost'));
       return {
         'success': true,
         'isReposted': reposted,
@@ -4137,6 +5111,7 @@ $examples
     }
 
     final counters = await _readGlobalPostCounters(id);
+    if (newSaved) unawaited(trackTopicInteraction(postId: id, username: user, interactionType: 'save'));
     return {
       'isSaved': newSaved,
       ...counters,
@@ -4171,7 +5146,9 @@ $examples
         },
       );
 
-      return Map<String, dynamic>.from(res as Map);
+      final result = Map<String, dynamic>.from(res as Map);
+      if (result['alreadyViewed'] != true) unawaited(trackTopicInteraction(postId: id, username: user, interactionType: 'view'));
+      return result;
     } catch (_) {
       // Fallback مهم حتى لو RPC غير موجودة أو حصل خطأ مؤقت في Supabase.
       // بهذا الشكل التطبيق لا يتعطل ويرجع يستخدم النظام القديم.
@@ -4190,6 +5167,7 @@ $examples
       }
 
       final counters = await _readGlobalPostCounters(id);
+      if (!alreadyViewed) unawaited(trackTopicInteraction(postId: id, username: user, interactionType: 'view'));
       return {
         'success': true,
         'alreadyViewed': alreadyViewed,
@@ -4197,6 +5175,1213 @@ $examples
       };
     }
   }
+
+
+  // ================= Respect AI Topic Classification / For You Algorithm =================
+  // الفكرة:
+  // 1) بعد نشر أي تغريدة، يرسل التطبيق النص/الوسائط إلى Render.
+  // 2) Render يستخدم Respect AI/Qwen لتحديد التصنيفات ويخزنها في post_topics.
+  // 3) عند تفاعل المستخدم، نزيد نقاط اهتمامه في user_topic_scores.
+  // 4) FeedScreen يرتب تبويب "لك" حسب توافق التصنيفات مع اهتمامات المستخدم.
+
+  static const Set<String> _officialRecommendationTopics = <String>{
+    'football',
+    'sports',
+    'basketball',
+    'gaming',
+    'esports',
+    'programming',
+    'ai',
+    'technology',
+    'cybersecurity',
+    'cars',
+    'anime',
+    'movies',
+    'music',
+    'food',
+    'travel',
+    'fashion',
+    'education',
+    'business',
+    'finance',
+    'news',
+    'politics',
+    'religion',
+    'health',
+    'fitness',
+    'humor',
+    'memes',
+    'art',
+    'photography',
+    'animals',
+    'nature',
+    'local',
+    'live_streaming',
+    'video',
+    'shopping',
+    'beauty',
+    'family',
+    'personal',
+    'general',
+  };
+
+  static const List<String> _defaultRecommendationTopics = <String>[
+    'football',
+    'sports',
+    'basketball',
+    'gaming',
+    'esports',
+    'programming',
+    'ai',
+    'technology',
+    'cybersecurity',
+    'cars',
+    'anime',
+    'movies',
+    'music',
+    'food',
+    'travel',
+    'fashion',
+    'education',
+    'business',
+    'finance',
+    'news',
+    'politics',
+    'religion',
+    'health',
+    'fitness',
+    'humor',
+    'memes',
+    'art',
+    'photography',
+    'animals',
+    'nature',
+    'local',
+    'live_streaming',
+    'video',
+    'shopping',
+    'beauty',
+    'family',
+    'personal',
+    'general',
+  ];
+
+  static bool isOfficialRecommendationTopic(String value) {
+    final clean = normalizeRecommendationTopic(value);
+    return clean.isNotEmpty && _officialRecommendationTopics.contains(clean);
+  }
+
+  static List<String> _canonicalRecommendationTopics(Iterable<String> values, {bool allowGeneral = true}) {
+    final out = <String>[];
+    for (final value in values) {
+      final clean = normalizeRecommendationTopic(value);
+      if (clean.isEmpty) continue;
+      if (clean == 'general' && !allowGeneral) continue;
+      if (!_officialRecommendationTopics.contains(clean)) continue;
+      if (!out.contains(clean)) out.add(clean);
+    }
+    if (out.isEmpty && allowGeneral) out.add('general');
+    return out;
+  }
+
+  static bool _shouldStorePostTopic({required double confidence, required String source}) {
+    final src = source.trim().toLowerCase();
+    if (src.contains('respect_ai') || src.contains('memory')) return true;
+    if (src == 'flutter' || src == 'manual') return true;
+    return confidence >= 0.35;
+  }
+
+
+  static String normalizeRecommendationTopic(String value) {
+    var clean = value.trim().toLowerCase();
+    clean = clean.replaceAll('#', '');
+    clean = clean.replaceAll(RegExp(r'\s+'), '_');
+    clean = clean.replaceAll(RegExp(r'[^a-z0-9_\u0600-\u06FF]+'), '_');
+    clean = clean.replaceAll(RegExp(r'_+'), '_').replaceAll(RegExp(r'^_|_$'), '');
+    if (clean.isEmpty) return '';
+
+    const aliases = <String, String>{
+      // Football / sports
+      'football': 'football',
+      'footbal': 'football',
+      'soccer': 'football',
+      'كرة': 'football',
+      'كوره': 'football',
+      'كورة': 'football',
+      'كره': 'football',
+      'كرة_قدم': 'football',
+      'كرة_القدم': 'football',
+      'مباريات': 'football',
+      'مباراه': 'football',
+      'مباراة': 'football',
+      'اهداف': 'football',
+      'أهداف': 'football',
+      'goal': 'football',
+      'goals': 'football',
+      'messi': 'football',
+      'ronaldo': 'football',
+      'ميسي': 'football',
+      'رونالدو': 'football',
+      'sports': 'sports',
+      'sport': 'sports',
+      'رياضه': 'sports',
+      'رياضة': 'sports',
+      'basketball': 'basketball',
+      'nba': 'basketball',
+      'سلة': 'basketball',
+      'كره_السله': 'basketball',
+      'كرة_السلة': 'basketball',
+
+      // Gaming / live
+      'gaming': 'gaming',
+      'game': 'gaming',
+      'games': 'gaming',
+      'العاب': 'gaming',
+      'ألعاب': 'gaming',
+      'قيمنق': 'gaming',
+      'قيمز': 'gaming',
+      'pubg': 'gaming',
+      'ببجي': 'gaming',
+      'gta': 'gaming',
+      'fivem': 'gaming',
+      'فايف_ام': 'gaming',
+      'fortnite': 'gaming',
+      'فورتنايت': 'gaming',
+      'minecraft': 'gaming',
+      'ماينكرافت': 'gaming',
+      'valorant': 'gaming',
+      'فالورانت': 'gaming',
+      'esport': 'esports',
+      'esports': 'esports',
+      'ايسبورت': 'esports',
+      'stream': 'live_streaming',
+      'streaming': 'live_streaming',
+      'live': 'live_streaming',
+      'بث': 'live_streaming',
+      'بثوث': 'live_streaming',
+      'لايف': 'live_streaming',
+
+      // Tech / code / AI / security
+      'tech': 'technology',
+      'technology': 'technology',
+      'تقنيه': 'technology',
+      'تقنية': 'technology',
+      'تكنولوجيا': 'technology',
+      'phone': 'technology',
+      'mobile': 'technology',
+      'pc': 'technology',
+      'computer': 'technology',
+      'كمبيوتر': 'technology',
+      'جوال': 'technology',
+      'هاتف': 'technology',
+      'programming': 'programming',
+      'coding': 'programming',
+      'code': 'programming',
+      'software': 'programming',
+      'developer': 'programming',
+      'flutter': 'programming',
+      'dart': 'programming',
+      'python': 'programming',
+      'javascript': 'programming',
+      'typescript': 'programming',
+      'supabase': 'programming',
+      'firebase': 'programming',
+      'برمجه': 'programming',
+      'برمجة': 'programming',
+      'كود': 'programming',
+      'مطور': 'programming',
+      'ai': 'ai',
+      'artificial_intelligence': 'ai',
+      'ذكاء_اصطناعي': 'ai',
+      'الذكاء_الاصطناعي': 'ai',
+      'gpt': 'ai',
+      'chatgpt': 'ai',
+      'openai': 'ai',
+      'qwen': 'ai',
+      'deepseek': 'ai',
+      'gemini': 'ai',
+      'llm': 'ai',
+      'model': 'ai',
+      'نموذج': 'ai',
+      'security': 'cybersecurity',
+      'cyber': 'cybersecurity',
+      'cybersecurity': 'cybersecurity',
+      'امن_سيبراني': 'cybersecurity',
+      'أمن_سيبراني': 'cybersecurity',
+      'حماية': 'cybersecurity',
+      'اختراق': 'cybersecurity',
+      'ثغرة': 'cybersecurity',
+
+      // Lifestyle / media
+      'cars': 'cars',
+      'car': 'cars',
+      'سياره': 'cars',
+      'سيارة': 'cars',
+      'سيارات': 'cars',
+      'bmw': 'cars',
+      'mercedes': 'cars',
+      'مرسيدس': 'cars',
+      'anime': 'anime',
+      'manga': 'anime',
+      'انمي': 'anime',
+      'أنمي': 'anime',
+      'مانجا': 'anime',
+      'movie': 'movies',
+      'movies': 'movies',
+      'film': 'movies',
+      'cinema': 'movies',
+      'netflix': 'movies',
+      'فيلم': 'movies',
+      'افلام': 'movies',
+      'أفلام': 'movies',
+      'music': 'music',
+      'song': 'music',
+      'rap': 'music',
+      'اغنية': 'music',
+      'أغنية': 'music',
+      'موسيقى': 'music',
+      'food': 'food',
+      'restaurant': 'food',
+      'recipe': 'food',
+      'اكل': 'food',
+      'أكل': 'food',
+      'مطعم': 'food',
+      'طبخ': 'food',
+      'وصفة': 'food',
+      'travel': 'travel',
+      'trip': 'travel',
+      'tourism': 'travel',
+      'سفر': 'travel',
+      'رحلة': 'travel',
+      'سياحة': 'travel',
+      'fashion': 'fashion',
+      'style': 'fashion',
+      'ملابس': 'fashion',
+      'ستايل': 'fashion',
+      'موضة': 'fashion',
+      'shopping': 'shopping',
+      'shop': 'shopping',
+      'buy': 'shopping',
+      'تسوق': 'shopping',
+      'شراء': 'shopping',
+      'منتج': 'shopping',
+      'beauty': 'beauty',
+      'makeup': 'beauty',
+      'مكياج': 'beauty',
+      'جمال': 'beauty',
+
+      // Knowledge / society
+      'education': 'education',
+      'study': 'education',
+      'school': 'education',
+      'تعليم': 'education',
+      'دراسة': 'education',
+      'مدرسة': 'education',
+      'جامعة': 'education',
+      'business': 'business',
+      'startup': 'business',
+      'project': 'business',
+      'مشروع': 'business',
+      'تجارة': 'business',
+      'شركة': 'business',
+      'finance': 'finance',
+      'money': 'finance',
+      'crypto': 'finance',
+      'bitcoin': 'finance',
+      'دولار': 'finance',
+      'مال': 'finance',
+      'استثمار': 'finance',
+      'عملة': 'finance',
+      'news': 'news',
+      'breaking': 'news',
+      'اخبار': 'news',
+      'أخبار': 'news',
+      'خبر': 'news',
+      'عاجل': 'news',
+      'politics': 'politics',
+      'political': 'politics',
+      'سياسة': 'politics',
+      'سياسي': 'politics',
+      'رئيس': 'politics',
+      'انتخابات': 'politics',
+      'religion': 'religion',
+      'دين': 'religion',
+      'اسلام': 'religion',
+      'إسلام': 'religion',
+      'قران': 'religion',
+      'قرآن': 'religion',
+      'صلاة': 'religion',
+      'health': 'health',
+      'medical': 'health',
+      'doctor': 'health',
+      'صحة': 'health',
+      'طبيب': 'health',
+      'مرض': 'health',
+      'fitness': 'fitness',
+      'gym': 'fitness',
+      'workout': 'fitness',
+      'جيم': 'fitness',
+      'تمرين': 'fitness',
+      'family': 'family',
+      'عائلة': 'family',
+      'اهل': 'family',
+      'أهل': 'family',
+      'طفل': 'family',
+
+      // Fun / creative / nature
+      'humor': 'humor',
+      'funny': 'humor',
+      'lol': 'humor',
+      'ضحك': 'humor',
+      'نكتة': 'humor',
+      'هههه': 'humor',
+      'meme': 'memes',
+      'memes': 'memes',
+      'ميم': 'memes',
+      'ميمز': 'memes',
+      'art': 'art',
+      'design': 'art',
+      'رسم': 'art',
+      'فن': 'art',
+      'تصميم': 'art',
+      'photography': 'photography',
+      'photo': 'photography',
+      'camera': 'photography',
+      'تصوير': 'photography',
+      'صورة': 'photography',
+      'كاميرا': 'photography',
+      'animals': 'animals',
+      'animal': 'animals',
+      'cat': 'animals',
+      'dog': 'animals',
+      'حيوان': 'animals',
+      'قط': 'animals',
+      'كلب': 'animals',
+      'nature': 'nature',
+      'طبيعه': 'nature',
+      'طبيعة': 'nature',
+      'شجر': 'nature',
+      'بحر': 'nature',
+      'local': 'local',
+      'لبنان': 'local',
+      'سوريا': 'local',
+      'السعوديه': 'local',
+      'السعودية': 'local',
+      'محلي': 'local',
+      'video': 'video',
+      'فيديو': 'video',
+      'مقطع': 'video',
+      'personal': 'personal',
+      'شخصي': 'personal',
+      'يوميات': 'personal',
+      'general': 'general',
+      'عام': 'general',
+    };
+    clean = aliases[clean] ?? clean;
+    if (clean.length > 40) clean = clean.substring(0, 40);
+    return clean;
+  }
+
+  static String normalizeTopicMemoryTerm(String value) {
+    var clean = value.trim().toLowerCase();
+    clean = clean.replaceAll('#', '');
+    clean = clean.replaceAll(RegExp(r'\s+'), '_');
+    clean = clean.replaceAll(RegExp(r'[^a-z0-9_\u0600-\u06FF]+'), '_');
+    clean = clean.replaceAll(RegExp(r'_+'), '_').replaceAll(RegExp(r'^_|_$'), '');
+    if (clean.length > 64) clean = clean.substring(0, 64);
+    return clean;
+  }
+
+  static List<String> localFallbackTopicsForPost({
+    required String text,
+    String mediaType = 'text',
+  }) {
+    final raw = text.toLowerCase();
+    final topics = <String>{};
+
+    void add(String topic) {
+      final clean = normalizeRecommendationTopic(topic);
+      if (clean.isNotEmpty && _officialRecommendationTopics.contains(clean)) topics.add(clean);
+    }
+
+    for (final match in RegExp(r'#([\w\u0600-\u06FF_]+)').allMatches(raw)) {
+      final tag = normalizeRecommendationTopic(match.group(1) ?? '');
+      if (_officialRecommendationTopics.contains(tag)) topics.add(tag);
+    }
+
+    final rules = <String, List<String>>{
+      'football': ['كورة', 'كره', 'كرة', 'هدف', 'مباراة', 'ريال', 'برشلونة', 'دوري', 'لاعب', 'football', 'soccer', 'goal', 'messi', 'ronaldo'],
+      'sports': ['رياضة', 'رياضه', 'sport', 'sports', 'بطولة', 'كأس'],
+      'gaming': ['قيم', 'قيمنق', 'العاب', 'ألعاب', 'game', 'gaming', 'gta', 'pubg', 'fortnite', 'minecraft', 'valorant'],
+      'esports': ['esports', 'ايسبورت', 'بطولة فورتنايت', 'بطولة ببجي'],
+      'technology': ['تقنية', 'تقنيه', 'تكنولوجيا', 'جوال', 'هاتف', 'كمبيوتر', 'تطبيق', 'technology', 'phone', 'pc', 'laptop'],
+      'programming': ['برمجة', 'برمجه', 'flutter', 'dart', 'python', 'javascript', 'code', 'كود'],
+      'ai': ['ذكاء اصطناعي', 'ai', 'gpt', 'qwen', 'deepseek', 'gemini'],
+      'cybersecurity': ['امن سيبراني', 'أمن سيبراني', 'cyber', 'security', 'cybersecurity', 'اختراق', 'حماية', 'ثغرة'],
+      'cars': ['سيارة', 'سياره', 'سيارات', 'car', 'cars', 'bmw', 'mercedes', 'toyota'],
+      'anime': ['انمي', 'أنمي', 'anime', 'manga', 'مانجا'],
+      'movies': ['فيلم', 'افلام', 'أفلام', 'movie', 'cinema', 'netflix'],
+      'music': ['اغنية', 'أغنية', 'موسيقى', 'music', 'song', 'rap'],
+      'food': ['اكل', 'أكل', 'مطعم', 'طبخ', 'food', 'restaurant', 'recipe'],
+      'travel': ['سفر', 'رحلة', 'سياحة', 'travel', 'trip'],
+      'fitness': ['جيم', 'رياضة', 'تمرين', 'fitness', 'gym', 'workout'],
+      'humor': ['ضحك', 'نكتة', 'هههه', 'funny', 'lol'],
+      'memes': ['ميم', 'ميمز', 'meme', 'memes'],
+      'art': ['رسم', 'فن', 'تصميم', 'art', 'design'],
+      'photography': ['تصوير', 'صورة', 'كاميرا', 'photo', 'camera'],
+      'animals': ['قط', 'كلب', 'حيوان', 'animals', 'cat', 'dog'],
+      'news': ['خبر', 'اخبار', 'أخبار', 'news', 'breaking'],
+      'business': ['مشروع', 'تجارة', 'business', 'startup'],
+      'finance': ['دولار', 'عملة', 'مال', 'استثمار', 'finance', 'crypto', 'bitcoin'],
+    };
+
+    for (final entry in rules.entries) {
+      if (entry.value.any((word) => raw.contains(word.toLowerCase()))) add(entry.key);
+    }
+
+    final mt = mediaType.trim().toLowerCase();
+    if (mt == 'video') add('video');
+    if (mt == 'image' || mt == 'gif') add('photography');
+    if (topics.isEmpty) add('general');
+    return topics.take(8).toList();
+  }
+
+  static List<String> _topicsFromAiResponse(Map<String, dynamic> decoded) {
+    dynamic rawTopics = decoded['topics'] ?? decoded['categories'] ?? decoded['tags'];
+    if (rawTopics is String) {
+      try { rawTopics = jsonDecode(rawTopics); } catch (_) {}
+    }
+
+    final topics = <String>{};
+    if (rawTopics is List) {
+      for (final item in rawTopics) {
+        if (item is Map) {
+          topics.add(normalizeRecommendationTopic((item['topic'] ?? item['name'] ?? item['tag'] ?? '').toString()));
+        } else {
+          topics.add(normalizeRecommendationTopic(item.toString()));
+        }
+      }
+    }
+
+    final primary = normalizeRecommendationTopic((decoded['primaryTopic'] ?? decoded['primary_topic'] ?? '').toString());
+    if (primary.isNotEmpty) topics.add(primary);
+    topics.removeWhere((e) => e.trim().isEmpty || !_officialRecommendationTopics.contains(e));
+    if (topics.isEmpty) topics.add('general');
+    return topics.take(10).toList();
+  }
+
+  static double _safeDouble(dynamic value, [double fallback = 0.0]) {
+    if (value is num) return value.toDouble();
+    return double.tryParse((value ?? '').toString()) ?? fallback;
+  }
+
+  static const String _localAiTopicMemoryKey = 'respect_ai_topic_memory_v2';
+  static const double _localTopicMemoryMinConfidence = 0.78;
+  static const int _localTopicMemoryMaxRows = 1400;
+
+  static List<String> _topicMemoryTerms(String value) {
+    final raw = value.toLowerCase();
+    final terms = <String>[];
+
+    const stopWords = <String>{
+      'هذا', 'هذه', 'الي', 'اللي', 'على', 'الى', 'إلى', 'في', 'من', 'عن', 'مع',
+      'كان', 'صار', 'the', 'and', 'for', 'with', 'this', 'that', 'you', 'are',
+      'was', 'were',
+    };
+
+    void add(String term) {
+      final clean = normalizeTopicMemoryTerm(term);
+      if (clean.isNotEmpty && clean.length >= 2 && !stopWords.contains(clean) && !terms.contains(clean)) {
+        terms.add(clean);
+      }
+    }
+
+    for (final match in RegExp(r'#([\w\u0600-\u06FF_]+)').allMatches(raw)) {
+      add(match.group(1) ?? '');
+    }
+    for (final match in RegExp(r'[a-z0-9_\u0600-\u06FF]{2,}').allMatches(raw)) {
+      add(match.group(0) ?? '');
+    }
+
+    final base = List<String>.from(terms);
+    for (var i = 0; i < base.length - 1; i++) {
+      add('${base[i]}_${base[i + 1]}');
+    }
+    for (var i = 0; i < base.length - 2; i++) {
+      add('${base[i]}_${base[i + 1]}_${base[i + 2]}');
+    }
+
+    return terms.take(100).toList();
+  }
+
+  static List<String> _keywordsFromAiResponse(Map<String, dynamic> decoded, String text) {
+    dynamic rawKeywords = decoded['keywords'] ??
+        decoded['importantKeywords'] ??
+        decoded['important_keywords'] ??
+        decoded['terms'];
+
+    if (rawKeywords is String) {
+      try {
+        rawKeywords = jsonDecode(rawKeywords);
+      } catch (_) {
+        rawKeywords = rawKeywords.split(RegExp(r'[,،\n]+'));
+      }
+    }
+
+    final out = <String>[];
+    void add(dynamic value) {
+      if (value is Map) {
+        value = value['keyword'] ?? value['term'] ?? value['word'] ?? value['text'] ?? '';
+      }
+      final clean = normalizeTopicMemoryTerm((value ?? '').toString());
+      if (clean.isNotEmpty && clean.length >= 2 && !out.contains(clean)) out.add(clean);
+    }
+
+    if (rawKeywords is List) {
+      for (final item in rawKeywords) {
+        add(item);
+      }
+    }
+
+    for (final term in _topicMemoryTerms(text).take(24)) {
+      add(term);
+    }
+
+    return out.take(30).toList();
+  }
+
+  static String _reasonFromAiResponse(Map<String, dynamic> decoded) {
+    final value = decoded['reason'] ?? decoded['why'] ?? decoded['explanation'] ?? decoded['analysis'] ?? '';
+    final text = value is Map || value is List ? jsonEncode(value) : value.toString();
+    return text.trim().length > 700 ? text.trim().substring(0, 700) : text.trim();
+  }
+
+  static Future<List<Map<String, dynamic>>> _loadLocalAiTopicMemoryRows() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_localAiTopicMemoryKey);
+      if (raw == null || raw.trim().isEmpty) return <Map<String, dynamic>>[];
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return <Map<String, dynamic>>[];
+      return decoded
+          .whereType<Map>()
+          .map((e) => e.map((key, value) => MapEntry(key.toString(), value)))
+          .toList();
+    } catch (e, st) {
+      _logIgnoredError(e, st);
+      return <Map<String, dynamic>>[];
+    }
+  }
+
+  static Future<void> _saveLocalAiTopicMemoryRows(List<Map<String, dynamic>> rows) async {
+    try {
+      rows.sort((a, b) {
+        final ah = int.tryParse((a['hits'] ?? 0).toString()) ?? 0;
+        final bh = int.tryParse((b['hits'] ?? 0).toString()) ?? 0;
+        if (ah != bh) return bh.compareTo(ah);
+        final ac = _safeDouble(a['confidence'], 0.0);
+        final bc = _safeDouble(b['confidence'], 0.0);
+        return bc.compareTo(ac);
+      });
+
+      final limited = rows.take(_localTopicMemoryMaxRows).toList();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_localAiTopicMemoryKey, jsonEncode(limited));
+    } catch (e, st) {
+      _logIgnoredError(e, st);
+    }
+  }
+
+  static Future<Map<String, dynamic>> classifyPostTopicsWithLocalMemory({
+    required String text,
+    String mediaType = 'text',
+  }) async {
+    final cleanText = text.trim();
+    if (cleanText.length < 3) {
+      return <String, dynamic>{'ok': false, 'topics': <String>[], 'confidence': 0.0};
+    }
+
+    final terms = _topicMemoryTerms(cleanText).toSet();
+    if (terms.isEmpty) {
+      return <String, dynamic>{'ok': false, 'topics': <String>[], 'confidence': 0.0};
+    }
+
+    final rows = await _loadLocalAiTopicMemoryRows();
+    if (rows.isEmpty) {
+      return <String, dynamic>{'ok': false, 'topics': <String>[], 'confidence': 0.0};
+    }
+
+    final raw = cleanText.toLowerCase();
+    final topicScores = <String, double>{};
+    final matchedTerms = <String, List<String>>{};
+
+    for (final row in rows) {
+      final topic = normalizeRecommendationTopic((row['topic'] ?? '').toString());
+      final key = normalizeTopicMemoryTerm((row['key'] ?? row['memory_key'] ?? '').toString());
+      final type = (row['type'] ?? row['memory_type'] ?? 'keyword').toString().toLowerCase();
+      if (topic.isEmpty || topic == 'general' || !_officialRecommendationTopics.contains(topic) || key.isEmpty) continue;
+
+      var matched = terms.contains(key);
+      if (!matched && key.length >= 4) {
+        matched = raw.contains(key.replaceAll('_', ' ')) || raw.contains(key);
+      }
+      if (!matched) continue;
+
+      final confidence = _safeDouble(row['confidence'], 0.55).clamp(0.25, 1.0).toDouble();
+      final hits = int.tryParse((row['hits'] ?? 1).toString()) ?? 1;
+      var score = confidence * (1.0 + min(2.0, sqrt(max(1, hits)) / 8.0));
+      if (type == 'hashtag') score *= 1.35;
+      if (type == 'phrase') score *= 1.20;
+
+      topicScores[topic] = (topicScores[topic] ?? 0.0) + score;
+      matchedTerms.putIfAbsent(topic, () => <String>[]);
+      if (!matchedTerms[topic]!.contains(key)) matchedTerms[topic]!.add(key);
+    }
+
+    if (topicScores.isEmpty) {
+      return <String, dynamic>{'ok': false, 'topics': <String>[], 'confidence': 0.0};
+    }
+
+    final ranked = topicScores.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+
+    final best = ranked.first;
+    final bestMatches = matchedTerms[best.key] ?? const <String>[];
+    final total = ranked.fold<double>(0.0, (sum, e) => sum + max(0.0, e.value));
+    var confidence = best.value / max(1.0, best.value + 2.6);
+    if (bestMatches.length >= 2) confidence += 0.08;
+    if (total > 0 && best.value / total >= 0.70) confidence += 0.05;
+    confidence = confidence.clamp(0.0, 0.96).toDouble();
+
+    if (confidence < _localTopicMemoryMinConfidence) {
+      return <String, dynamic>{
+        'ok': false,
+        'topics': ranked.map((e) => e.key).take(5).toList(),
+        'confidence': confidence,
+      };
+    }
+
+    return <String, dynamic>{
+      'ok': true,
+      'topics': ranked.map((e) => e.key).take(5).toList(),
+      'primaryTopic': best.key,
+      'confidence': confidence,
+      'memoryUsed': true,
+      'source': 'local_topic_memory',
+      'keywords': bestMatches.take(12).toList(),
+      'reason': 'تم التصنيف من الذاكرة المحلية بناءً على كلمات تعلمها Respect AI سابقًا.',
+    };
+  }
+
+  static Future<void> saveLocalTopicMemoryFromAnalysis({
+    required List<String> topics,
+    required String text,
+    List<String> keywords = const <String>[],
+    String reason = '',
+    double confidence = 0.0,
+    String source = 'respect_ai',
+  }) async {
+    final cleanTopics = topics
+        .map(normalizeRecommendationTopic)
+        .where((e) => e.isNotEmpty && e != 'general')
+        .toSet()
+        .take(3)
+        .toList();
+
+    if (cleanTopics.isEmpty || confidence < 0.55 || source == 'local_fallback') return;
+
+    final memoryTerms = <String>{
+      ...keywords.map(normalizeTopicMemoryTerm),
+      ..._topicMemoryTerms(text).take(28),
+    }..removeWhere((e) => e.isEmpty || e.length < 2);
+
+    if (memoryTerms.isEmpty) return;
+
+    final rows = await _loadLocalAiTopicMemoryRows();
+    final index = <String, Map<String, dynamic>>{};
+    for (final row in rows) {
+      final topic = normalizeRecommendationTopic((row['topic'] ?? '').toString());
+      final key = normalizeTopicMemoryTerm((row['key'] ?? row['memory_key'] ?? '').toString());
+      if (topic.isNotEmpty && key.isNotEmpty) index['$topic|$key'] = row;
+    }
+
+    final now = DateTime.now().toUtc().toIso8601String();
+    for (final topic in cleanTopics) {
+      for (final term in memoryTerms.take(30)) {
+        final key = '$topic|$term';
+        final existing = index[key];
+        if (existing == null) {
+          final isPhrase = term.contains('_');
+          final row = <String, dynamic>{
+            'topic': topic,
+            'key': term,
+            'type': isPhrase ? 'phrase' : 'keyword',
+            'confidence': confidence.clamp(0.0, 1.0),
+            'hits': 1,
+            'reason': reason,
+            'source': source,
+            'updated_at': now,
+          };
+          rows.add(row);
+          index[key] = row;
+        } else {
+          final oldHits = int.tryParse((existing['hits'] ?? 1).toString()) ?? 1;
+          existing['hits'] = oldHits + 1;
+          existing['confidence'] = max(_safeDouble(existing['confidence'], 0.0), confidence).clamp(0.0, 1.0);
+          existing['reason'] = reason.trim().isEmpty ? (existing['reason'] ?? '') : reason;
+          existing['source'] = source;
+          existing['updated_at'] = now;
+        }
+      }
+    }
+
+    await _saveLocalAiTopicMemoryRows(rows);
+  }
+
+  static Future<void> savePostTopics({
+    required String postId,
+    required List<String> topics,
+    double confidence = 0.0,
+    String source = 'flutter',
+    String model = '',
+  }) async {
+    final id = postId.trim();
+    if (id.isEmpty) return;
+
+    final safeConfidence = confidence.clamp(0.0, 1.0).toDouble();
+    if (!_shouldStorePostTopic(confidence: safeConfidence, source: source)) return;
+
+    final cleaned = _canonicalRecommendationTopics(topics, allowGeneral: false).take(10).toList();
+    if (cleaned.isEmpty) return;
+
+    try {
+      await client.from('post_topics').delete().eq('post_id', id).timeout(const Duration(seconds: 8));
+    } catch (e, st) { _logIgnoredError(e, st); }
+
+    final now = DateTime.now().toUtc().toIso8601String();
+    final richRows = <Map<String, dynamic>>[];
+    final legacyRows = <Map<String, dynamic>>[];
+
+    for (var i = 0; i < cleaned.length; i++) {
+      final isPrimary = i == 0;
+      final weight = isPrimary ? 1.0 : (0.82 - (i * 0.04)).clamp(0.55, 0.82).toDouble();
+      final base = <String, dynamic>{
+        'post_id': id,
+        'topic': cleaned[i],
+        'weight': weight,
+        'confidence': safeConfidence,
+        'source': source,
+      };
+      legacyRows.add(base);
+      richRows.add({
+        ...base,
+        'topic_role': isPrimary ? 'primary' : 'secondary',
+        'is_primary': isPrimary,
+        'topic_rank': i + 1,
+        'model': model.trim(),
+        'updated_at': now,
+      });
+    }
+
+    try {
+      await client.from('post_topics').insert(richRows).timeout(const Duration(seconds: 8));
+    } catch (e, st) {
+      _logIgnoredError(e, st);
+      try {
+        await client.from('post_topics').insert(legacyRows).timeout(const Duration(seconds: 8));
+      } catch (e2, st2) { _logIgnoredError(e2, st2); }
+    }
+  }
+
+
+  static Future<Map<String, dynamic>> classifyPostTopicsWithAi({
+    required String postId,
+    required String username,
+    required String text,
+    List<String> imageUrls = const <String>[],
+    String imageUrl = '',
+    String videoUrl = '',
+    String voiceUrl = '',
+    String mediaType = 'text',
+  }) async {
+    final id = postId.trim();
+    if (id.isEmpty) return <String, dynamic>{'ok': false, 'topics': <String>[]};
+
+    final cleanImageUrls = <String>{
+      ...imageUrls.map((e) => e.trim()).where((e) => e.isNotEmpty),
+      if (imageUrl.trim().isNotEmpty) imageUrl.trim(),
+    }.toList();
+
+    final cleanMediaType = mediaType.trim().isEmpty ? 'text' : mediaType.trim();
+    final fallbackTopics = localFallbackTopicsForPost(text: text, mediaType: cleanMediaType);
+
+    // 1) الذاكرة المحلية أولًا:
+    // إذا تعلم الجهاز سابقًا من Respect AI ووصلت الثقة لحد قوي،
+    // نصنف بدون أي اتصال بالذكاء الاصطناعي.
+    try {
+      final localMemory = await classifyPostTopicsWithLocalMemory(
+        text: text,
+        mediaType: cleanMediaType,
+      );
+      final localConfidence = _safeDouble(localMemory['confidence'], 0.0);
+      if (localMemory['ok'] == true && localConfidence >= _localTopicMemoryMinConfidence) {
+        final topics = _topicsFromAiResponse(localMemory);
+        await savePostTopics(
+          postId: id,
+          topics: topics,
+          confidence: localConfidence,
+          source: 'local_topic_memory',
+          model: 'local_topic_memory_v2',
+        );
+        return <String, dynamic>{
+          ...localMemory,
+          'ok': true,
+          'topics': topics,
+          'stored': true,
+          'fallback': false,
+          'memoryUsed': true,
+        };
+      }
+    } catch (e, st) {
+      _logIgnoredError(e, st);
+    }
+
+    final endpoint = respectAiPostClassifyBackendUrl.trim();
+    if (endpoint.isEmpty) {
+      await savePostTopics(postId: id, topics: fallbackTopics, confidence: 0.25, source: 'local_fallback', model: 'local_fallback');
+      return <String, dynamic>{'ok': true, 'topics': fallbackTopics, 'fallback': true};
+    }
+
+    try {
+      final uri = Uri.parse(endpoint);
+      final response = await _postSignedJson(
+        uri,
+        {
+          'postId': id,
+          'username': displayUsername(username),
+          'text': text,
+          'imageUrls': cleanImageUrls,
+          'videoUrl': videoUrl.trim(),
+          'voiceUrl': voiceUrl.trim(),
+          'mediaType': cleanMediaType,
+          'language': await currentAppLanguageCode(),
+        },
+        timeout: const Duration(seconds: 38),
+      );
+
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw Exception('AI classify error ${response.statusCode}: ${response.body}');
+      }
+
+      final decoded = jsonDecode(response.body);
+      final map = decoded is Map ? Map<String, dynamic>.from(decoded as Map) : <String, dynamic>{};
+      final topics = _topicsFromAiResponse(map);
+      final confidence = _safeDouble(map['confidence'], 0.0);
+      final source = (map['source'] ?? (map['memoryUsed'] == true ? 'server_topic_memory' : 'respect_ai')).toString();
+      final keywords = _keywordsFromAiResponse(map, text);
+      final reason = _reasonFromAiResponse(map);
+
+      if (map['stored'] != true) {
+        await savePostTopics(
+          postId: id,
+          topics: topics,
+          confidence: confidence,
+          source: map['memoryUsed'] == true ? 'server_topic_memory_client_backup' : 'respect_ai_client_backup',
+          model: (map['model'] ?? '').toString(),
+        );
+      }
+
+      // 2) نتعلم محليًا من نتيجة السيرفر/AI.
+      // إذا كان السيرفر استخدم AI الحقيقي، نحفظ الكلمات والسبب.
+      // إذا كان السيرفر استخدم ذاكرته، نحفظ النتيجة محليًا أيضًا حتى الجهاز يصير أسرع لاحقًا.
+      unawaited(saveLocalTopicMemoryFromAnalysis(
+        topics: topics,
+        text: text,
+        keywords: keywords,
+        reason: reason,
+        confidence: confidence,
+        source: source,
+      ));
+
+      return <String, dynamic>{...map, 'topics': topics, 'keywords': keywords, 'reason': reason};
+    } catch (e, st) {
+      _logIgnoredError(e, st);
+      await savePostTopics(postId: id, topics: fallbackTopics, confidence: 0.20, source: 'local_fallback', model: 'local_fallback');
+      return <String, dynamic>{'ok': true, 'topics': fallbackTopics, 'fallback': true, 'error': e.toString()};
+    }
+  }
+
+
+  static double _interestWeightForAction(String action) {
+    switch (action.trim().toLowerCase()) {
+      case 'view':
+        // المشاهدة وحدها إشارة ضعيفة جدًا؛ لا نريد أن يسيطر تصنيف كامل بسبب مرور سريع.
+        return 0.18;
+      case 'media_open':
+        return 0.9;
+      case 'video_open':
+        return 1.15;
+      case 'reply_open':
+        return 0.75;
+      case 'like':
+        // اللايك يعلّم الاهتمام، لكن بهدوء حتى لا يتحول الفيد كله إلى نفس التصنيف.
+        return 2.2;
+      case 'reply':
+        return 3.4;
+      case 'save':
+        return 4.2;
+      case 'repost':
+        return 5.2;
+      case 'share':
+        return 3.2;
+      case 'not_interested':
+        return -9.0;
+      default:
+        return 0.35;
+    }
+  }
+
+  static Future<Map<String, List<Map<String, dynamic>>>> getPostTopicsForIds(List<String> postIds) async {
+    final ids = postIds.map((e) => e.trim()).where((e) => e.isNotEmpty).toSet().toList();
+    if (ids.isEmpty) return <String, List<Map<String, dynamic>>>{};
+
+    Future<List<dynamic>> fetchRows(String select) async {
+      return await client
+          .from('post_topics')
+          .select(select)
+          .inFilter('post_id', ids)
+          .timeout(const Duration(seconds: 9));
+    }
+
+    try {
+      List<dynamic> rows;
+      try {
+        rows = await fetchRows('post_id,topic,weight,confidence,source,topic_role,is_primary,topic_rank,model');
+      } catch (_) {
+        rows = await fetchRows('post_id,topic,weight,confidence,source');
+      }
+
+      final out = <String, List<Map<String, dynamic>>>{};
+      for (final raw in rows) {
+        if (raw is! Map) continue;
+        final row = Map<String, dynamic>.from(raw as Map);
+        final postId = (row['post_id'] ?? '').toString();
+        final topic = normalizeRecommendationTopic((row['topic'] ?? '').toString());
+        if (postId.isEmpty || topic.isEmpty || !_officialRecommendationTopics.contains(topic)) continue;
+        row['topic'] = topic;
+        row['weight'] = _safeDouble(row['weight'], 1.0);
+        row['confidence'] = _safeDouble(row['confidence'], 0.0);
+        row['topic_rank'] = int.tryParse((row['topic_rank'] ?? '').toString()) ?? 999;
+        row['is_primary'] = row['is_primary'] == true || (row['topic_role'] ?? '').toString().toLowerCase() == 'primary' || row['topic_rank'] == 1;
+        row['topic_role'] = row['is_primary'] == true ? 'primary' : 'secondary';
+        out.putIfAbsent(postId, () => <Map<String, dynamic>>[]).add(row);
+      }
+      for (final list in out.values) {
+        list.sort((a, b) {
+          final ar = int.tryParse((a['topic_rank'] ?? '999').toString()) ?? 999;
+          final br = int.tryParse((b['topic_rank'] ?? '999').toString()) ?? 999;
+          if (ar != br) return ar.compareTo(br);
+          final aw = _safeDouble(a['weight'], 1.0);
+          final bw = _safeDouble(b['weight'], 1.0);
+          return bw.compareTo(aw);
+        });
+      }
+      return out;
+    } catch (e, st) {
+      _logIgnoredError(e, st);
+      return <String, List<Map<String, dynamic>>>{};
+    }
+  }
+
+
+  static Future<List<Map<String, dynamic>>> getPostTopicRows(String postId) async {
+    final all = await getPostTopicsForIds(<String>[postId]);
+    return all[postId.trim()] ?? const <Map<String, dynamic>>[];
+  }
+
+  static Future<Map<String, double>> getUserTopicScores(String username) async {
+    final user = displayUsername(username);
+    if (user == '@user') return <String, double>{};
+
+    try {
+      final rows = await client
+          .from('user_topic_scores')
+          .select('topic,score')
+          .eq('username', user)
+          .order('score', ascending: false)
+          .limit(80)
+          .timeout(const Duration(seconds: 8));
+
+      final out = <String, double>{};
+      for (final raw in rows) {
+        if (raw is! Map) continue;
+        final row = Map<String, dynamic>.from(raw as Map);
+        final topic = normalizeRecommendationTopic((row['topic'] ?? '').toString());
+        final score = _safeDouble(row['score'], 0.0).clamp(-80.0, 220.0).toDouble();
+        if (topic.isNotEmpty && _officialRecommendationTopics.contains(topic) && score.abs() > 0.001) out[topic] = score;
+      }
+      return out;
+    } catch (e, st) {
+      _logIgnoredError(e, st);
+      return <String, double>{};
+    }
+  }
+
+  static Future<void> _addUserTopicScore({
+    required String username,
+    required String topic,
+    required double delta,
+  }) async {
+    final user = displayUsername(username);
+    final cleanTopic = normalizeRecommendationTopic(topic);
+    if (user == '@user' || cleanTopic.isEmpty || !_officialRecommendationTopics.contains(cleanTopic) || delta == 0) return;
+
+    try {
+      final current = await client
+          .from('user_topic_scores')
+          .select('score')
+          .eq('username', user)
+          .eq('topic', cleanTopic)
+          .maybeSingle()
+          .timeout(const Duration(seconds: 7));
+
+      final oldScore = current == null ? 0.0 : _safeDouble((current as Map)['score'], 0.0);
+      // تخفيف واضح يمنع التصنيف الواحد من السيطرة للأبد.
+      // الحد الأعلى مقصود: الاهتمام يزيد تدريجيًا، لكنه لا يلغي باقي التصنيفات.
+      final nextScore = ((oldScore.clamp(-80.0, 220.0).toDouble() * 0.985) + delta).clamp(-80.0, 220.0);
+      if (current == null) {
+        await client.from('user_topic_scores').insert({
+          'username': user,
+          'topic': cleanTopic,
+          'score': nextScore,
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        }).timeout(const Duration(seconds: 7));
+      } else {
+        await client
+            .from('user_topic_scores')
+            .update({
+              'score': nextScore,
+              'updated_at': DateTime.now().toUtc().toIso8601String(),
+            })
+            .eq('username', user)
+            .eq('topic', cleanTopic)
+            .timeout(const Duration(seconds: 7));
+      }
+    } catch (e, st) { _logIgnoredError(e, st); }
+  }
+
+  static Future<void> trackTopicInteraction({
+    required String postId,
+    required String username,
+    required String interactionType,
+    double? customWeight,
+  }) async {
+    final id = postId.trim();
+    final user = displayUsername(username);
+    if (id.isEmpty || user == '@user') return;
+
+    final action = interactionType.trim().isEmpty ? 'view' : interactionType.trim().toLowerCase();
+    final weight = customWeight ?? _interestWeightForAction(action);
+    if (weight == 0) return;
+
+    try {
+      await client.from('user_topic_interactions').insert({
+        'username': user,
+        'post_id': id,
+        'action': action,
+        'weight': weight,
+        'created_at': DateTime.now().toUtc().toIso8601String(),
+      }).timeout(const Duration(seconds: 5));
+    } catch (e, st) { _logIgnoredError(e, st); }
+
+    var topicRows = await getPostTopicRows(id);
+    if (topicRows.isEmpty) {
+      try {
+        final rawRow = await client
+            .from('posts')
+            .select('text,image_url,video_url,voice_url')
+            .eq('id', id)
+            .maybeSingle()
+            .timeout(const Duration(seconds: 7));
+
+        final postRow = rawRow == null
+            ? null
+            : Map<String, dynamic>.from(rawRow as Map);
+
+        if (postRow != null) {
+          final text = (postRow['text'] ?? '').toString();
+          final video = (postRow['video_url'] ?? '').toString().trim().isNotEmpty;
+          final image = (postRow['image_url'] ?? '').toString().trim().isNotEmpty;
+          final voice = (postRow['voice_url'] ?? '').toString().trim().isNotEmpty;
+          final fallback = _canonicalRecommendationTopics(
+            localFallbackTopicsForPost(
+              text: text,
+              mediaType: video ? 'video' : (image ? 'image' : (voice ? 'voice' : 'text')),
+            ),
+            allowGeneral: false,
+          );
+          if (fallback.isNotEmpty) {
+            await savePostTopics(
+              postId: id,
+              topics: fallback,
+              confidence: 0.42,
+              source: 'interaction_fallback',
+              model: 'interaction_fallback',
+            );
+            topicRows = <Map<String, dynamic>>[
+              for (var i = 0; i < fallback.length; i++)
+                <String, dynamic>{
+                  'topic': fallback[i],
+                  'weight': i == 0 ? 1.0 : 0.72,
+                  'topic_rank': i + 1,
+                  'is_primary': i == 0,
+                  'topic_role': i == 0 ? 'primary' : 'secondary',
+                  'confidence': 0.42,
+                },
+            ];
+          }
+        }
+      } catch (e, st) { _logIgnoredError(e, st); }
+    }
+
+    if (topicRows.isEmpty) return;
+    for (final row in topicRows.take(8)) {
+      final topic = normalizeRecommendationTopic((row['topic'] ?? '').toString());
+      if (topic.isEmpty || !_officialRecommendationTopics.contains(topic)) continue;
+
+      final baseTopicWeight = _safeDouble(row['weight'], 1.0).clamp(0.25, 1.5).toDouble();
+      final rank = int.tryParse((row['topic_rank'] ?? '').toString()) ?? 999;
+      final isPrimary = row['is_primary'] == true ||
+          (row['topic_role'] ?? '').toString().toLowerCase() == 'primary' ||
+          rank == 1;
+      final roleFactor = isPrimary ? 1.0 : 0.40;
+      final rankFactor = rank <= 1 ? 1.0 : (1.0 / (1.0 + ((rank - 1) * 0.30))).clamp(0.32, 1.0).toDouble();
+      final confidenceFactor = _safeDouble(row['confidence'], 0.65).clamp(0.35, 1.0).toDouble();
+      final finalDelta = weight * baseTopicWeight * roleFactor * rankFactor * confidenceFactor;
+      if (finalDelta.abs() < 0.001) continue;
+
+      await _addUserTopicScore(
+        username: user,
+        topic: topic,
+        delta: finalDelta,
+      );
+    }
+  }
+
+  static Future<void> trackUserInterest({
+    required String postId,
+    required String username,
+    required String action,
+    double? customWeight,
+  }) {
+    return trackTopicInteraction(
+      postId: postId,
+      username: username,
+      interactionType: action,
+      customWeight: customWeight,
+    );
+  }
+
 
   static bool isValidEmail(String value) {
     final email = normalizeEmail(value);
@@ -5129,8 +7314,7 @@ $examples
         ..remove('password_hash')
         ..remove('password_encryption_version')
         ..remove('device_banned')
-        ..remove('device_blocked')
-        ..remove('password');
+        ..remove('device_blocked');
 
       try {
         inserted = await client.from('users').insert(fallback).select().single();
@@ -5217,7 +7401,7 @@ $examples
   }
 
   static const String _userListColumns =
-      'id,username,name,bio,email,avatar_url,cover_url,is_verified,verified,verified_until,verification_status,subscription_tier,is_blocked,blocked_at,created_at,is_admin,phone_e164,phone_country_code,phone_national,phone_verified,phone_verified_at,sms_security_enabled,sms_login_enabled';
+      'id,username,name,bio,email,avatar_url,cover_url,is_verified,verified,verified_until,verification_status,subscription_tier,is_blocked,blocked_at,blocked_reason,created_at,is_admin,phone_e164,phone_country_code,phone_national,phone_verified,phone_verified_at,sms_security_enabled,sms_login_enabled,fcm_token,fcm_updated_at,device_id,current_device_id,last_device_id,device_platform,device_updated_at';
 
   static const String _postListColumns =
       'id,username,name,user,text,created_at,time,avatar_url,image_url,video_url,voice_url,voice_seconds,likes,reposts,shares,views,replies,reply_count,community_id,author_verified,author_subscription_tier,author_subscription_priority,author_subscription_boost_until,author_post_max_chars,author_ai_daily_limit,author_subscription_label';
@@ -5635,7 +7819,7 @@ $examples
 
     // النشر الآن لا ينتظر Qwen. نفحص محليًا فقط للمخالفة الواضحة جدًا،
     // وبعد الحفظ تعمل مراجعة Respect AI بالخلفية وتحذف الرد لاحقًا إذا كان مخالفًا.
-    _enforceLocalObviousModeration(text: trimmedText, authorUsername: user);
+    await _enforceLocalObviousModeration(text: trimmedText, authorUsername: user);
 
     final author = await getUserByUsername(user);
     final avatarUrl = ((author == null ? null : author['avatar_url']) ?? (author == null ? null : author['imagePath']) ?? (author == null ? null : author['profileImagePath']) ?? '').toString().trim();
@@ -5682,6 +7866,7 @@ $examples
       authorUsername: user,
       parentReplyId: parentReplyId,
     ));
+    unawaited(trackTopicInteraction(postId: postId, username: user, interactionType: 'reply'));
 
     try {
       final repliesCount = await client.from('post_replies').select('id').eq('post_id', postId);
@@ -6111,6 +8296,7 @@ $examples
     void Function(double progress, String status)? onProgress,
   }) async {
     await enforcePostCharacterLimit(username: username, text: text);
+    await _enforceLocalObviousModeration(text: text, authorUsername: displayUsername(username));
     // لا ننتظر Qwen قبل نشر التغريدة.
     // بعد الحفظ يراجع Render المنشور بـ Qwen، وإذا كان مخالفًا يحذفه السيرفر مباشرة من Supabase.
 
@@ -6207,6 +8393,17 @@ $examples
     unawaited(savePostHashtags(
       postId: (post['id'] ?? '').toString(),
       text: text,
+    ));
+    unawaited(classifyPostTopicsWithAi(
+      postId: (post['id'] ?? '').toString(),
+      username: displayUsername(username),
+      text: text,
+      imageUrls: safeImageUrl.trim().isEmpty ? const <String>[] : <String>[safeImageUrl],
+      videoUrl: safeVideoUrl,
+      voiceUrl: safeVoiceUrl,
+      mediaType: safeVideoUrl.trim().isNotEmpty
+          ? 'video'
+          : (safeImageUrl.trim().isNotEmpty ? 'image' : (safeVoiceUrl.trim().isNotEmpty ? 'voice' : 'text')),
     ));
     unawaited(_moderatePostInBackground(
       postId: (post['id'] ?? '').toString(),
@@ -6310,6 +8507,7 @@ $examples
       final deleted = result['shouldDelete'] == true || result['action'] == 'delete' || result['action'] == 'hide';
       if (deleted) {
         _notifyRespectAiDeletedPost(postId);
+        await _learnLocalModerationMemoryFromServerResult(text: postText, result: <String, dynamic>{...result, 'shouldDelete': true, 'deleted': true});
       }
       return result;
     }
@@ -6557,6 +8755,11 @@ $examples
     final current = await currentUser();
     final senderUsername = displayUsername(sender);
     final receiverUsername = displayUsername(receiver);
+    final permission = await canSendDirectMessage(sender: senderUsername, receiver: receiverUsername);
+    if (permission['allowed'] != true) {
+      final reason = (permission['reason'] ?? 'not_allowed').toString();
+      throw Exception('DIRECT_MESSAGE_NOT_ALLOWED:$reason');
+    }
     final encryptedFields = await SecureCryptoService.encryptedDirectFields(
       sender: senderUsername,
       receiver: receiverUsername,
@@ -7258,6 +9461,7 @@ $examples
     if (id.isEmpty) return;
 
     String postId = '';
+    final childReplyIds = <String>[];
     try {
       final Map<String, dynamic>? row = await client
           .from('post_replies')
@@ -7269,6 +9473,24 @@ $examples
         postId = (row['post_id'] ?? '').toString();
       }
     } catch (e, st) { _logIgnoredError(e, st); }
+
+    try {
+      final children = await client
+          .from('post_replies')
+          .select('id')
+          .eq('parent_reply_id', id);
+      childReplyIds.addAll(
+        children
+            .map<String>((e) => (e['id'] ?? '').toString())
+            .where((e) => e.trim().isNotEmpty),
+      );
+    } catch (e, st) { _logIgnoredError(e, st); }
+
+    for (final childId in childReplyIds) {
+      try { await client.from('reply_likes').delete().eq('reply_id', childId); } catch (e, st) { _logIgnoredError(e, st); }
+      try { await client.from('reply_reposts').delete().eq('reply_id', childId); } catch (e, st) { _logIgnoredError(e, st); }
+      try { await client.from('reply_views').delete().eq('reply_id', childId); } catch (e, st) { _logIgnoredError(e, st); }
+    }
 
     try { await client.from('reply_likes').delete().eq('reply_id', id); } catch (e, st) { _logIgnoredError(e, st); }
     try { await client.from('reply_reposts').delete().eq('reply_id', id); } catch (e, st) { _logIgnoredError(e, st); }
@@ -7287,12 +9509,357 @@ $examples
   static Future<void> deletePost(String postId) async {
     final id = postId.trim();
     if (id.isEmpty) return;
+
+    final replyIds = <String>[];
+    try {
+      final replies = await client.from('post_replies').select('id').eq('post_id', id);
+      replyIds.addAll(
+        replies
+            .map<String>((e) => (e['id'] ?? '').toString())
+            .where((e) => e.trim().isNotEmpty),
+      );
+    } catch (e, st) { _logIgnoredError(e, st); }
+
+    for (final replyId in replyIds) {
+      try { await client.from('reply_likes').delete().eq('reply_id', replyId); } catch (e, st) { _logIgnoredError(e, st); }
+      try { await client.from('reply_reposts').delete().eq('reply_id', replyId); } catch (e, st) { _logIgnoredError(e, st); }
+      try { await client.from('reply_views').delete().eq('reply_id', replyId); } catch (e, st) { _logIgnoredError(e, st); }
+    }
+
+    try { await client.from('post_reports').delete().eq('post_id', id); } catch (e, st) { _logIgnoredError(e, st); }
+    try { await client.from('post_mentions').delete().eq('post_id', id); } catch (e, st) { _logIgnoredError(e, st); }
+    try { await client.from('post_topics').delete().eq('post_id', id); } catch (e, st) { _logIgnoredError(e, st); }
+    try { await client.from('user_topic_interactions').delete().eq('post_id', id); } catch (e, st) { _logIgnoredError(e, st); }
     try { await client.from('post_replies').delete().eq('post_id', id); } catch (e, st) { _logIgnoredError(e, st); }
     try { await client.from('post_likes').delete().eq('post_id', id); } catch (e, st) { _logIgnoredError(e, st); }
     try { await client.from('post_reposts').delete().eq('post_id', id); } catch (e, st) { _logIgnoredError(e, st); }
     try { await client.from('post_views').delete().eq('post_id', id); } catch (e, st) { _logIgnoredError(e, st); }
     try { await client.from('post_events').delete().eq('post_id', id); } catch (e, st) { _logIgnoredError(e, st); }
+    for (final table in _postSaveTables) {
+      try { await client.from(table).delete().eq('post_id', id); } catch (e, st) { _logIgnoredError(e, st); }
+    }
     await client.from('posts').delete().eq('id', id);
+  }
+
+  static Set<String> _deleteUsernameVariants(String username) {
+    final clean = normalizeUsername(username);
+    final withAt = displayUsername(username);
+    final variants = <String>{
+      withAt,
+      clean,
+      if (clean.trim().isNotEmpty) '@$clean',
+    };
+    variants.removeWhere((e) {
+      final v = e.trim().toLowerCase();
+      return v.isEmpty || v == '@' || v == 'user' || v == '@user';
+    });
+    return variants;
+  }
+
+  static Future<List<String>> _selectIdsByAnyUsername({
+    required String table,
+    required List<String> usernameColumns,
+    required Set<String> usernames,
+    String idColumn = 'id',
+  }) async {
+    final ids = <String>{};
+    for (final column in usernameColumns) {
+      for (final username in usernames) {
+        if (username.trim().isEmpty) continue;
+        try {
+          final rows = await client
+              .from(table)
+              .select(idColumn)
+              .eq(column, username)
+              .timeout(const Duration(seconds: 8));
+          for (final raw in rows) {
+            final id = (raw[idColumn] ?? '').toString().trim();
+            if (id.isNotEmpty) ids.add(id);
+          }
+        } catch (e, st) { _logIgnoredError(e, st); }
+      }
+    }
+    return ids.toList();
+  }
+
+
+  static Future<List<String>> _selectIdsByColumnValues({
+    required String table,
+    required String column,
+    required Iterable<String> values,
+    String idColumn = 'id',
+  }) async {
+    final ids = <String>{};
+    final cleanValues = values.map((e) => e.trim()).where((e) => e.isNotEmpty).toSet();
+    for (final value in cleanValues) {
+      try {
+        final rows = await client
+            .from(table)
+            .select(idColumn)
+            .eq(column, value)
+            .timeout(const Duration(seconds: 8));
+        for (final raw in rows) {
+          final id = (raw[idColumn] ?? '').toString().trim();
+          if (id.isNotEmpty) ids.add(id);
+        }
+      } catch (e, st) { _logIgnoredError(e, st); }
+    }
+    return ids.toList();
+  }
+
+  static Future<int> _safeDeleteRowsByUsername({
+    required String table,
+    required List<String> usernameColumns,
+    required Set<String> usernames,
+  }) async {
+    var estimatedDeleted = 0;
+    for (final column in usernameColumns) {
+      for (final username in usernames) {
+        if (username.trim().isEmpty) continue;
+        try {
+          final rows = await client
+              .from(table)
+              .select('id')
+              .eq(column, username)
+              .timeout(const Duration(seconds: 8));
+          if (rows is List) estimatedDeleted += rows.length;
+        } catch (e, st) { _logIgnoredError(e, st); }
+
+        try {
+          await client
+              .from(table)
+              .delete()
+              .eq(column, username)
+              .timeout(const Duration(seconds: 8));
+        } catch (e, st) { _logIgnoredError(e, st); }
+      }
+    }
+    return estimatedDeleted;
+  }
+
+  static Future<int> _safeDeleteRowsByIds({
+    required String table,
+    required String column,
+    required Iterable<String> ids,
+  }) async {
+    var estimatedDeleted = 0;
+    final cleanIds = ids.map((e) => e.trim()).where((e) => e.isNotEmpty).toSet();
+    for (final id in cleanIds) {
+      try {
+        final rows = await client
+            .from(table)
+            .select('id')
+            .eq(column, id)
+            .timeout(const Duration(seconds: 8));
+        if (rows is List) estimatedDeleted += rows.length;
+      } catch (e, st) { _logIgnoredError(e, st); }
+
+      try {
+        await client
+            .from(table)
+            .delete()
+            .eq(column, id)
+            .timeout(const Duration(seconds: 8));
+      } catch (e, st) { _logIgnoredError(e, st); }
+    }
+    return estimatedDeleted;
+  }
+
+  static Future<Map<String, int>> deleteUserContentForAdmin(String username) async {
+    final usernames = _deleteUsernameVariants(username);
+    if (usernames.isEmpty) {
+      throw Exception('اسم المستخدم غير صالح لحذف المحتوى');
+    }
+
+    final summary = <String, int>{
+      'posts': 0,
+      'replies': 0,
+      'stories': 0,
+      'messages': 0,
+      'groups': 0,
+      'reports': 0,
+      'notifications': 0,
+      'interactions': 0,
+      'live': 0,
+    };
+
+    final postIds = await _selectIdsByAnyUsername(
+      table: 'posts',
+      usernameColumns: const ['username', 'author_username'],
+      usernames: usernames,
+    );
+    for (final postId in postIds) {
+      try {
+        await deletePost(postId);
+        summary['posts'] = (summary['posts'] ?? 0) + 1;
+      } catch (e, st) { _logIgnoredError(e, st); }
+    }
+
+    final replyIds = await _selectIdsByAnyUsername(
+      table: 'post_replies',
+      usernameColumns: const ['author_username', 'username'],
+      usernames: usernames,
+    );
+    for (final replyId in replyIds) {
+      try {
+        await deletePostReply(replyId);
+        summary['replies'] = (summary['replies'] ?? 0) + 1;
+      } catch (e, st) { _logIgnoredError(e, st); }
+    }
+
+    final storyIds = await _selectIdsByAnyUsername(
+      table: 'respect_stories',
+      usernameColumns: const ['username', 'author_username'],
+      usernames: usernames,
+    );
+    summary['stories'] = storyIds.length;
+    summary['interactions'] = (summary['interactions'] ?? 0) + await _safeDeleteRowsByIds(
+      table: 'respect_story_likes',
+      column: 'story_id',
+      ids: storyIds,
+    );
+    summary['interactions'] = (summary['interactions'] ?? 0) + await _safeDeleteRowsByIds(
+      table: 'respect_story_comments',
+      column: 'story_id',
+      ids: storyIds,
+    );
+    summary['notifications'] = (summary['notifications'] ?? 0) + await _safeDeleteRowsByIds(
+      table: 'respect_story_notifications',
+      column: 'story_id',
+      ids: storyIds,
+    );
+    for (final id in storyIds) {
+      try { await client.from('respect_stories').delete().eq('id', id).timeout(const Duration(seconds: 8)); } catch (e, st) { _logIgnoredError(e, st); }
+    }
+    try { await deleteAllActiveStoriesForUser(usernames.first); } catch (e, st) { _logIgnoredError(e, st); }
+
+    summary['messages'] = (summary['messages'] ?? 0) + await _safeDeleteRowsByUsername(
+      table: 'messages',
+      usernameColumns: const ['sender_username', 'username', 'author_username'],
+      usernames: usernames,
+    );
+    final groupMessageIds = await _selectIdsByAnyUsername(
+      table: 'respect_group_messages',
+      usernameColumns: const ['sender_username', 'username', 'author_username'],
+      usernames: usernames,
+    );
+    summary['messages'] = (summary['messages'] ?? 0) + groupMessageIds.length;
+    await _safeDeleteRowsByIds(table: 'respect_group_message_receipts', column: 'message_id', ids: groupMessageIds);
+    await _safeDeleteRowsByIds(table: 'respect_group_messages', column: 'id', ids: groupMessageIds);
+
+    final ownedGroupIds = await _selectIdsByAnyUsername(
+      table: 'respect_chat_groups',
+      usernameColumns: const ['founder_username', 'owner_username', 'username'],
+      usernames: usernames,
+    );
+    final ownedGroupMessageIds = await _selectIdsByColumnValues(
+      table: 'respect_group_messages',
+      column: 'group_id',
+      values: ownedGroupIds,
+    );
+    await _safeDeleteRowsByIds(table: 'respect_group_message_receipts', column: 'message_id', ids: ownedGroupMessageIds);
+    await _safeDeleteRowsByIds(table: 'respect_group_messages', column: 'group_id', ids: ownedGroupIds);
+    await _safeDeleteRowsByIds(table: 'respect_chat_group_members', column: 'group_id', ids: ownedGroupIds);
+    await _safeDeleteRowsByIds(table: 'respect_chat_groups', column: 'id', ids: ownedGroupIds);
+    summary['groups'] = (summary['groups'] ?? 0) + ownedGroupIds.length;
+    summary['groups'] = (summary['groups'] ?? 0) + await _safeDeleteRowsByUsername(
+      table: 'respect_chat_group_members',
+      usernameColumns: const ['username', 'member_username'],
+      usernames: usernames,
+    );
+
+    summary['interactions'] = (summary['interactions'] ?? 0) + await _safeDeleteRowsByUsername(
+      table: 'post_likes',
+      usernameColumns: const ['username', 'actor_username'],
+      usernames: usernames,
+    );
+    summary['interactions'] = (summary['interactions'] ?? 0) + await _safeDeleteRowsByUsername(
+      table: 'post_reposts',
+      usernameColumns: const ['username', 'actor_username'],
+      usernames: usernames,
+    );
+    summary['interactions'] = (summary['interactions'] ?? 0) + await _safeDeleteRowsByUsername(
+      table: 'post_views',
+      usernameColumns: const ['username', 'viewer_username', 'actor_username'],
+      usernames: usernames,
+    );
+    for (final table in _postSaveTables) {
+      summary['interactions'] = (summary['interactions'] ?? 0) + await _safeDeleteRowsByUsername(
+        table: table,
+        usernameColumns: const ['username', 'actor_username'],
+        usernames: usernames,
+      );
+    }
+    summary['interactions'] = (summary['interactions'] ?? 0) + await _safeDeleteRowsByUsername(
+      table: 'reply_likes',
+      usernameColumns: const ['username', 'actor_username'],
+      usernames: usernames,
+    );
+    summary['interactions'] = (summary['interactions'] ?? 0) + await _safeDeleteRowsByUsername(
+      table: 'reply_reposts',
+      usernameColumns: const ['username', 'actor_username'],
+      usernames: usernames,
+    );
+    summary['interactions'] = (summary['interactions'] ?? 0) + await _safeDeleteRowsByUsername(
+      table: 'reply_views',
+      usernameColumns: const ['username', 'viewer_username', 'actor_username'],
+      usernames: usernames,
+    );
+    summary['interactions'] = (summary['interactions'] ?? 0) + await _safeDeleteRowsByUsername(
+      table: 'user_topic_interactions',
+      usernameColumns: const ['username'],
+      usernames: usernames,
+    );
+    summary['interactions'] = (summary['interactions'] ?? 0) + await _safeDeleteRowsByUsername(
+      table: 'user_follows',
+      usernameColumns: const ['follower_username', 'target_username', 'username'],
+      usernames: usernames,
+    );
+    summary['interactions'] = (summary['interactions'] ?? 0) + await _safeDeleteRowsByUsername(
+      table: 'user_post_notifications',
+      usernameColumns: const ['follower_username', 'target_username', 'username'],
+      usernames: usernames,
+    );
+
+    summary['notifications'] = (summary['notifications'] ?? 0) + await _safeDeleteRowsByUsername(
+      table: 'post_events',
+      usernameColumns: const ['target_username', 'actor_username', 'username'],
+      usernames: usernames,
+    );
+    summary['notifications'] = (summary['notifications'] ?? 0) + await _safeDeleteRowsByUsername(
+      table: 'post_mentions',
+      usernameColumns: const ['target_username', 'author_username', 'username'],
+      usernames: usernames,
+    );
+    summary['notifications'] = (summary['notifications'] ?? 0) + await _safeDeleteRowsByUsername(
+      table: 'respect_story_notifications',
+      usernameColumns: const ['story_owner_username', 'actor_username', 'username'],
+      usernames: usernames,
+    );
+    summary['notifications'] = (summary['notifications'] ?? 0) + await _safeDeleteRowsByUsername(
+      table: 'respect_general_notifications',
+      usernameColumns: const ['sender_username', 'target_username', 'username'],
+      usernames: usernames,
+    );
+
+    summary['reports'] = (summary['reports'] ?? 0) + await _safeDeleteRowsByUsername(
+      table: 'post_reports',
+      usernameColumns: const ['reporter_username', 'post_username', 'reported_username', 'username'],
+      usernames: usernames,
+    );
+    summary['reports'] = (summary['reports'] ?? 0) + await _safeDeleteRowsByUsername(
+      table: 'respect_app_feedback_reports',
+      usernameColumns: const ['username', 'user_username', 'reporter_username'],
+      usernames: usernames,
+    );
+
+    summary['live'] = (summary['live'] ?? 0) + await _safeDeleteRowsByUsername(
+      table: 'respect_live_streams',
+      usernameColumns: const ['host_username', 'username', 'owner_username'],
+      usernames: usernames,
+    );
+
+    return summary;
   }
 
   static String realtimeUserChannel(String username) {
@@ -7329,22 +9896,71 @@ $examples
   static Future<void> updateCurrentUserFcmToken(String? token) async {
     final id = await currentUserId();
     if (id == null || id.trim().isEmpty) return;
-    final username = displayUsername(id);
+
+    final userMap = await currentUser();
+    final username = displayUsername((userMap?['username'] ?? id).toString());
+    final clean = normalizeUsername(username);
+    final language = await currentAppLanguageCode();
+    final deviceId = await currentDeviceId();
+    final now = DateTime.now().toUtc().toIso8601String();
+    final payload = <String, dynamic>{
+      'fcm_token': token?.trim().isEmpty == true ? null : token,
+      'fcm_updated_at': now,
+      'app_language': language,
+      'device_id': deviceId,
+      'current_device_id': deviceId,
+      'last_device_id': deviceId,
+      'device_platform': _safeDevicePlatform,
+      'device_updated_at': now,
+    };
+
+    Future<void> updateBy(String column, String value) async {
+      if (value.trim().isEmpty) return;
+      try {
+        await client
+            .from('users')
+            .update(payload)
+            .eq(column, value)
+            .timeout(const Duration(seconds: 8));
+      } catch (e, st) { _logIgnoredError(e, st); }
+    }
+
+    await updateBy('username', username);
+    await updateBy('username', clean);
+    final email = (userMap?['email'] ?? '').toString().trim();
+    if (email.isNotEmpty) await updateBy('email', email);
+    final dbId = (userMap?['id'] ?? '').toString().trim();
+    if (dbId.isNotEmpty && dbId != clean && dbId != username) await updateBy('id', dbId);
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('respect_current_user');
+      if (raw != null && raw.trim().isNotEmpty) {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map) {
+          final local = Map<String, dynamic>.from(decoded as Map);
+          if (normalizeUsername((local['username'] ?? id).toString()) == clean) {
+            local.addAll(payload);
+            await prefs.setString('respect_current_user', jsonEncode(local));
+          }
+        }
+      }
+    } catch (e, st) { _logIgnoredError(e, st); }
+  }
+
+  static Future<void> clearFcmTokenValue(String token) async {
+    final cleanToken = token.trim();
+    if (cleanToken.isEmpty) return;
     try {
       await client
           .from('users')
           .update({
-        'fcm_token': token,
-        'fcm_updated_at': DateTime.now().toUtc().toIso8601String(),
-      })
-          .or('username.eq.${normalizeUsername(username)},username.eq.$username');
+            'fcm_token': null,
+            'fcm_updated_at': DateTime.now().toUtc().toIso8601String(),
+          })
+          .eq('fcm_token', cleanToken)
+          .timeout(const Duration(seconds: 8));
     } catch (e, st) { _logIgnoredError(e, st); }
-
-    // بعد تسجيل FCM Token نرسل لغة الجهاز الحالية للسيرفر،
-    // حتى الإشعارات الخارجية تصل بلغة المستخدم المستقبل.
-    if (token != null && token.trim().isNotEmpty) {
-      unawaited(updateCurrentUserLanguage(await currentAppLanguageCode()));
-    }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -8264,10 +10880,72 @@ $examples
     return payload;
   }
 
+  static Future<bool> _hasBlockRow({
+    required String table,
+    required String blockerColumn,
+    required String blockedColumn,
+    required String blocker,
+    required String blocked,
+  }) async {
+    try {
+      final rows = await client
+          .from(table)
+          .select(blockerColumn)
+          .eq(blockerColumn, blocker)
+          .eq(blockedColumn, blocked)
+          .limit(1)
+          .timeout(const Duration(seconds: 5));
+      return rows is List && rows.isNotEmpty;
+    } catch (e, st) {
+      _logIgnoredError(e, st);
+      return false;
+    }
+  }
+
+  static Future<bool> isDirectMessageBlocked({required String sender, required String receiver}) async {
+    final s = displayUsername(sender);
+    final r = displayUsername(receiver);
+    if (s == '@user' || r == '@user' || s == r) return false;
+
+    const schemas = <Map<String, String>>[
+      {'table': 'respect_user_blocks', 'blocker': 'blocker_username', 'blocked': 'blocked_username'},
+      {'table': 'user_blocks', 'blocker': 'blocker_username', 'blocked': 'blocked_username'},
+      {'table': 'blocked_users', 'blocker': 'username', 'blocked': 'blocked_username'},
+      {'table': 'user_blocked_users', 'blocker': 'username', 'blocked': 'blocked_username'},
+    ];
+
+    for (final schema in schemas) {
+      final table = schema['table']!;
+      final blockerColumn = schema['blocker']!;
+      final blockedColumn = schema['blocked']!;
+      final receiverBlockedSender = await _hasBlockRow(
+        table: table,
+        blockerColumn: blockerColumn,
+        blockedColumn: blockedColumn,
+        blocker: r,
+        blocked: s,
+      );
+      if (receiverBlockedSender) return true;
+
+      final senderBlockedReceiver = await _hasBlockRow(
+        table: table,
+        blockerColumn: blockerColumn,
+        blockedColumn: blockedColumn,
+        blocker: s,
+        blocked: r,
+      );
+      if (senderBlockedReceiver) return true;
+    }
+    return false;
+  }
+
   static Future<Map<String, dynamic>> canSendDirectMessage({required String sender, required String receiver}) async {
     final s = displayUsername(sender);
     final r = displayUsername(receiver);
     if (s == r) return <String, dynamic>{'allowed': true};
+    if (await isDirectMessageBlocked(sender: s, receiver: r)) {
+      return <String, dynamic>{'allowed': false, 'reason': 'blocked'};
+    }
     final settings = await getMessagingPrivacySettings(r);
     if (!truthy(settings['messages_enabled'] ?? true)) return <String, dynamic>{'allowed': false, 'reason': 'messages_disabled'};
     if (truthy(settings['verified_only_messages'])) {
@@ -8310,6 +10988,9 @@ $examples
   }
 
   static Future<Map<String, dynamic>> canCallUser({required String caller, required String receiver}) async {
+    if (await isDirectMessageBlocked(sender: caller, receiver: receiver)) {
+      return <String, dynamic>{'allowed': false, 'reason': 'blocked'};
+    }
     final settings = await getMessagingPrivacySettings(receiver);
     if (!truthy(settings['calls_enabled'] ?? true)) return <String, dynamic>{'allowed': false, 'reason': 'calls_disabled'};
     return <String, dynamic>{'allowed': true};
@@ -8333,6 +11014,9 @@ $examples
   static Future<Map<String, dynamic>> createChatRequest({required String sender, required String receiver}) async {
     final s = displayUsername(sender);
     final r = displayUsername(receiver);
+    if (await isDirectMessageBlocked(sender: s, receiver: r)) {
+      throw Exception('DIRECT_MESSAGE_NOT_ALLOWED:blocked');
+    }
     final now = DateTime.now().toUtc().toIso8601String();
     final payload = <String, dynamic>{'sender_username': s, 'receiver_username': r, 'status': 'pending', 'created_at': now, 'updated_at': now};
     try {
@@ -8429,6 +11113,7 @@ $examples
     final moderators = _communityStringList(row['moderators'], usernames: true);
     final members = _communityStringList(row['members'], usernames: true);
     final kicked = _communityStringList(row['kicked_members'] ?? row['kickedMembers'], usernames: true);
+    final rules = _communityStringList(row['rules'] ?? row['community_rules'] ?? row['communityRules']);
 
     if (owner != '@user') {
       if (!moderators.contains(owner)) moderators.insert(0, owner);
@@ -8439,6 +11124,7 @@ $examples
       'id': (row['id'] ?? _newCommunityId()).toString(),
       'name': (row['name'] ?? 'مجتمع').toString(),
       'description': (row['description'] ?? '').toString(),
+      'rules': rules.toSet().toList(),
       'ownerUsername': owner,
       'owner_username': owner,
       'moderators': moderators.toSet().toList(),
@@ -8462,6 +11148,7 @@ $examples
     final moderators = _communityStringList(community['moderators'], usernames: true);
     final members = _communityStringList(community['members'], usernames: true);
     final kicked = _communityStringList(community['kicked_members'] ?? community['kickedMembers'], usernames: true);
+    final rules = _communityStringList(community['rules'] ?? community['community_rules'] ?? community['communityRules']);
 
     if (owner != '@user') {
       if (!moderators.contains(owner)) moderators.insert(0, owner);
@@ -8474,6 +11161,7 @@ $examples
           ? 'مجتمع'
           : (community['name'] ?? 'مجتمع').toString().trim(),
       'description': (community['description'] ?? '').toString().trim(),
+      'rules': rules.toSet().toList(),
       'owner_username': owner,
       'moderators': moderators.toSet().toList(),
       'members': members.toSet().toList(),
@@ -8487,7 +11175,7 @@ $examples
     try {
       final rows = await client
           .from('communities')
-          .select('id,name,description,owner_username,moderators,members,kicked_members,created_at')
+          .select()
           .order('created_at', ascending: false)
           .timeout(const Duration(seconds: 10));
 
@@ -8536,7 +11224,7 @@ $examples
     try {
       final row = await client
           .from('communities')
-          .select('id,name,description,owner_username,moderators,members,kicked_members,created_at')
+          .select()
           .eq('id', id)
           .maybeSingle()
           .timeout(const Duration(seconds: 8));
@@ -8570,36 +11258,67 @@ $examples
     required String name,
     required String description,
     required String ownerUsername,
+    List<String> rules = const <String>[],
   }) async {
     final owner = displayUsername(ownerUsername);
     final payload = <String, dynamic>{
       'id': _newCommunityId(),
       'name': name.trim().isEmpty ? 'مجتمع' : name.trim(),
       'description': description.trim(),
+      'rules': _communityStringList(rules),
       'owner_username': owner,
       'moderators': <String>[owner],
       'members': <String>[owner],
       'kicked_members': <String>[],
     };
 
-    final inserted = await client
-        .from('communities')
-        .insert(payload)
-        .select('id,name,description,owner_username,moderators,members,kicked_members,created_at')
-        .single()
-        .timeout(const Duration(seconds: 10));
-    return _normalizeCommunityRow(Map<String, dynamic>.from(inserted as Map));
+    try {
+      final inserted = await client
+          .from('communities')
+          .insert(payload)
+          .select()
+          .single()
+          .timeout(const Duration(seconds: 10));
+      return _normalizeCommunityRow(Map<String, dynamic>.from(inserted as Map));
+    } catch (e) {
+      // توافق مع قاعدة بيانات لم تضف عمود rules بعد.
+      if (!e.toString().toLowerCase().contains('rules')) rethrow;
+      payload.remove('rules');
+      final inserted = await client
+          .from('communities')
+          .insert(payload)
+          .select()
+          .single()
+          .timeout(const Duration(seconds: 10));
+      final row = _normalizeCommunityRow(Map<String, dynamic>.from(inserted as Map));
+      row['rules'] = _communityStringList(rules);
+      return row;
+    }
   }
 
   static Future<Map<String, dynamic>> upsertCommunity(Map<String, dynamic> community, {String? ownerUsername}) async {
     final payload = _communityPayloadFromJson(community, ownerUsername: ownerUsername);
-    final inserted = await client
-        .from('communities')
-        .upsert(payload, onConflict: 'id')
-        .select('id,name,description,owner_username,moderators,members,kicked_members,created_at')
-        .single()
-        .timeout(const Duration(seconds: 10));
-    return _normalizeCommunityRow(Map<String, dynamic>.from(inserted as Map));
+    try {
+      final inserted = await client
+          .from('communities')
+          .upsert(payload, onConflict: 'id')
+          .select()
+          .single()
+          .timeout(const Duration(seconds: 10));
+      return _normalizeCommunityRow(Map<String, dynamic>.from(inserted as Map));
+    } catch (e) {
+      if (!e.toString().toLowerCase().contains('rules')) rethrow;
+      final fallbackPayload = Map<String, dynamic>.from(payload)..remove('rules');
+      final inserted = await client
+          .from('communities')
+          .upsert(fallbackPayload, onConflict: 'id')
+          .select()
+          .single()
+          .timeout(const Duration(seconds: 10));
+      final row = _normalizeCommunityRow(Map<String, dynamic>.from(inserted as Map));
+      row['rules'] = payload['rules'] ?? <String>[];
+      return row;
+    }
   }
 
   static Future<void> upsertCommunities(List<Map<String, dynamic>> communities, {String? ownerUsername}) async {
@@ -8608,6 +11327,13 @@ $examples
     try {
       await client.from('communities').upsert(payloads, onConflict: 'id').timeout(const Duration(seconds: 12));
     } catch (e, st) {
+      if (e.toString().toLowerCase().contains('rules')) {
+        try {
+          final fallback = payloads.map((p) => Map<String, dynamic>.from(p)..remove('rules')).toList();
+          await client.from('communities').upsert(fallback, onConflict: 'id').timeout(const Duration(seconds: 12));
+          return;
+        } catch (e2, st2) { _logIgnoredError(e2, st2); }
+      }
       _logIgnoredError(e, st);
     }
   }
@@ -8621,12 +11347,28 @@ $examples
           .from('communities')
           .update(payload)
           .eq('id', id)
-          .select('id,name,description,owner_username,moderators,members,kicked_members,created_at')
+          .select()
           .maybeSingle()
           .timeout(const Duration(seconds: 10));
       if (updated == null) return null;
       return _normalizeCommunityRow(Map<String, dynamic>.from(updated as Map));
     } catch (e, st) {
+      if (e.toString().toLowerCase().contains('rules')) {
+        try {
+          final fallback = Map<String, dynamic>.from(payload)..remove('rules');
+          final updated = await client
+              .from('communities')
+              .update(fallback)
+              .eq('id', id)
+              .select()
+              .maybeSingle()
+              .timeout(const Duration(seconds: 10));
+          if (updated == null) return null;
+          final row = _normalizeCommunityRow(Map<String, dynamic>.from(updated as Map));
+          row['rules'] = payload['rules'] ?? <String>[];
+          return row;
+        } catch (e2, st2) { _logIgnoredError(e2, st2); }
+      }
       _logIgnoredError(e, st);
       return null;
     }
@@ -8650,7 +11392,7 @@ $examples
           .from('communities')
           .update(payload)
           .eq('id', id)
-          .select('id,name,description,owner_username,moderators,members,kicked_members,created_at')
+          .select()
           .maybeSingle()
           .timeout(const Duration(seconds: 10));
       if (updated == null) return null;
@@ -8720,6 +11462,60 @@ $examples
       moderators: moderators,
       kickedMembers: kickedMembers,
     );
+  }
+
+  static Future<void> hideCommunityPostByModerator({
+    required String postId,
+    required String communityId,
+    required String communityName,
+    required String postUsername,
+    required String postText,
+    required String moderatorUsername,
+    required String moderatorName,
+    required String rule,
+  }) async {
+    final id = postId.trim();
+    if (id.isEmpty) return;
+    try {
+      await client
+          .from('posts')
+          .update({'community_hidden': true})
+          .eq('id', id)
+          .timeout(const Duration(seconds: 8));
+    } catch (e, st) { _logIgnoredError(e, st); }
+
+    final target = displayUsername(postUsername);
+    final actor = displayUsername(moderatorUsername);
+    if (target != '@user' && actor != '@user' && target != actor) {
+      final body = 'تم إخفاء تغريدتك في مجتمع $communityName بسبب مخالفة القانون: $rule\n\nالتغريدة: $postText';
+      try {
+        await createPostEventNotification(
+          type: 'community_post_hidden',
+          targetUsername: target,
+          actorUsername: actor,
+          actorName: moderatorName.trim().isEmpty ? actor : moderatorName.trim(),
+          postId: id,
+          text: body,
+        );
+      } catch (e, st) { _logIgnoredError(e, st); }
+      try {
+        await sendPushToUser(
+          receiverUsername: target,
+          type: 'post_event',
+          title: 'تم عمل هايد لتغريدتك',
+          body: body,
+          data: {
+            'postId': id,
+            'post_id': id,
+            'eventType': 'community_post_hidden',
+            'communityId': communityId,
+            'communityName': communityName,
+            'rule': rule,
+            'text': body,
+          },
+        );
+      } catch (e, st) { _logIgnoredError(e, st); }
+    }
   }
 
   static Future<void> deleteCommunity(String communityId) async {

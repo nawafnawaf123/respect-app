@@ -143,6 +143,52 @@ class NotificationService {
   }
 
 
+  static Future<void> showPrePublishBlockedNotification({
+    String category = '',
+    String reason = '',
+    String matchedTerm = '',
+    String decisionSource = '',
+    bool moderationMemoryUsed = false,
+  }) async {
+    await initialize();
+    final language = await _currentLanguageCode();
+
+    final title = _translateSync('تعذر نشر التغريدة', language);
+    final baseBody = _translateSync('لم يتم نشر التغريدة لأنها تحتوي على محتوى مخالف لإرشادات المجتمع.', language);
+    final sourceLabel = _moderationSourceLabel(language, decisionSource, moderationMemoryUsed);
+    final sourcePart = _translateSync('مصدر القرار', language);
+    final categoryPart = _translateSync('التصنيف', language);
+    final matchedPart = _translateSync('النمط المطابق', language);
+    final reasonPart = _translateSync('السبب', language);
+
+    final cleanCategory = category.trim();
+    final cleanReason = reason.trim();
+    final cleanMatched = matchedTerm.trim();
+
+    var body = '$baseBody\n$sourcePart: $sourceLabel';
+    if (cleanCategory.isNotEmpty && cleanCategory != 'safe') {
+      body += '\n$categoryPart: $cleanCategory';
+    }
+    if (cleanMatched.isNotEmpty) {
+      body += '\n$matchedPart: $cleanMatched';
+    }
+    if (cleanReason.isNotEmpty) {
+      final shortReason = cleanReason.length > 170 ? '${cleanReason.substring(0, 170)}...' : cleanReason;
+      body += '\n$reasonPart: $shortReason';
+    }
+
+    showTopNotification(
+      body.length > 260 ? '${body.substring(0, 260)}...' : body,
+      title: title,
+      icon: moderationMemoryUsed || decisionSource.toLowerCase().contains('memory')
+          ? Icons.psychology_alt_rounded
+          : Icons.gpp_bad_rounded,
+      accentColor: AppColors.danger,
+      duration: const Duration(milliseconds: 7200),
+    );
+  }
+
+
   static bool get _isAndroid => defaultTargetPlatform == TargetPlatform.android;
   static bool get _isIOS => defaultTargetPlatform == TargetPlatform.iOS;
 
@@ -446,7 +492,7 @@ class NotificationService {
       final nav = navigatorKey.currentState;
       if (nav == null) return;
 
-      if (type == 'general_notification' || type == 'general') {
+      if (type == 'general_notification' || type == 'general' || type == 'post_moderation_deleted' || type == 'app_feedback_resolved') {
         return;
       }
 
@@ -680,8 +726,188 @@ class NotificationService {
     );
   }
 
+  static Future<void> showAppFeedbackResolvedNotification({
+    required String reportId,
+    String title = '',
+    String body = '',
+    bool showSystemNotification = true,
+  }) async {
+    await initialize();
+    final safeId = reportId.trim().isEmpty ? 'feedback_${DateTime.now().microsecondsSinceEpoch}' : reportId.trim();
+    final dedupeKey = 'app_feedback_resolved_$safeId';
+    if (_shownIds.contains(dedupeKey)) return;
+    _shownIds.add(dedupeKey);
+
+    final language = await _currentLanguageCode();
+    final cleanTitle = title.trim().isEmpty ? _translateSync('تم حل البلاغ', language) : title.trim();
+    final cleanBody = body.trim().isEmpty
+        ? _translateSync('تم حل المشكلة في البلاغ الذي قدمته، شكرًا لتعاونكم.', language)
+        : body.trim();
+    await _saveGeneralNotificationLocal(
+      id: safeId,
+      title: cleanTitle,
+      body: cleanBody,
+      createdAt: DateTime.now().toUtc().toIso8601String(),
+      senderName: 'Respect',
+    );
+
+    final payload = jsonEncode({
+      'type': 'app_feedback_resolved',
+      'reportId': safeId,
+      'title': cleanTitle,
+      'body': cleanBody,
+      'language': language,
+    });
+
+    showTopNotification(
+      cleanBody.length > 160 ? '${cleanBody.substring(0, 160)}...' : cleanBody,
+      title: cleanTitle,
+      icon: Icons.task_alt_rounded,
+      accentColor: AppColors.success,
+      duration: const Duration(milliseconds: 5600),
+      onTap: () => handlePayload(payload),
+    );
+
+    if (!showSystemNotification) return;
+    final androidDetails = AndroidNotificationDetails(
+      'respect_general_channel',
+      'Respect General Alerts',
+      channelDescription: _translateSync('الإشعارات العامة من إدارة Respect', language),
+      importance: Importance.high,
+      priority: Priority.high,
+      icon: '@mipmap/ic_launcher',
+      styleInformation: BigTextStyleInformation(cleanBody),
+    );
+
+    await _plugin.show(
+      _stableId(dedupeKey),
+      cleanTitle,
+      cleanBody,
+      NotificationDetails(android: androidDetails, iOS: _iosGeneralDetails),
+      payload: payload,
+    );
+  }
+
+  static bool _truthyData(dynamic value) {
+    final text = (value ?? '').toString().trim().toLowerCase();
+    return value == true || text == 'true' || text == '1' || text == 'yes' || text == 'on';
+  }
+
+  static String _moderationSourceLabel(String language, String deletionSource, bool memoryUsed) {
+    final source = deletionSource.trim().toLowerCase();
+    if (memoryUsed || source == 'memory' || source == 'moderation_memory' || source == 'learned_report_dictionary') {
+      return _translateSync('ذاكرة Respect AI', language);
+    }
+    return _translateSync('Respect AI', language);
+  }
+
+  static Future<void> showPostModerationDeletedNotification({
+    required String postId,
+    String deletionSource = 'ai',
+    bool moderationMemoryUsed = false,
+    String decisionSource = '',
+    String category = '',
+    String reason = '',
+    String matchedTerm = '',
+    bool showSystemNotification = true,
+  }) async {
+    await initialize();
+    final safeId = postId.trim().isEmpty ? 'post_${DateTime.now().microsecondsSinceEpoch}' : postId.trim();
+    final language = await _currentLanguageCode();
+    final sourceLabel = _moderationSourceLabel(language, deletionSource, moderationMemoryUsed);
+    final title = _translateSync('مراجعة المحتوى', language);
+
+    final cleanCategory = category.trim();
+    final cleanReason = reason.trim();
+    final cleanMatched = matchedTerm.trim();
+    final baseBody = _translateSync('تم حذف تغريدتك لأنها تخالف إرشادات المجتمع.', language);
+    final sourcePart = _translateSync('مصدر القرار', language);
+    final reasonPart = _translateSync('السبب', language);
+    final categoryPart = _translateSync('التصنيف', language);
+    final matchedPart = _translateSync('النمط المطابق', language);
+
+    var body = '$baseBody\n$sourcePart: $sourceLabel';
+    if (cleanCategory.isNotEmpty && cleanCategory != 'safe') {
+      body += '\n$categoryPart: $cleanCategory';
+    }
+    if (cleanMatched.isNotEmpty) {
+      body += '\n$matchedPart: $cleanMatched';
+    }
+    if (cleanReason.isNotEmpty) {
+      final shortReason = cleanReason.length > 180 ? '${cleanReason.substring(0, 180)}...' : cleanReason;
+      body += '\n$reasonPart: $shortReason';
+    }
+
+    final dedupeKey = 'moderation_deleted_$safeId';
+    if (_shownIds.contains(dedupeKey)) return;
+    _shownIds.add(dedupeKey);
+
+    final payload = jsonEncode({
+      'type': 'post_moderation_deleted',
+      'postId': safeId,
+      'post_id': safeId,
+      'deletionSource': deletionSource,
+      'decisionSource': decisionSource,
+      'moderationMemoryUsed': moderationMemoryUsed,
+      'category': cleanCategory,
+      'reason': cleanReason,
+      'matchedTerm': cleanMatched,
+      'language': language,
+    });
+
+    showTopNotification(
+      body.length > 240 ? '${body.substring(0, 240)}...' : body,
+      title: title,
+      icon: moderationMemoryUsed || deletionSource.toLowerCase() == 'memory'
+          ? Icons.psychology_alt_rounded
+          : Icons.auto_delete_rounded,
+      accentColor: AppColors.danger,
+      duration: const Duration(milliseconds: 6200),
+      onTap: () => handlePayload(payload),
+    );
+
+    if (!showSystemNotification) return;
+    final androidDetails = AndroidNotificationDetails(
+      'respect_posts_channel',
+      'Respect Post Alerts',
+      channelDescription: _translateSync('إشعارات التغريدات والبلاغات', language),
+      importance: Importance.high,
+      priority: Priority.high,
+      icon: '@mipmap/ic_launcher',
+      styleInformation: BigTextStyleInformation(body),
+    );
+
+    await _plugin.show(
+      _stableId(dedupeKey),
+      title,
+      body,
+      NotificationDetails(android: androidDetails, iOS: _iosPostDetails),
+      payload: payload,
+    );
+  }
+
   static Future<void> showFromFcmData(Map<String, dynamic> data) async {
     final type = data['type']?.toString();
+    if (type == 'post_moderation_deleted' || type == 'post_deleted_by_moderation') {
+      await showPostModerationDeletedNotification(
+        postId: (data['postId'] ?? data['post_id'] ?? DateTime.now().millisecondsSinceEpoch).toString(),
+        deletionSource: (data['deletionSource'] ?? data['deletion_source'] ?? data['decisionSource'] ?? '').toString(),
+        moderationMemoryUsed: _truthyData(data['moderationMemoryUsed'] ?? data['moderation_memory_used'] ?? data['memoryUsed']),
+        decisionSource: (data['decisionSource'] ?? data['decision_source'] ?? '').toString(),
+        category: (data['category'] ?? '').toString(),
+        reason: _firstNonEmpty([data['reason'], data['localizedReason']], fallback: ''),
+        matchedTerm: (data['matchedTerm'] ?? data['matched_term'] ?? '').toString(),
+      );
+      return;
+    }
+    if (type == 'app_feedback_resolved') {
+      await showAppFeedbackResolvedNotification(
+        reportId: (data['reportId'] ?? data['report_id'] ?? data['id'] ?? DateTime.now().microsecondsSinceEpoch).toString(),
+        title: _firstNonEmpty([data['localizedTitle'], data['title']], fallback: 'تم حل البلاغ'),
+        body: _firstNonEmpty([data['localizedBody'], data['body'], data['text']], fallback: 'تم حل المشكلة في البلاغ الذي قدمته، شكرًا لتعاونكم.'),
+      );
+      return;
+    }
     if (type == 'general_notification' || type == 'general') {
       await showGeneralNotification(
         id: (data['id'] ?? data['notificationId'] ?? data['notification_id'] ?? DateTime.now().microsecondsSinceEpoch).toString(),
@@ -724,16 +950,21 @@ class NotificationService {
     if (type == 'post_event' ||
         type == 'community_report_rejected' ||
         type == 'community_report_accepted' ||
+        type == 'community_post_hidden' ||
         type == 'report_rejected_reporter' ||
         type == 'report_accepted_reporter' ||
         type == 'report_accepted_owner') {
       final eventType = (data['eventType'] ?? data['event_type'] ?? type).toString();
-      final defaultTitle = eventType == 'report_accepted_owner'
+      final defaultTitle = eventType == 'community_post_hidden'
+          ? 'تم عمل هايد لتغريدتك'
+          : eventType == 'report_accepted_owner'
           ? 'تم حذف تغريدتك'
           : (eventType == 'community_report_accepted' || eventType == 'report_accepted_reporter')
           ? 'تم قبول البلاغ'
           : 'نتيجة البلاغ';
-      final defaultBody = eventType == 'report_accepted_owner'
+      final defaultBody = eventType == 'community_post_hidden'
+          ? 'تم إخفاء تغريدتك داخل المجتمع بسبب مخالفة أحد القوانين.'
+          : eventType == 'report_accepted_owner'
           ? 'تم حذف تغريدتك بعد قبول بلاغ عليها.'
           : (eventType == 'community_report_accepted' || eventType == 'report_accepted_reporter')
           ? 'راجعنا البلاغ وتم حذف التغريدة.'

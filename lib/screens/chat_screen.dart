@@ -17,6 +17,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:video_player/video_player.dart';
 import 'package:http/http.dart' as http;
 import 'package:permission_handler/permission_handler.dart';
+import 'package:provider/provider.dart';
 import 'call_screen.dart';
 
 import '../services/call_service.dart';
@@ -24,6 +25,7 @@ import '../services/supabase_service.dart';
 import '../services/notification_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/glass_card.dart';
+import '../widgets/app_dialog.dart';
 import 'package:flutter/foundation.dart';
 
 import '../app/app_language.dart';
@@ -31,6 +33,18 @@ void _logIgnoredError(Object error, StackTrace stackTrace) {
   if (kDebugMode) {
     debugPrint('Ignored error: $error\n$stackTrace');
   }
+}
+
+class _ArabicTranslationDialect {
+  final String code;
+  final String name;
+  final String hint;
+
+  const _ArabicTranslationDialect({
+    required this.code,
+    required this.name,
+    required this.hint,
+  });
 }
 
 
@@ -115,6 +129,41 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   bool _recordingFinishingForPreview = false;
   String? _typingName;
 
+  bool _instantTranslationEnabled = false;
+  bool _instantTranslationLoading = false;
+  bool _translationFailureNoticeShown = false;
+  String _instantTranslationTargetLanguageCode = 'ar';
+  String _instantTranslationArabicDialectCode = 'auto';
+  final Map<String, String> _translatedMessageText = <String, String>{};
+  final Set<String> _translationInFlight = <String>{};
+
+  static const List<_ArabicTranslationDialect> _arabicTranslationDialects = <_ArabicTranslationDialect>[
+    _ArabicTranslationDialect(code: 'auto', name: 'تلقائي', hint: 'يختار الأسلوب العربي الأنسب'),
+    _ArabicTranslationDialect(code: 'fusha', name: 'فصحى مبسطة', hint: 'عربي واضح ومفهوم'),
+    _ArabicTranslationDialect(code: 'saudi', name: 'سعودية', hint: 'لهجة سعودية طبيعية'),
+    _ArabicTranslationDialect(code: 'najdi', name: 'نجدية', hint: 'أسلوب أهل نجد'),
+    _ArabicTranslationDialect(code: 'hijazi', name: 'حجازية', hint: 'أسلوب جدة ومكة والمدينة'),
+    _ArabicTranslationDialect(code: 'gulf', name: 'خليجية', hint: 'خليجي عام'),
+    _ArabicTranslationDialect(code: 'kuwaiti', name: 'كويتية', hint: 'لهجة كويتية'),
+    _ArabicTranslationDialect(code: 'emirati', name: 'إماراتية', hint: 'لهجة إماراتية'),
+    _ArabicTranslationDialect(code: 'qatari', name: 'قطرية', hint: 'لهجة قطرية'),
+    _ArabicTranslationDialect(code: 'bahraini', name: 'بحرينية', hint: 'لهجة بحرينية'),
+    _ArabicTranslationDialect(code: 'omani', name: 'عُمانية', hint: 'لهجة عُمانية'),
+    _ArabicTranslationDialect(code: 'levantine', name: 'شامية', hint: 'لبناني/سوري/فلسطيني/أردني'),
+    _ArabicTranslationDialect(code: 'lebanese', name: 'لبنانية', hint: 'لهجة لبنانية'),
+    _ArabicTranslationDialect(code: 'syrian', name: 'سورية', hint: 'لهجة سورية'),
+    _ArabicTranslationDialect(code: 'palestinian', name: 'فلسطينية', hint: 'لهجة فلسطينية'),
+    _ArabicTranslationDialect(code: 'jordanian', name: 'أردنية', hint: 'لهجة أردنية'),
+    _ArabicTranslationDialect(code: 'egyptian', name: 'مصرية', hint: 'لهجة مصرية'),
+    _ArabicTranslationDialect(code: 'iraqi', name: 'عراقية', hint: 'لهجة عراقية'),
+    _ArabicTranslationDialect(code: 'yemeni', name: 'يمنية', hint: 'لهجة يمنية'),
+    _ArabicTranslationDialect(code: 'sudanese', name: 'سودانية', hint: 'لهجة سودانية'),
+    _ArabicTranslationDialect(code: 'moroccan', name: 'مغربية', hint: 'دارجة مغربية'),
+    _ArabicTranslationDialect(code: 'algerian', name: 'جزائرية', hint: 'دارجة جزائرية'),
+    _ArabicTranslationDialect(code: 'tunisian', name: 'تونسية', hint: 'دارجة تونسية'),
+    _ArabicTranslationDialect(code: 'libyan', name: 'ليبية', hint: 'لهجة ليبية'),
+  ];
+
   RealtimeChannel? _messagesChannel;
   final CallService _callService = CallService();
   final Set<String> _shownIncomingCallIds = <String>{};
@@ -128,6 +177,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
   final Set<String> _selectedMessageIds = <String>{};
   final Set<String> _locallyDeletedMessageIds = <String>{};
+  final Map<String, DateTime> _deletedThreadCutoffs = <String, DateTime>{};
   _DirectMessage? _replyToMessage;
   _DirectMessage? _editingMessage;
   final Map<String, GlobalKey> _messageKeys = <String, GlobalKey>{};
@@ -136,8 +186,8 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
   bool get _selectionMode => _selectedMessageIds.isNotEmpty;
   List<_DirectMessage> get _selectedMessages => _activeMessages.where((m) => _selectedMessageIds.contains(m.id)).toList();
-  bool get _canDeleteSelectedMessages => _selectedMessages.isNotEmpty && _selectedMessages.every((m) => m.senderUsername == _currentUsername);
-  bool get _canEditSelectedMessage => _selectedMessages.length == 1 && _selectedMessages.first.senderUsername == _currentUsername && !_selectedMessages.first.hasVisualMedia && !_selectedMessages.first.isVoice;
+  bool get _canDeleteSelectedMessages => _selectedMessages.isNotEmpty && _selectedMessages.every(_isMyMessage);
+  bool get _canEditSelectedMessage => _selectedMessages.length == 1 && _isMyMessage(_selectedMessages.first) && !_selectedMessages.first.hasVisualMedia && !_selectedMessages.first.isVoice;
 
   bool get _isGroup => _activeGroupId != null;
   bool get _canSend => !_isGroup || !_activeGroupLocked || _activeGroupFounder || _activeGroupAdmin;
@@ -186,6 +236,13 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       _selectedMessageIds.clear();
       _replyToMessage = null;
       _editingMessage = null;
+      _instantTranslationEnabled = false;
+      _instantTranslationLoading = false;
+      _instantTranslationTargetLanguageCode = 'ar';
+      _instantTranslationArabicDialectCode = 'auto';
+      _translatedMessageText.clear();
+      _translationInFlight.clear();
+      _translationFailureNoticeShown = false;
     });
     _notifyConversationActive(false);
     _refreshThreadsOnly();
@@ -256,6 +313,8 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       }
 
       await _loadLocallyDeletedMessages();
+      await _loadDeletedThreadCutoffs();
+      await _loadInstantTranslationPreference();
 
       // Local-first: لو المستخدم فتح محادثة مباشرة، اعرض الكاش فورًا قبل طلبات المستخدمين والإنبوكس.
       List<_DirectMessage> bootCachedMessages = <_DirectMessage>[];
@@ -282,10 +341,10 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       final users = List<Map<String, dynamic>>.from(bootstrapResults[0] as List);
       final directInbox = List<Map<String, dynamic>>.from(bootstrapResults[1] as List);
       final groupInbox = List<Map<String, dynamic>>.from(bootstrapResults[2] as List);
-      final threads = <_ChatThread>[
+      final threads = _filterDeletedThreads(<_ChatThread>[
         ..._buildThreadsFromMessages(directInbox, users),
         ...groupInbox.map(_ChatThread.fromGroup),
-      ]..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+      ]..sort((a, b) => b.updatedAt.compareTo(a.updatedAt)));
 
       _users = users;
       _threads = threads;
@@ -307,12 +366,12 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
           WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
         }
 
-        final latestLocalCreatedAt = _latestCreatedAt(cached);
+        final refreshCursorCreatedAt = _recentRefreshCursorCreatedAt(cached);
         final rows = await SupabaseService.getMessagesBetween(
           _currentUsername,
           _activePeerUsername!,
-          limit: cached.isEmpty ? 120 : 80,
-          afterCreatedAt: latestLocalCreatedAt,
+          limit: cached.isEmpty ? 120 : 120,
+          afterCreatedAt: refreshCursorCreatedAt,
         );
         final fresh = await _messagesWithDeviceMedia(
           rows.map(_DirectMessage.fromSupabase).where((m) => !_locallyDeletedMessageIds.contains(m.id)).toList(),
@@ -321,6 +380,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         _messages = _mergeMessages(cached, fresh);
         await _saveMessagesCache(peer: _activePeerUsername, eagerMediaDownload: false);
         await _markVisibleMessagesRead();
+    if (_instantTranslationEnabled) unawaited(_translateVisibleMessages());
       }
 
       if (!mounted) return;
@@ -369,8 +429,14 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       ..onPostgresChanges(event: PostgresChangeEvent.insert, schema: 'public', table: 'messages', callback: (payload) async {
         await _handleIncomingMessage(payload.newRecord);
       })
+      ..onPostgresChanges(event: PostgresChangeEvent.update, schema: 'public', table: 'messages', callback: (payload) async {
+        await _handleDirectMessageRowUpdate(payload.newRecord);
+      })
       ..onPostgresChanges(event: PostgresChangeEvent.insert, schema: 'public', table: 'respect_group_messages', callback: (payload) async {
         await _handleIncomingGroupMessage(payload.newRecord);
+      })
+      ..onPostgresChanges(event: PostgresChangeEvent.update, schema: 'public', table: 'respect_group_messages', callback: (payload) async {
+        await _handleGroupMessageRowUpdate(payload.newRecord);
       })
       ..subscribe((status, error) {
         if (status == RealtimeSubscribeStatus.subscribed) {
@@ -402,13 +468,13 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     _silentRefreshing = true;
     try {
       final currentActive = List<_DirectMessage>.from(_activeMessages);
-      final latestLocalCreatedAt = _latestCreatedAt(currentActive);
+      final refreshCursorCreatedAt = _recentRefreshCursorCreatedAt(currentActive);
       List<_DirectMessage> freshMessages;
       if (activeGroup != null) {
         final rows = await SupabaseService.getGroupMessages(
           activeGroup,
-          limit: latestLocalCreatedAt == null ? 160 : 80,
-          afterCreatedAt: latestLocalCreatedAt,
+          limit: refreshCursorCreatedAt == null ? 160 : 140,
+          afterCreatedAt: refreshCursorCreatedAt,
         );
         freshMessages = await _messagesWithDeviceMedia(
           rows.map(_DirectMessage.fromGroupSupabase).where((m) => !_locallyDeletedMessageIds.contains(m.id)).toList(),
@@ -418,8 +484,8 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         final rows = await SupabaseService.getMessagesBetween(
           _currentUsername,
           activePeer!,
-          limit: latestLocalCreatedAt == null ? 120 : 80,
-          afterCreatedAt: latestLocalCreatedAt,
+          limit: refreshCursorCreatedAt == null ? 120 : 120,
+          afterCreatedAt: refreshCursorCreatedAt,
         );
         freshMessages = await _messagesWithDeviceMedia(
           rows.map(_DirectMessage.fromSupabase).where((m) => !_locallyDeletedMessageIds.contains(m.id)).toList(),
@@ -452,6 +518,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
           }
         });
         await _saveMessagesCache(peer: activePeer, groupId: activeGroup, eagerMediaDownload: false);
+        if (_instantTranslationEnabled) unawaited(_translateVisibleMessages());
       }
 
       if (hasNew || scroll) {
@@ -471,6 +538,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     final me = SupabaseService.displayUsername(_currentUsername);
     final peer = _activePeerUsername == null ? null : SupabaseService.displayUsername(_activePeerUsername!);
     if (sender != me && receiver != me) return;
+    if (sender != me && await SupabaseService.isDirectMessageBlocked(sender: sender, receiver: me)) return;
 
     final msg = (await _messagesWithDeviceMedia([_DirectMessage.fromSupabase(row)])).first;
     final isOpen = !_isGroup && peer != null && ((sender == me && receiver == peer) || (sender == peer && receiver == me));
@@ -493,6 +561,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     if (!mounted) return;
     if (isOpen && !_messages.any((m) => m.id == msg.id)) {
       setState(() => _messages.add(msg.copyWith(status: sender == me ? msg.status : MessageStatus.read)));
+      if (_instantTranslationEnabled) _scheduleMessageTranslation(msg, rawText: msg.text.trim(), kind: 'text');
       await _saveMessagesCache(peer: peer);
       WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
     }
@@ -506,7 +575,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     final msg = (await _messagesWithDeviceMedia([_DirectMessage.fromGroupSupabase(decryptedRow)])).first;
     final isOpen = _isGroup && _activeGroupId == groupId;
 
-    if (msg.senderUsername != _currentUsername) {
+    if (!_isMyMessage(msg)) {
       await SupabaseService.markGroupMessageDelivered(msg.id, _currentUsername);
       if (isOpen) await SupabaseService.markGroupMessageRead(msg.id, _currentUsername);
     }
@@ -514,13 +583,14 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     if (!mounted) return;
     if (isOpen && !_messages.any((m) => m.id == msg.id)) {
       setState(() => _messages.add(msg));
+      if (_instantTranslationEnabled) _scheduleMessageTranslation(msg, rawText: msg.text.trim(), kind: 'text');
       await _saveMessagesCache(groupId: groupId, eagerMediaDownload: false);
       WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
     }
     await _refreshThreadsOnly();
   }
 
-  void _handleMessageStatus(Map<String, dynamic> payload) {
+  Future<void> _handleMessageStatus(Map<String, dynamic> payload) async {
     final id = payload['message_id']?.toString().trim();
     if (id == null || id.isEmpty) return;
     final action = (payload['action'] ?? '').toString().toLowerCase().trim();
@@ -530,11 +600,31 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       unawaited(_handleDeletedMessageEverywhere(id));
       return;
     }
-    final status = MessageStatusX.fromText(payload['status']?.toString());
-    if (!mounted) return;
-    setState(() {
-      _messages = _messages.map((m) => m.id == id ? m.copyWith(status: status) : m).toList();
-    });
+    await _applyMessageStatusUpdate(id, MessageStatusX.fromText(statusText));
+  }
+
+  Future<void> _handleDirectMessageRowUpdate(Map<String, dynamic> row) async {
+    final id = (row['id'] ?? '').toString().trim();
+    if (id.isEmpty) return;
+
+    final sender = SupabaseService.displayUsername((row['sender_username'] ?? '').toString());
+    final receiver = SupabaseService.displayUsername((row['receiver_username'] ?? '').toString());
+    final me = SupabaseService.displayUsername(_currentUsername);
+    final peer = _activePeerUsername == null ? null : SupabaseService.displayUsername(_activePeerUsername!);
+
+    if (sender != me && receiver != me) return;
+    if (peer != null && !((sender == me && receiver == peer) || (sender == peer && receiver == me))) return;
+
+    final status = _DirectMessage.fromSupabase(row).status;
+    await _applyMessageStatusUpdate(id, status);
+  }
+
+  Future<void> _handleGroupMessageRowUpdate(Map<String, dynamic> row) async {
+    final id = (row['id'] ?? '').toString().trim();
+    final groupId = (row['group_id'] ?? '').toString().trim();
+    if (id.isEmpty || groupId.isEmpty || groupId != _activeGroupId) return;
+    final status = MessageStatusX.fromText((row['status'] ?? '').toString());
+    await _applyMessageStatusUpdate(id, status);
   }
 
   Future<void> _handleDeletedMessageEverywhere(String messageId) async {
@@ -782,17 +872,14 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         NotificationService.showTopNotification(context.tr('طلب الدردشة مرسل مسبقًا، انتظر موافقة الطرف الآخر'));
         return false;
       }
-      final sent = await showDialog<bool>(
-        context: context,
-        builder: (_) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
-          title: const AppText('إرسال طلب دردشة؟', style: TextStyle(fontWeight: FontWeight.w900)),
-          content: AppText('لا يمكنك مراسلة $p قبل أن يوافق على طلب الدردشة.'),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context, false), child: const AppText('إلغاء')),
-            FilledButton(onPressed: () => Navigator.pop(context, true), child: const AppText('إرسال الطلب')),
-          ],
-        ),
+      final sent = await AppDialog.confirm(
+        context,
+        title: 'إرسال طلب دردشة؟',
+        message: 'لا يمكنك مراسلة $p قبل أن يوافق على طلب الدردشة.',
+        confirmText: 'إرسال الطلب',
+        cancelText: 'إلغاء',
+        type: AppDialogType.question,
+        icon: Icons.mark_chat_unread_rounded,
       );
       if (sent == true) {
         await SupabaseService.createChatRequest(sender: _currentUsername, receiver: p);
@@ -801,7 +888,8 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       }
       return false;
     }
-    if (reason == 'messages_disabled') NotificationService.showTopError(context.tr('هذا المستخدم أوقف استقبال الرسائل'));
+    if (reason == 'blocked') NotificationService.showTopError(context.tr('لا يمكن إرسال رسالة لأن هناك حظر بينكما'));
+    else if (reason == 'messages_disabled') NotificationService.showTopError(context.tr('هذا المستخدم أوقف استقبال الرسائل'));
     else if (reason == 'verified_only') NotificationService.showTopError(context.tr('هذا المستخدم يستقبل الرسائل من الحسابات الموثقة فقط'));
     else NotificationService.showTopError(context.tr('لا يمكن إرسال الرسالة الآن'));
     return false;
@@ -810,7 +898,9 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   Future<bool> _ensureCallAllowed(String peer) async {
     final result = await SupabaseService.canCallUser(caller: _currentUsername, receiver: peer);
     if (result['allowed'] == true) return true;
-    NotificationService.showTopError(context.tr('هذا المستخدم أغلق استقبال الاتصالات'));
+    final reason = (result['reason'] ?? '').toString();
+    if (reason == 'blocked') NotificationService.showTopError(context.tr('لا يمكن الاتصال لأن هناك حظر بينكما'));
+    else NotificationService.showTopError(context.tr('هذا المستخدم أغلق استقبال الاتصالات'));
     return false;
   }
 
@@ -831,7 +921,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     if (mounted) setState(() => _likedMessageIds[msg.id] = true);
     try {
       await SupabaseService.setMessageReaction(messageId: msg.id, username: _currentUsername, liked: true, group: _isGroup);
-      if (!_isGroup && msg.senderUsername != _currentUsername) {
+      if (!_isGroup && !_isMyMessage(msg)) {
         await SupabaseService.sendUserBroadcast(username: msg.senderUsername, event: 'message_status', payload: {'message_id': msg.id, 'reaction': 'like'});
       }
     } catch (e, st) { _logIgnoredError(e, st); }
@@ -1083,13 +1173,70 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     return sorted.last.createdAt;
   }
 
+  String? _recentRefreshCursorCreatedAt(
+    List<_DirectMessage> messages, {
+    int windowSize = 90,
+  }) {
+    if (messages.isEmpty) return null;
+    final sorted = List<_DirectMessage>.from(messages)..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    final index = math.max(0, sorted.length - windowSize - 1);
+    return sorted[index].createdAt;
+  }
+
+  int _messageStatusRank(MessageStatus status) {
+    switch (status) {
+      case MessageStatus.sent:
+        return 0;
+      case MessageStatus.delivered:
+        return 1;
+      case MessageStatus.read:
+        return 2;
+    }
+  }
+
+  MessageStatus _strongestMessageStatus(MessageStatus oldStatus, MessageStatus newStatus) {
+    return _messageStatusRank(newStatus) >= _messageStatusRank(oldStatus) ? newStatus : oldStatus;
+  }
+
+  Future<void> _applyMessageStatusUpdate(
+    String messageId,
+    MessageStatus status, {
+    bool saveCache = true,
+  }) async {
+    final id = messageId.trim();
+    if (id.isEmpty || !mounted) return;
+
+    var changed = false;
+    setState(() {
+      _messages = _messages.map((m) {
+        if (m.id != id) return m;
+        final nextStatus = _strongestMessageStatus(m.status, status);
+        if (nextStatus == m.status) return m;
+        changed = true;
+        return m.copyWith(status: nextStatus);
+      }).toList();
+    });
+
+    if (changed && saveCache) {
+      await _saveMessagesCache(
+        peer: _activePeerUsername,
+        groupId: _activeGroupId,
+        eagerMediaDownload: false,
+      );
+    }
+  }
+
   List<_DirectMessage> _mergeMessages(List<_DirectMessage> oldMessages, List<_DirectMessage> newMessages) {
     final map = <String, _DirectMessage>{};
     for (final msg in oldMessages) {
       if (msg.id.trim().isNotEmpty) map[msg.id] = msg;
     }
     for (final msg in newMessages) {
-      if (msg.id.trim().isNotEmpty) map[msg.id] = msg;
+      if (msg.id.trim().isEmpty) continue;
+      final old = map[msg.id];
+      map[msg.id] = old == null
+          ? msg
+          : msg.copyWith(status: _strongestMessageStatus(old.status, msg.status));
     }
     final merged = map.values.where((m) => !_locallyDeletedMessageIds.contains(m.id)).toList()
       ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
@@ -1230,12 +1377,183 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   Future<void> _refreshThreadsOnly() async {
     final inbox = await SupabaseService.getInboxMessages(_currentUsername);
     final groups = await SupabaseService.getMyChatGroups(_currentUsername);
-    final threads = <_ChatThread>[
+    final threads = _filterDeletedThreads(<_ChatThread>[
       ..._buildThreadsFromMessages(inbox, _users),
       ...groups.map(_ChatThread.fromGroup),
-    ]..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    ]..sort((a, b) => b.updatedAt.compareTo(a.updatedAt)));
     if (!mounted) return;
     setState(() => _threads = threads);
+  }
+
+  String get _deletedThreadsPrefsKey => 'respect_deleted_threads_v1_${SupabaseService.normalizeUsername(_currentUsername)}';
+
+  DateTime? _threadUpdatedAt(_ChatThread thread) {
+    return DateTime.tryParse(thread.updatedAt)?.toUtc();
+  }
+
+  String _threadDeleteKey(_ChatThread thread) {
+    if (thread.isGroup) return 'group:${thread.groupId ?? thread.id}';
+    return 'direct:${SupabaseService.threadId(_currentUsername, thread.peerUsername)}';
+  }
+
+  Future<void> _loadDeletedThreadCutoffs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_deletedThreadsPrefsKey);
+      _deletedThreadCutoffs.clear();
+      if (raw == null || raw.trim().isEmpty) return;
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return;
+      for (final entry in decoded.entries) {
+        final key = entry.key.toString();
+        final dt = DateTime.tryParse(entry.value.toString())?.toUtc();
+        if (key.trim().isNotEmpty && dt != null) _deletedThreadCutoffs[key] = dt;
+      }
+    } catch (e, st) { _logIgnoredError(e, st); }
+  }
+
+  Future<void> _saveDeletedThreadCutoffs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final encoded = _deletedThreadCutoffs.map((key, value) => MapEntry(key, value.toUtc().toIso8601String()));
+      await prefs.setString(_deletedThreadsPrefsKey, jsonEncode(encoded));
+    } catch (e, st) { _logIgnoredError(e, st); }
+  }
+
+  List<_ChatThread> _filterDeletedThreads(List<_ChatThread> threads) {
+    if (_deletedThreadCutoffs.isEmpty) return threads;
+    var changed = false;
+    final kept = <_ChatThread>[];
+    for (final thread in threads) {
+      final key = _threadDeleteKey(thread);
+      final cutoff = _deletedThreadCutoffs[key];
+      if (cutoff == null) {
+        kept.add(thread);
+        continue;
+      }
+      final updatedAt = _threadUpdatedAt(thread) ?? DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+      if (updatedAt.isAfter(cutoff)) {
+        _deletedThreadCutoffs.remove(key);
+        changed = true;
+        kept.add(thread);
+      }
+    }
+    if (changed) unawaited(_saveDeletedThreadCutoffs());
+    return kept;
+  }
+
+  Future<void> _deleteThreadDeviceCache(_ChatThread thread) async {
+    try {
+      final file = await _messagesDeviceFile(
+        peer: thread.isGroup ? null : thread.peerUsername,
+        groupId: thread.isGroup ? thread.groupId : null,
+      );
+      if (await file.exists()) await file.delete();
+    } catch (e, st) { _logIgnoredError(e, st); }
+  }
+
+  bool _isActiveThread(_ChatThread thread) {
+    if (thread.isGroup) return _isGroup && _activeGroupId == thread.groupId;
+    return !_isGroup && _activePeerUsername != null &&
+        SupabaseService.displayUsername(_activePeerUsername!) == SupabaseService.displayUsername(thread.peerUsername);
+  }
+
+  Future<void> _deleteThreadConversation(_ChatThread thread) async {
+    final ok = await AppDialog.confirm(
+      context,
+      title: 'حذف الدردشة؟',
+      message: thread.isGroup
+          ? 'سيتم حذف هذه الدردشة من جهازك فقط، وإذا وصلت رسالة جديدة ستظهر مرة أخرى.'
+          : 'سيتم حذف هذه الدردشة من جهازك فقط، وإذا أرسل الطرف الآخر رسالة جديدة ستظهر مرة أخرى.',
+      confirmText: 'حذف الدردشة',
+      cancelText: 'إلغاء',
+      type: AppDialogType.danger,
+      icon: Icons.delete_sweep_rounded,
+    );
+    if (ok != true) return;
+
+    final key = _threadDeleteKey(thread);
+    final wasActive = _isActiveThread(thread);
+    _deletedThreadCutoffs[key] = _threadUpdatedAt(thread) ?? DateTime.now().toUtc();
+    await _saveDeletedThreadCutoffs();
+    await _deleteThreadDeviceCache(thread);
+
+    if (!mounted) return;
+    setState(() {
+      _threads.removeWhere((t) => _threadDeleteKey(t) == key);
+      if (thread.isGroup) {
+        _messages.removeWhere((m) => m.groupId == thread.groupId);
+      } else {
+        final me = SupabaseService.displayUsername(_currentUsername);
+        final peer = SupabaseService.displayUsername(thread.peerUsername);
+        _messages.removeWhere((m) =>
+            (m.senderUsername == me && m.receiverUsername == peer) ||
+            (m.senderUsername == peer && m.receiverUsername == me));
+      }
+      if (_isActiveThread(thread)) {
+        _activePeerUsername = null;
+        _activePeerName = null;
+        _activePeerAvatarPath = null;
+        _activeGroupId = null;
+        _activeGroupName = null;
+        _activeGroupAvatar = null;
+        _selectedMessageIds.clear();
+        _replyToMessage = null;
+        _editingMessage = null;
+      }
+    });
+    if (wasActive) _notifyConversationActive(false);
+    NotificationService.showTopSuccess(context.tr('تم حذف الدردشة من هذا الجهاز'));
+  }
+
+  Future<void> _showThreadActions(_ChatThread thread) async {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        margin: const EdgeInsets.all(12),
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 18),
+        decoration: BoxDecoration(
+          color: isDark ? AppColors.darkCard : AppColors.lightCard,
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
+        ),
+        child: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(width: 44, height: 5, decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: .55), borderRadius: BorderRadius.circular(99))),
+              const SizedBox(height: 14),
+              ListTile(
+                leading: const Icon(Icons.chat_rounded, color: AppColors.purple),
+                title: AppText(thread.peerName, style: const TextStyle(fontWeight: FontWeight.w900)),
+                subtitle: AppText(thread.isGroup ? 'مجموعة' : thread.peerUsername),
+              ),
+              const SizedBox(height: 4),
+              ListTile(
+                leading: const Icon(Icons.open_in_new_rounded),
+                title: const AppText('فتح الدردشة'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _openThread(thread);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.delete_sweep_rounded, color: AppColors.danger),
+                title: const AppText('حذف الدردشة', style: TextStyle(color: AppColors.danger, fontWeight: FontWeight.w900)),
+                subtitle: const AppText('حذف محلي من جهازك فقط'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _deleteThreadConversation(thread);
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Map<String, dynamic>? _accountByUsername(List<Map<String, dynamic>> accounts, String username) {
@@ -1281,6 +1599,542 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
   }
 
+  String get _instantTranslationPrefsKey {
+    if (_isGroup && (_activeGroupId ?? '').trim().isNotEmpty) {
+      return 'respect_chat_instant_translation_v1_group_${_activeGroupId!.trim()}';
+    }
+    final peer = SupabaseService.displayUsername(_activePeerUsername ?? '');
+    if (peer != '@user') {
+      return 'respect_chat_instant_translation_v1_dm_${SupabaseService.threadId(_currentUsername, peer)}';
+    }
+    return 'respect_chat_instant_translation_v1_global';
+  }
+
+  String get _instantTranslationTargetPrefsKey => '${_instantTranslationPrefsKey}_target_language';
+
+  String get _instantTranslationArabicDialectPrefsKey => '${_instantTranslationPrefsKey}_arabic_dialect';
+
+  String _normalizeArabicDialectCode(String value) {
+    final clean = value.trim().toLowerCase().replaceAll('_', '-');
+    return SupabaseService.normalizeArabicDialectCode(clean);
+  }
+
+  _ArabicTranslationDialect _arabicDialectByCode(String code) {
+    final safe = _normalizeArabicDialectCode(code);
+    return _arabicTranslationDialects.firstWhere(
+      (dialect) => dialect.code == safe,
+      orElse: () => _arabicTranslationDialects.first,
+    );
+  }
+
+  String _targetArabicDialectCode() {
+    final target = _targetTranslationLanguageCode();
+    if (target != 'ar') return 'auto';
+    return _normalizeArabicDialectCode(_instantTranslationArabicDialectCode);
+  }
+
+  String _targetArabicDialectName() => _arabicDialectByCode(_targetArabicDialectCode()).name;
+
+  bool get _shouldForceArabicDialectRewrite {
+    final target = _targetTranslationLanguageCode();
+    final dialect = _targetArabicDialectCode();
+    return target == 'ar' && dialect != 'auto';
+  }
+
+  String _translationTargetLabel() {
+    final target = _targetTranslationLanguageName();
+    if (_targetTranslationLanguageCode() != 'ar') return target;
+    final dialect = _targetArabicDialectCode();
+    if (dialect == 'auto') return target;
+    return '$target • ${_targetArabicDialectName()}';
+  }
+
+  String _appLanguageFallbackCode() {
+    try {
+      return SupabaseService.normalizeAppLanguageCode(context.read<AppLanguageProvider>().languageCode);
+    } catch (_) {
+      return 'ar';
+    }
+  }
+
+  String _targetTranslationLanguageCode() {
+    final selected = _instantTranslationTargetLanguageCode.trim();
+    if (selected.isNotEmpty) {
+      return SupabaseService.normalizeAppLanguageCode(selected);
+    }
+    return _appLanguageFallbackCode();
+  }
+
+  String _translationLanguageNativeName(String code) {
+    final safeCode = SupabaseService.normalizeAppLanguageCode(code);
+    return AppLanguageProvider.supportedLanguages
+        .firstWhere((lang) => lang.code == safeCode, orElse: () => AppLanguageProvider.supportedLanguages.first)
+        .nativeName;
+  }
+
+  String _targetTranslationLanguageName() {
+    return _translationLanguageNativeName(_targetTranslationLanguageCode());
+  }
+
+  Future<void> _loadInstantTranslationPreference() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final enabled = prefs.getBool(_instantTranslationPrefsKey) ?? false;
+      final savedTarget = prefs.getString(_instantTranslationTargetPrefsKey);
+      final savedDialect = prefs.getString(_instantTranslationArabicDialectPrefsKey);
+      final target = SupabaseService.normalizeAppLanguageCode(
+        (savedTarget == null || savedTarget.trim().isEmpty) ? _appLanguageFallbackCode() : savedTarget,
+      );
+      final dialect = target == 'ar'
+          ? _normalizeArabicDialectCode(savedDialect ?? 'auto')
+          : 'auto';
+      if (!mounted) return;
+      setState(() {
+        _instantTranslationEnabled = enabled;
+        _instantTranslationLoading = false;
+        _instantTranslationTargetLanguageCode = target;
+        _instantTranslationArabicDialectCode = dialect;
+        _translatedMessageText.clear();
+        _translationInFlight.clear();
+        _translationFailureNoticeShown = false;
+      });
+      if (enabled) unawaited(_translateVisibleMessages());
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _instantTranslationEnabled = false;
+        _instantTranslationTargetLanguageCode = _appLanguageFallbackCode();
+        _instantTranslationArabicDialectCode = 'auto';
+      });
+    }
+  }
+
+  Future<void> _setInstantTranslationEnabled(bool enabled) async {
+    if (!_hasActiveConversation) return;
+    final target = _targetTranslationLanguageCode();
+    final dialect = target == 'ar' ? _targetArabicDialectCode() : 'auto';
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_instantTranslationPrefsKey, enabled);
+      await prefs.setString(_instantTranslationTargetPrefsKey, target);
+      await prefs.setString(_instantTranslationArabicDialectPrefsKey, dialect);
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() {
+      _instantTranslationEnabled = enabled;
+      _instantTranslationLoading = enabled;
+      _instantTranslationTargetLanguageCode = target;
+      _instantTranslationArabicDialectCode = dialect;
+      _translatedMessageText.clear();
+      _translationInFlight.clear();
+      _translationFailureNoticeShown = false;
+    });
+    if (enabled) {
+      NotificationService.showTopNotification('${context.tr('تم تفعيل الترجمة الفورية')} • ${_translationTargetLabel()}');
+      await _translateVisibleMessages();
+    } else {
+      NotificationService.showTopNotification(context.tr('تم إيقاف الترجمة الفورية'));
+    }
+    if (mounted) setState(() => _instantTranslationLoading = false);
+  }
+
+  Future<void> _setInstantTranslationTargetLanguage(String languageCode, {String? arabicDialectCode}) async {
+    if (!_hasActiveConversation) return;
+    final target = SupabaseService.normalizeAppLanguageCode(languageCode);
+    final dialect = target == 'ar'
+        ? _normalizeArabicDialectCode(arabicDialectCode ?? _instantTranslationArabicDialectCode)
+        : 'auto';
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_instantTranslationTargetPrefsKey, target);
+      await prefs.setString(_instantTranslationArabicDialectPrefsKey, dialect);
+      await prefs.setBool(_instantTranslationPrefsKey, true);
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() {
+      _instantTranslationEnabled = true;
+      _instantTranslationLoading = true;
+      _instantTranslationTargetLanguageCode = target;
+      _instantTranslationArabicDialectCode = dialect;
+      _translatedMessageText.clear();
+      _translationInFlight.clear();
+      _translationFailureNoticeShown = false;
+    });
+    NotificationService.showTopNotification('${context.tr('لغة عرض الدردشة')}: ${_translationTargetLabel()}');
+    await _translateVisibleMessages();
+    if (mounted && _translationInFlight.isEmpty) {
+      setState(() => _instantTranslationLoading = false);
+    }
+  }
+
+  Future<void> _openInstantTranslationSettings() async {
+    if (!_hasActiveConversation) return;
+    var enabled = _instantTranslationEnabled;
+    var selectedCode = _targetTranslationLanguageCode();
+    var selectedArabicDialectCode = _targetArabicDialectCode();
+
+    Widget optionTile({
+      required bool selected,
+      required IconData icon,
+      required String title,
+      required String subtitle,
+      required VoidCallback onTap,
+      required bool isDark,
+    }) {
+      return Container(
+        margin: const EdgeInsets.only(bottom: 7),
+        decoration: BoxDecoration(
+          color: selected
+              ? AppColors.purple.withValues(alpha: .16)
+              : (isDark ? Colors.white.withValues(alpha: .04) : Colors.black.withValues(alpha: .035)),
+          borderRadius: BorderRadius.circular(15),
+          border: Border.all(
+            color: selected
+                ? AppColors.purple.withValues(alpha: .42)
+                : (isDark ? AppColors.darkBorder : AppColors.lightBorder),
+          ),
+        ),
+        child: ListTile(
+          dense: true,
+          visualDensity: const VisualDensity(horizontal: 0, vertical: -3),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+          leading: Icon(
+            selected ? Icons.radio_button_checked_rounded : icon,
+            color: selected ? AppColors.purple : (isDark ? AppColors.darkMuted : AppColors.lightMuted),
+          ),
+          title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900)),
+          subtitle: Text(
+            subtitle,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, fontWeight: FontWeight.w700),
+          ),
+          trailing: selected ? const Icon(Icons.check_circle_rounded, color: AppColors.purple) : null,
+          onTap: onTap,
+        ),
+      );
+    }
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      backgroundColor: Theme.of(context).brightness == Brightness.dark ? AppColors.darkCard : AppColors.lightCard,
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (sheetContext, setSheet) {
+            final isDark = Theme.of(sheetContext).brightness == Brightness.dark;
+            final media = MediaQuery.of(sheetContext);
+            final sheetMaxHeight = math.min(media.size.height * .88, 760.0);
+
+            return SafeArea(
+              top: false,
+              child: Padding(
+                padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxHeight: sheetMaxHeight),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 18),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              width: 42,
+                              height: 42,
+                              decoration: BoxDecoration(
+                                color: AppColors.purple.withValues(alpha: .14),
+                                borderRadius: BorderRadius.circular(15),
+                                border: Border.all(color: AppColors.purple.withValues(alpha: .24)),
+                              ),
+                              child: const Icon(Icons.translate_rounded, color: AppColors.purple),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  AppText(
+                                    'الترجمة الفورية',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18, color: isDark ? Colors.white : AppColors.lightText),
+                                  ),
+                                  const SizedBox(height: 3),
+                                  AppText(
+                                    'اختر اللغة، وإذا كانت عربية اختر اللهجة أيضًا',
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(fontSize: 12.5, color: isDark ? AppColors.darkMuted : AppColors.lightMuted, fontWeight: FontWeight.w700),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        Flexible(
+                          fit: FlexFit.loose,
+                          child: SingleChildScrollView(
+                            physics: const BouncingScrollPhysics(),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                SwitchListTile(
+                                  contentPadding: EdgeInsets.zero,
+                                  dense: true,
+                                  value: enabled,
+                                  activeColor: AppColors.purple,
+                                  onChanged: (value) async {
+                                    setSheet(() => enabled = value);
+                                    await _setInstantTranslationEnabled(value);
+                                  },
+                                  title: const AppText('تفعيل الترجمة داخل هذه المحادثة', style: TextStyle(fontWeight: FontWeight.w900)),
+                                  subtitle: AppText(
+                                    enabled
+                                        ? 'أي رسالة ليست بلغة العرض سيتم تحويلها فورًا'
+                                        : 'رسائل الطرف الآخر ستبقى كما أرسلها',
+                                  ),
+                                ),
+                                const Divider(height: 18),
+                                Align(
+                                  alignment: AlignmentDirectional.centerStart,
+                                  child: AppText('لغة العرض', style: TextStyle(fontWeight: FontWeight.w900, color: isDark ? Colors.white : AppColors.lightText)),
+                                ),
+                                const SizedBox(height: 8),
+                                for (final lang in AppLanguageProvider.supportedLanguages)
+                                  optionTile(
+                                    selected: selectedCode == lang.code,
+                                    icon: Icons.radio_button_off_rounded,
+                                    title: lang.nativeName,
+                                    subtitle: lang.code.toUpperCase(),
+                                    isDark: isDark,
+                                    onTap: () async {
+                                      final nextDialect = lang.code == 'ar' ? selectedArabicDialectCode : 'auto';
+                                      setSheet(() {
+                                        selectedCode = lang.code;
+                                        selectedArabicDialectCode = nextDialect;
+                                        enabled = true;
+                                      });
+                                      await _setInstantTranslationTargetLanguage(lang.code, arabicDialectCode: nextDialect);
+                                    },
+                                  ),
+                                if (selectedCode == 'ar') ...[
+                                  const SizedBox(height: 4),
+                                  Align(
+                                    alignment: AlignmentDirectional.centerStart,
+                                    child: AppText('اللهجة العربية', style: TextStyle(fontWeight: FontWeight.w900, color: isDark ? Colors.white : AppColors.lightText)),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  for (final dialect in _arabicTranslationDialects)
+                                    optionTile(
+                                      selected: selectedArabicDialectCode == dialect.code,
+                                      icon: Icons.radio_button_off_rounded,
+                                      title: dialect.name,
+                                      subtitle: dialect.hint,
+                                      isDark: isDark,
+                                      onTap: () async {
+                                        setSheet(() {
+                                          selectedArabicDialectCode = dialect.code;
+                                          enabled = true;
+                                        });
+                                        await _setInstantTranslationTargetLanguage('ar', arabicDialectCode: dialect.code);
+                                      },
+                                    ),
+                                ],
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        SizedBox(
+                          width: double.infinity,
+                          child: FilledButton.icon(
+                            onPressed: () => Navigator.pop(sheetContext),
+                            icon: const Icon(Icons.check_rounded),
+                            label: const AppText('حفظ الاختيار'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  String _normalizedChatUsername(String value) {
+    return SupabaseService.displayUsername(value);
+  }
+
+  bool _sameChatUsername(String a, String b) {
+    return _normalizedChatUsername(a) == _normalizedChatUsername(b);
+  }
+
+  bool _isMyMessage(_DirectMessage msg) {
+    return _sameChatUsername(msg.senderUsername, _currentUsername);
+  }
+
+  String _detectTranslationSourceLanguage(String value) {
+    final text = value.trim();
+    if (text.isEmpty) return 'auto';
+    final arabic = RegExp(r'[\u0600-\u06FF]').allMatches(text).length;
+    final latin = RegExp(r'[A-Za-z]').allMatches(text).length;
+    if (arabic >= 2 && arabic >= latin) return 'ar';
+    if (latin >= 2) return 'auto';
+    return 'auto';
+  }
+
+  bool _isDefaultChatCaption(String value) {
+    final text = value.trim();
+    if (text.isEmpty) return true;
+    if (text == 'صورة' || text == 'فيديو' || text == 'رسالة صوتية') return true;
+    if (RegExp(r'^\d+\s+ملفات$').hasMatch(text)) return true;
+    if (!RegExp(r'[A-Za-z0-9\u0600-\u06FF\u0400-\u04FF\u0900-\u097F]').hasMatch(text)) return true;
+    return false;
+  }
+
+  bool _textLooksLikeTargetLanguage(String value, String targetLanguage) {
+    final text = value.trim();
+    if (text.isEmpty) return true;
+    final target = SupabaseService.normalizeAppLanguageCode(targetLanguage);
+    final arabicScript = RegExp(r'[\u0600-\u06FF]').allMatches(text).length;
+    final latinScript = RegExp(r'[A-Za-zÀ-ÖØ-öø-ÿ]').allMatches(text).length;
+    final cyrillicScript = RegExp(r'[\u0400-\u04FF]').allMatches(text).length;
+    final devanagariScript = RegExp(r'[\u0900-\u097F]').allMatches(text).length;
+
+    if (target == 'ar' || target == 'fa' || target == 'ur') {
+      return arabicScript >= 2 && arabicScript >= latinScript;
+    }
+    if (target == 'hi') {
+      return devanagariScript >= 2;
+    }
+    if (target == 'ru') {
+      return cyrillicScript >= 2;
+    }
+    // اللغات المكتوبة بحروف لاتينية تتشابه في الشكل، لذلك لا نحكم محليًا أنها نفس اللغة.
+    // نترك النموذج يقرر حتى لا نمنع ترجمة فرنسي/إسباني/تركي إلى إنجليزي مثلًا.
+    return false;
+  }
+
+  bool _shouldTranslateMessageText(_DirectMessage msg, String rawText) {
+    if (!_instantTranslationEnabled) return false;
+    if (msg.isVoice || msg.isCallHistory || msg.isStoryReply || msg.isStoryLike) return false;
+    if (_isDefaultChatCaption(rawText)) return false;
+    if (!_shouldForceArabicDialectRewrite && _textLooksLikeTargetLanguage(rawText, _targetTranslationLanguageCode())) return false;
+    return true;
+  }
+
+  String _translationCacheKey(String kind, _DirectMessage msg, String rawText, String targetLanguage) {
+    final dialect = targetLanguage == 'ar' ? _targetArabicDialectCode() : 'auto';
+    return '$kind:${msg.id}:$targetLanguage:$dialect:${rawText.hashCode}';
+  }
+
+  String _messageDisplayText(_DirectMessage msg) {
+    final raw = msg.text.trim();
+    if (!_shouldTranslateMessageText(msg, raw)) return msg.text;
+    final target = _targetTranslationLanguageCode();
+    final key = _translationCacheKey('text', msg, raw, target);
+    final cached = _translatedMessageText[key]?.trim();
+    if (cached != null && cached.isNotEmpty) return cached;
+    _scheduleMessageTranslation(msg, rawText: raw, kind: 'text');
+    return msg.text;
+  }
+
+  String _replyDisplayText(_DirectMessage msg) {
+    final raw = (msg.replyText ?? '').trim();
+    if (raw.isEmpty) return '';
+    if (!_shouldTranslateMessageText(msg, raw)) return msg.replyText ?? '';
+    final target = _targetTranslationLanguageCode();
+    final key = _translationCacheKey('reply', msg, raw, target);
+    final cached = _translatedMessageText[key]?.trim();
+    if (cached != null && cached.isNotEmpty) return cached;
+    _scheduleMessageTranslation(msg, rawText: raw, kind: 'reply');
+    return msg.replyText ?? '';
+  }
+
+  bool _isShowingTranslatedText(_DirectMessage msg, {String kind = 'text', String? rawText}) {
+    final raw = (rawText ?? (kind == 'reply' ? (msg.replyText ?? '') : msg.text)).trim();
+    if (!_instantTranslationEnabled) return false;
+    if (msg.isVoice || msg.isCallHistory || msg.isStoryReply || msg.isStoryLike) return false;
+    if (_isDefaultChatCaption(raw)) return false;
+    final target = _targetTranslationLanguageCode();
+    final translated = _translatedMessageText[_translationCacheKey(kind, msg, raw, target)]?.trim() ?? '';
+    return translated.isNotEmpty && translated != raw;
+  }
+
+  TextDirection _directionForDynamicText(String text) {
+    final rtl = RegExp(r'[\u0600-\u06FF]').hasMatch(text);
+    return rtl ? TextDirection.rtl : TextDirection.ltr;
+  }
+
+  void _scheduleMessageTranslation(_DirectMessage msg, {required String rawText, required String kind}) {
+    if (!_shouldTranslateMessageText(msg, rawText)) return;
+    final target = _targetTranslationLanguageCode();
+    final key = _translationCacheKey(kind, msg, rawText, target);
+    if (_translatedMessageText.containsKey(key) || _translationInFlight.contains(key)) return;
+    _translationInFlight.add(key);
+    Future<void>.microtask(() async {
+      try {
+        final translated = await SupabaseService.translateChatMessage(
+          text: rawText,
+          targetLanguage: target,
+          sourceLanguage: _detectTranslationSourceLanguage(rawText),
+          targetDialect: target == 'ar' ? _targetArabicDialectCode() : 'auto',
+          username: _currentUsername,
+        );
+        if (!mounted) return;
+        final clean = translated.trim();
+        if (clean.isEmpty) return;
+        setState(() {
+          _translatedMessageText[key] = clean;
+        });
+      } catch (e, st) {
+        _logIgnoredError(e, st);
+        if (mounted && !_translationFailureNoticeShown) {
+          _translationFailureNoticeShown = true;
+          NotificationService.showTopNotification(
+            context.tr('تعذر تشغيل الترجمة الآن. تأكد من تطبيق ملف السيرفر وملف SupabaseService الأخيرين'),
+            title: context.tr('الترجمة الفورية'),
+            icon: Icons.translate_rounded,
+            accentColor: Colors.orangeAccent,
+          );
+        }
+      } finally {
+        _translationInFlight.remove(key);
+        if (mounted && _instantTranslationLoading && _translationInFlight.isEmpty) {
+          setState(() => _instantTranslationLoading = false);
+        }
+      }
+    });
+  }
+
+  Future<void> _translateVisibleMessages() async {
+    final messages = List<_DirectMessage>.from(_activeMessages);
+    var scheduledAny = false;
+    for (final msg in messages) {
+      final raw = msg.text.trim();
+      if (_shouldTranslateMessageText(msg, raw)) {
+        scheduledAny = true;
+        _scheduleMessageTranslation(msg, rawText: raw, kind: 'text');
+      }
+      final reply = (msg.replyText ?? '').trim();
+      if (_shouldTranslateMessageText(msg, reply)) {
+        scheduledAny = true;
+        _scheduleMessageTranslation(msg, rawText: reply, kind: 'reply');
+      }
+    }
+    if (mounted && (!scheduledAny || _translationInFlight.isEmpty)) {
+      setState(() => _instantTranslationLoading = false);
+    }
+  }
+
   Future<void> _openThread(_ChatThread thread) async {
     if (thread.isGroup) {
       await _openGroupById(thread.groupId!, setLoading: true);
@@ -1294,6 +2148,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       _loading = true;
     });
     _notifyConversationActive(true);
+    await _loadInstantTranslationPreference();
     final cached = await _loadMessagesCache(peer: thread.peerUsername);
     if (mounted && cached.isNotEmpty) {
       setState(() {
@@ -1304,8 +2159,8 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     final rows = await SupabaseService.getMessagesBetween(
       _currentUsername,
       thread.peerUsername,
-      limit: cached.isEmpty ? 120 : 80,
-      afterCreatedAt: _latestCreatedAt(cached),
+      limit: cached.isEmpty ? 120 : 120,
+      afterCreatedAt: _recentRefreshCursorCreatedAt(cached),
     );
     final deviceMessages = await _messagesWithDeviceMedia(
       rows.map(_DirectMessage.fromSupabase).where((m) => !_locallyDeletedMessageIds.contains(m.id)).toList(),
@@ -1318,12 +2173,16 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     });
     await _saveMessagesCache(peer: thread.peerUsername, eagerMediaDownload: false);
     await _markVisibleMessagesRead();
+    if (_instantTranslationEnabled) unawaited(_translateVisibleMessages());
     unawaited(_refreshActiveConversationSilently(scroll: true));
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
   }
 
   Future<void> _openGroupById(String groupId, {required bool setLoading}) async {
     if (setLoading && mounted) setState(() => _loading = true);
+    _activePeerUsername = null;
+    _activeGroupId = groupId;
+    await _loadInstantTranslationPreference();
     final cached = await _loadMessagesCache(groupId: groupId);
     if (mounted && cached.isNotEmpty) {
       setState(() {
@@ -1336,8 +2195,8 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     final group = await SupabaseService.getChatGroup(groupId, _currentUsername);
     final rows = await SupabaseService.getGroupMessages(
       groupId,
-      limit: cached.isEmpty ? 160 : 80,
-      afterCreatedAt: _latestCreatedAt(cached),
+      limit: cached.isEmpty ? 160 : 140,
+      afterCreatedAt: _recentRefreshCursorCreatedAt(cached),
     );
     final deviceMessages = await _messagesWithDeviceMedia(
       rows.map(_DirectMessage.fromGroupSupabase).where((m) => !_locallyDeletedMessageIds.contains(m.id)).toList(),
@@ -1352,7 +2211,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       _activeGroupName = (group?['name'] ?? 'مجموعة').toString();
       _activeGroupAvatar = group?['avatar_url']?.toString();
       _activeGroupLocked = group?['locked'] == true;
-      _activeGroupFounder = SupabaseService.displayUsername((group?['founder_username'] ?? '').toString()) == _currentUsername;
+      _activeGroupFounder = _sameChatUsername((group?['founder_username'] ?? '').toString(), _currentUsername);
       _activeGroupAdmin = group?['my_role'] == 'admin' || _activeGroupFounder;
       _messages = _mergeMessages(cached, deviceMessages);
       _loading = false;
@@ -1360,13 +2219,14 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     await _saveMessagesCache(groupId: groupId, eagerMediaDownload: false);
     _notifyConversationActive(true);
     await _markVisibleMessagesRead();
+    if (_instantTranslationEnabled) unawaited(_translateVisibleMessages());
     unawaited(_refreshActiveConversationSilently(scroll: true));
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
   }
 
   Future<void> _markVisibleMessagesRead() async {
-    final me = _currentUsername;
-    for (final m in _activeMessages.where((e) => e.senderUsername != me)) {
+    final me = SupabaseService.displayUsername(_currentUsername);
+    for (final m in _activeMessages.where((e) => !_sameChatUsername(e.senderUsername, me))) {
       if (_isGroup) {
         unawaited(SupabaseService.markGroupMessageRead(m.id, me));
       } else {
@@ -1612,7 +2472,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     if (msg.isImage) return txt.isNotEmpty && txt != 'صورة' ? txt : 'صورة';
     if (msg.isVideo) return txt.isNotEmpty && txt != 'فيديو' ? txt : 'فيديو';
     if (msg.isVoice) return 'رسالة صوتية';
-    if (msg.isCallHistory) return msg.callHistoryTitle(isMine: msg.senderUsername == _currentUsername);
+    if (msg.isCallHistory) return msg.callHistoryTitle(isMine: _isMyMessage(msg));
     return txt;
   }
 
@@ -1702,7 +2562,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   Future<void> _deleteSelectedForEveryone() async {
     final selected = _activeMessages.where((m) => _selectedMessageIds.contains(m.id)).toList();
     if (selected.isEmpty) return;
-    final allowed = selected.every((m) => m.senderUsername == _currentUsername || (_isGroup && (_activeGroupAdmin || _activeGroupFounder)));
+    final allowed = selected.every((m) => _isMyMessage(m) || (_isGroup && (_activeGroupAdmin || _activeGroupFounder)));
     if (!allowed) {
       NotificationService.showTopError(context.tr('حذف عند الجميع متاح لرسائلك فقط'));
       return;
@@ -1765,7 +2625,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   }
 
   Future<void> _consumeLimitedMediaView(_DirectMessage msg) async {
-    if (msg.senderUsername == _currentUsername || msg.limitedMediaMaxViews <= 0) return;
+    if (_isMyMessage(msg) || msg.limitedMediaMaxViews <= 0) return;
     try {
       final prefs = await SharedPreferences.getInstance();
       final key = _limitedMediaPrefsKey(msg);
@@ -1779,7 +2639,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     if (items.isEmpty) return;
 
     final maxViews = msg.limitedMediaMaxViews;
-    final isReceiver = msg.senderUsername != _currentUsername;
+    final isReceiver = !_isMyMessage(msg);
     if (isReceiver && maxViews > 0) {
       final viewed = await _limitedMediaViewedCount(msg);
       if (viewed >= maxViews) {
@@ -2652,20 +3512,15 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     final groupId = _activeGroupId;
     if (groupId == null || groupId.trim().isEmpty) return;
 
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const AppText('الخروج من المجموعة'),
-        content: AppText('هل تريد الخروج من "${_activeGroupName ?? 'المجموعة'}"؟'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const AppText('إلغاء')),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const AppText('خروج'),
-          ),
-        ],
-      ),
+    final confirm = await AppDialog.confirm(
+      context,
+      title: 'الخروج من المجموعة',
+      message: 'هل تريد الخروج من "${_activeGroupName ?? 'المجموعة'}"؟',
+      confirmText: 'خروج',
+      cancelText: 'إلغاء',
+      type: AppDialogType.danger,
+      destructive: true,
+      icon: Icons.logout_rounded,
     );
     if (confirm != true) return;
 
@@ -2741,30 +3596,26 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
     try {
       if (!mounted) return;
-      final newName = await showDialog<String>(
-        context: pageContext,
-        useRootNavigator: true,
-        builder: (dialogCtx) => AlertDialog(
-          title: const AppText('تغيير اسم المجموعة'),
-          content: TextField(
-            controller: ctrl,
-            autofocus: true,
-            maxLength: 40,
-            textInputAction: TextInputAction.done,
-            decoration: InputDecoration(labelText: context.tr('اسم المجموعة')),
-            onSubmitted: (v) => Navigator.of(dialogCtx, rootNavigator: true).pop(v.trim()),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogCtx, rootNavigator: true).pop(),
-              child: const AppText('إلغاء'),
-            ),
-            ElevatedButton(
-              onPressed: () => Navigator.of(dialogCtx, rootNavigator: true).pop(ctrl.text.trim()),
-              child: const AppText('حفظ'),
-            ),
-          ],
+      final newName = await AppDialog.custom<String>(
+        pageContext,
+        title: 'تغيير اسم المجموعة',
+        type: AppDialogType.question,
+        icon: Icons.edit_rounded,
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          maxLength: 40,
+          textInputAction: TextInputAction.done,
+          decoration: InputDecoration(labelText: context.tr('اسم المجموعة')),
+          onSubmitted: (v) => Navigator.of(pageContext, rootNavigator: true).pop(v.trim()),
         ),
+        actions: <AppDialogAction<String>>[
+          const AppDialogAction<String>.secondary(text: 'إلغاء'),
+          AppDialogAction<String>.primary(
+            text: 'حفظ',
+            onPressed: () => Navigator.of(pageContext, rootNavigator: true).pop(ctrl.text.trim()),
+          ),
+        ],
       );
 
       final clean = newName?.trim() ?? '';
@@ -2945,76 +3796,289 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     final selected = <String>{};
     final nameCtrl = TextEditingController();
     final queryCtrl = TextEditingController();
-    List<Map<String, dynamic>> visible = List<Map<String, dynamic>>.from(_users.where((u) => SupabaseService.displayUsername((u['username'] ?? '').toString()) != _currentUsername));
 
-    await showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setLocal) => AlertDialog(
-          title: const AppText('إنشاء مجموعة'),
-          content: SizedBox(
-            width: double.maxFinite,
-            height: 430,
-            child: Column(
-              children: [
-                TextField(controller: nameCtrl, decoration: InputDecoration(labelText: context.tr('اسم المجموعة'))),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: queryCtrl,
-                  decoration: InputDecoration(prefixIcon: Icon(Icons.search_rounded), hintText: context.tr('ابحث عن عضو')),
-                  onChanged: (v) => setLocal(() {
-                    final q = v.trim().toLowerCase();
-                    visible = _users.where((u) {
-                      final username = SupabaseService.displayUsername((u['username'] ?? '').toString());
-                      if (username == _currentUsername) return false;
-                      final name = (u['name'] ?? u['profileName'] ?? username).toString().toLowerCase();
-                      return q.isEmpty || username.toLowerCase().contains(q) || name.contains(q);
-                    }).toList();
-                  }),
-                ),
-                const SizedBox(height: 8),
-                Expanded(
-                  child: ListView.builder(
-                    itemCount: visible.length,
-                    itemBuilder: (_, i) {
-                      final u = visible[i];
-                      final username = SupabaseService.displayUsername((u['username'] ?? '').toString());
-                      final avatar = _fileImage((u['avatar_url'] ?? u['imagePath'] ?? u['profileImagePath'])?.toString());
-                      return CheckboxListTile(
-                        value: selected.contains(username),
-                        onChanged: (v) => setLocal(() => v == true ? selected.add(username) : selected.remove(username)),
-                        title: AppText((u['name'] ?? u['profileName'] ?? username).toString()),
-                        subtitle: AppText(username),
-                        secondary: CircleAvatar(backgroundImage: avatar, child: avatar == null ? const Icon(Icons.person_rounded) : null),
-                      );
-                    },
-                  ),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const AppText('إلغاء')),
-            ElevatedButton(
-              onPressed: () async {
-                if (selected.isEmpty) return;
-                final group = await SupabaseService.createChatGroup(
-                  name: nameCtrl.text.trim().isEmpty ? 'مجموعة جديدة' : nameCtrl.text.trim(),
-                  founderUsername: _currentUsername,
-                  memberUsernames: selected.toList(),
-                );
-                if (ctx.mounted) Navigator.pop(ctx);
-                await _refreshThreadsOnly();
-                await _openGroupById((group['id'] ?? '').toString(), setLoading: true);
-              },
-              child: const AppText('إنشاء'),
-            ),
-          ],
-        ),
-      ),
+    List<Map<String, dynamic>> visible = List<Map<String, dynamic>>.from(
+      _users.where((u) {
+        final username = SupabaseService.displayUsername((u['username'] ?? '').toString());
+        return username != _currentUsername && username != '@user';
+      }),
     );
-    nameCtrl.dispose();
-    queryCtrl.dispose();
+
+    try {
+      await AppDialog.custom<void>(
+        context,
+        title: 'إنشاء مجموعة',
+        type: AppDialogType.question,
+        icon: Icons.group_add_rounded,
+        maxWidth: 500,
+        maxContentHeight: MediaQuery.of(context).size.height * 0.68,
+        content: StatefulBuilder(
+          builder: (ctx, setLocal) {
+            final isDark = Theme.of(ctx).brightness == Brightness.dark;
+            final muted = isDark ? AppColors.darkMuted : AppColors.lightMuted;
+            final cardColor = isDark ? AppColors.darkCard2 : AppColors.lightCard2;
+            final borderColor = isDark ? AppColors.darkBorder : AppColors.lightBorder;
+
+            void applySearch(String value) {
+              final q = value.trim().toLowerCase();
+              setLocal(() {
+                visible = _users.where((u) {
+                  final username = SupabaseService.displayUsername((u['username'] ?? '').toString());
+                  if (username == _currentUsername || username == '@user') return false;
+
+                  final name = (u['name'] ?? u['profileName'] ?? username).toString().toLowerCase();
+                  return q.isEmpty || username.toLowerCase().contains(q) || name.contains(q);
+                }).toList();
+              });
+            }
+
+            return SizedBox(
+              width: double.maxFinite,
+              height: 470,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: AppColors.purple.withValues(alpha: isDark ? 0.16 : 0.10),
+                      borderRadius: BorderRadius.circular(22),
+                      border: Border.all(
+                        color: AppColors.purpleLight.withValues(alpha: isDark ? 0.28 : 0.22),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 42,
+                          height: 42,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: AppColors.purple.withValues(alpha: 0.18),
+                          ),
+                          child: const Icon(Icons.groups_2_rounded, color: AppColors.purpleLight),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const AppText(
+                                'مجموعة دردشة جديدة',
+                                style: TextStyle(fontSize: 15.5, fontWeight: FontWeight.w900),
+                              ),
+                              const SizedBox(height: 3),
+                              AppText(
+                                selected.isEmpty
+                                    ? 'اختر عضو واحد على الأقل لإنشاء المجموعة'
+                                    : 'تم اختيار ${selected.length} عضو',
+                                style: TextStyle(
+                                  color: muted,
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: nameCtrl,
+                    textInputAction: TextInputAction.next,
+                    decoration: InputDecoration(
+                      prefixIcon: const Icon(Icons.badge_rounded),
+                      hintText: ctx.tr('اسم المجموعة'),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: queryCtrl,
+                    textInputAction: TextInputAction.search,
+                    decoration: InputDecoration(
+                      prefixIcon: const Icon(Icons.search_rounded),
+                      hintText: ctx.tr('ابحث عن عضو'),
+                    ),
+                    onChanged: applySearch,
+                  ),
+                  const SizedBox(height: 10),
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 180),
+                    child: selected.isEmpty
+                        ? const SizedBox.shrink(key: ValueKey('no-selected-members'))
+                        : SizedBox(
+                            key: const ValueKey('selected-members'),
+                            height: 38,
+                            child: ListView.separated(
+                              scrollDirection: Axis.horizontal,
+                              itemCount: selected.length,
+                              separatorBuilder: (_, __) => const SizedBox(width: 8),
+                              itemBuilder: (_, i) {
+                                final username = selected.elementAt(i);
+                                return Chip(
+                                  label: AppText(
+                                    username,
+                                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900),
+                                  ),
+                                  deleteIcon: const Icon(Icons.close_rounded, size: 17),
+                                  onDeleted: () => setLocal(() => selected.remove(username)),
+                                  backgroundColor: AppColors.purple.withValues(alpha: isDark ? 0.18 : 0.10),
+                                  side: BorderSide(
+                                    color: AppColors.purpleLight.withValues(alpha: isDark ? 0.35 : 0.25),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                  ),
+                  const SizedBox(height: 10),
+                  Expanded(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: cardColor.withValues(alpha: isDark ? 0.58 : 0.86),
+                        borderRadius: BorderRadius.circular(22),
+                        border: Border.all(color: borderColor),
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: visible.isEmpty
+                          ? Center(
+                              child: Padding(
+                                padding: const EdgeInsets.all(18),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.search_off_rounded, size: 38, color: muted),
+                                    const SizedBox(height: 8),
+                                    AppText(
+                                      'لا توجد نتائج',
+                                      style: TextStyle(color: muted, fontWeight: FontWeight.w900),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            )
+                          : ListView.separated(
+                              padding: const EdgeInsets.symmetric(vertical: 6),
+                              itemCount: visible.length,
+                              separatorBuilder: (_, __) => Divider(height: 1, color: borderColor),
+                              itemBuilder: (_, i) {
+                                final u = visible[i];
+                                final username = SupabaseService.displayUsername((u['username'] ?? '').toString());
+                                final name = (u['name'] ?? u['profileName'] ?? username).toString();
+                                final avatar = _fileImage(
+                                  (u['avatar_url'] ?? u['imagePath'] ?? u['profileImagePath'])?.toString(),
+                                );
+                                final checked = selected.contains(username);
+
+                                return InkWell(
+                                  onTap: () {
+                                    setLocal(() {
+                                      checked ? selected.remove(username) : selected.add(username);
+                                    });
+                                  },
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                    child: Row(
+                                      children: [
+                                        CircleAvatar(
+                                          radius: 22,
+                                          backgroundImage: avatar,
+                                          backgroundColor: AppColors.purple.withValues(alpha: 0.16),
+                                          child: avatar == null
+                                              ? const Icon(Icons.person_rounded, color: AppColors.purpleLight)
+                                              : null,
+                                        ),
+                                        const SizedBox(width: 10),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              AppText(
+                                                name,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(fontWeight: FontWeight.w900),
+                                              ),
+                                              const SizedBox(height: 2),
+                                              AppText(
+                                                username,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: TextStyle(
+                                                  color: muted,
+                                                  fontSize: 12,
+                                                  fontWeight: FontWeight.w700,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        AnimatedContainer(
+                                          duration: const Duration(milliseconds: 180),
+                                          width: 30,
+                                          height: 30,
+                                          decoration: BoxDecoration(
+                                            shape: BoxShape.circle,
+                                            color: checked
+                                                ? AppColors.purple
+                                                : Colors.transparent,
+                                            border: Border.all(
+                                              color: checked ? AppColors.purple : borderColor,
+                                              width: 1.4,
+                                            ),
+                                          ),
+                                          child: checked
+                                              ? const Icon(Icons.check_rounded, size: 19, color: Colors.white)
+                                              : null,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+        actions: <AppDialogAction<void>>[
+          const AppDialogAction<void>.secondary(
+            text: 'إلغاء',
+            icon: Icons.close_rounded,
+          ),
+          AppDialogAction<void>.primary(
+            text: 'إنشاء',
+            icon: Icons.check_rounded,
+            onPressed: () async {
+              if (selected.isEmpty) {
+                NotificationService.showTopError(context.tr('اختر عضو واحد على الأقل لإنشاء المجموعة'));
+                return;
+              }
+
+              final cleanName = nameCtrl.text.trim();
+              final group = await SupabaseService.createChatGroup(
+                name: cleanName.isEmpty ? 'مجموعة جديدة' : cleanName,
+                founderUsername: _currentUsername,
+                memberUsernames: selected.toList(),
+              );
+
+              if (mounted) Navigator.of(context, rootNavigator: true).pop();
+              await _refreshThreadsOnly();
+              await _openGroupById((group['id'] ?? '').toString(), setLoading: true);
+            },
+          ),
+        ],
+      );
+    } finally {
+      nameCtrl.dispose();
+      queryCtrl.dispose();
+    }
   }
 
   void _scrollToBottom() {
@@ -3437,9 +4501,11 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                   final avatar = _fileImage(t.peerAvatarPath);
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 10),
-                    child: GlassCard(
-                      onTap: () => _openThread(t),
-                      child: Row(
+                    child: GestureDetector(
+                      onLongPress: () => _showThreadActions(t),
+                      child: GlassCard(
+                        onTap: () => _openThread(t),
+                        child: Row(
                         children: [
                           CircleAvatar(
                             radius: 28,
@@ -3465,16 +4531,91 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                               ],
                             ),
                           ),
-                          Icon(Icons.chevron_left_rounded, color: isDark ? AppColors.darkMuted : AppColors.lightMuted),
+                          PopupMenuButton<String>(
+                            icon: Icon(Icons.more_vert_rounded, color: isDark ? AppColors.darkMuted : AppColors.lightMuted),
+                            onSelected: (value) {
+                              if (value == 'open') _openThread(t);
+                              if (value == 'delete') _deleteThreadConversation(t);
+                            },
+                            itemBuilder: (_) => const [
+                              PopupMenuItem(
+                                value: 'open',
+                                child: ListTile(
+                                  dense: true,
+                                  contentPadding: EdgeInsets.zero,
+                                  leading: Icon(Icons.open_in_new_rounded),
+                                  title: AppText('فتح الدردشة'),
+                                ),
+                              ),
+                              PopupMenuItem(
+                                value: 'delete',
+                                child: ListTile(
+                                  dense: true,
+                                  contentPadding: EdgeInsets.zero,
+                                  leading: Icon(Icons.delete_sweep_rounded, color: AppColors.danger),
+                                  title: AppText('حذف الدردشة', style: TextStyle(color: AppColors.danger, fontWeight: FontWeight.w900)),
+                                ),
+                              ),
+                            ],
+                          ),
                         ],
                       ),
                     ),
-                  );
+                  ),
+                );
                 },
               ),
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildInstantTranslationBanner(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final target = _translationTargetLabel();
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: AppColors.purple.withValues(alpha: isDark ? .16 : .10),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.purple.withValues(alpha: .26)),
+      ),
+      child: Row(
+        children: [
+          _instantTranslationLoading
+              ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.purple))
+              : const Icon(Icons.translate_rounded, color: AppColors.purple, size: 19),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              '${context.tr('الترجمة الفورية مفعلة')} • ${context.tr('لغة العرض')}: $target',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12.5),
+            ),
+          ),
+          InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: _openInstantTranslationSettings,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+              child: AppText('تغيير', style: TextStyle(color: AppColors.purple, fontSize: 12, fontWeight: FontWeight.w900)),
+            ),
+          ),
+          const SizedBox(width: 4),
+          InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: () => _setInstantTranslationEnabled(false),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+              child: AppText('إيقاف', style: TextStyle(color: isDark ? Colors.white70 : AppColors.lightMuted, fontSize: 12, fontWeight: FontWeight.w800)),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -3488,6 +4629,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       appBar: null,
       body: Column(children: [
         _buildConversationHeader(context, avatar),
+        if (_instantTranslationEnabled) _buildInstantTranslationBanner(context),
         Expanded(
           child: messages.isEmpty
               ? Center(child: AppText('ابدأ أول رسالة الآن', style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted)))
@@ -3525,7 +4667,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
               final reply = _replyToMessage;
               if (reply == null) return const SizedBox.shrink();
               return _ReplyPreviewBar(
-                sender: reply.senderUsername == _currentUsername ? 'أنت' : (reply.senderName ?? reply.senderUsername),
+                sender: _sameChatUsername(reply.senderUsername, _currentUsername) ? 'أنت' : (reply.senderName ?? reply.senderUsername),
                 text: _messagePreview(reply),
                 onClose: () => setState(() => _replyToMessage = null),
               );
@@ -3735,6 +4877,12 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                 ],
               ),
             ),
+            _HeaderActionButton(
+              tooltip: context.tr('إعدادات الترجمة الفورية'),
+              icon: Icons.translate_rounded,
+              onTap: _openInstantTranslationSettings,
+            ),
+            const SizedBox(width: 6),
             if (!_isGroup) ...[
               _HeaderActionButton(
                 tooltip: context.tr('اتصال صوتي'),
@@ -3782,18 +4930,22 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
   Widget _buildMessageBubble(BuildContext context, _DirectMessage msg) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final isMe = msg.senderUsername == _currentUsername;
+    final isMe = _isMyMessage(msg);
     final user = _accountByUsername(_users, msg.senderUsername);
     final name = msg.senderName?.trim().isNotEmpty == true ? msg.senderName! : (user?['name'] ?? user?['profileName'] ?? msg.senderUsername).toString();
     final avatarPath = msg.senderAvatar ?? (user?['avatar_url'] ?? user?['imagePath'] ?? user?['profileImagePath'])?.toString();
     final avatar = _fileImage(avatarPath);
     final isHighlighted = _highlightMessageId == msg.id;
     final bubbleKey = _messageKeys.putIfAbsent(msg.id, () => GlobalKey());
+    final displayText = _messageDisplayText(msg);
+    final displayReplyText = _replyDisplayText(msg);
+    final translatedByAi = _isShowingTranslatedText(msg);
 
     return Padding(
       key: bubbleKey,
       padding: const EdgeInsets.only(bottom: 10),
       child: Row(
+        textDirection: TextDirection.ltr,
         mainAxisAlignment: isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
@@ -3849,7 +5001,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                     AppText(name, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: isMe ? Colors.white70 : AppColors.purple)),
                     if ((msg.replyText ?? '').trim().isNotEmpty) ...[
                       const SizedBox(height: 5),
-                      _InlineReplyPreview(sender: msg.replySender ?? '', text: msg.replyText ?? '', isMe: isMe, onTap: () => _jumpToRepliedMessage(msg.replyToId)),
+                      _InlineReplyPreview(sender: msg.replySender ?? '', text: displayReplyText, isMe: isMe, onTap: () => _jumpToRepliedMessage(msg.replyToId)),
                     ],
                     const SizedBox(height: 3),
                     if (msg.isCallHistory)
@@ -3870,19 +5022,31 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                     else if (msg.isMediaGroup)
                         _ChatMediaGalleryMessage(
                           items: msg.mediaItems,
-                          caption: msg.text,
+                          caption: displayText,
                           isMe: isMe,
                           limitedMaxViews: msg.limitedMediaMaxViews,
                           onOpen: (index) => _openMediaViewer(msg, initialIndex: index),
                         )
                       else if (msg.isImage)
-                          _ChatImageMessage(url: msg.mediaUrl ?? '', caption: msg.text, isMe: isMe, onTap: () => _openMediaViewer(msg), limitedMaxViews: msg.limitedMediaMaxViews)
+                          _ChatImageMessage(url: msg.mediaUrl ?? '', caption: displayText, isMe: isMe, onTap: () => _openMediaViewer(msg), limitedMaxViews: msg.limitedMediaMaxViews)
                         else if (msg.isVideo)
-                            _ChatVideoMessage(url: msg.mediaUrl ?? '', caption: msg.text, isMe: isMe, onTap: () => _openMediaViewer(msg), limitedMaxViews: msg.limitedMediaMaxViews)
+                            _ChatVideoMessage(url: msg.mediaUrl ?? '', caption: displayText, isMe: isMe, onTap: () => _openMediaViewer(msg), limitedMaxViews: msg.limitedMediaMaxViews)
                           else if (msg.isStoryReply || msg.isStoryLike)
                             _StoryReferenceMessage(message: msg, isMe: isMe, onOpen: () => _openStoryFromMessageReference(msg))
                           else
-                            AppText(msg.text, style: TextStyle(color: isMe ? Colors.white : null, height: 1.35)),
+                            Text(
+                              displayText,
+                              textDirection: _directionForDynamicText(displayText),
+                              style: TextStyle(color: isMe ? Colors.white : null, height: 1.35),
+                            ),
+                    if (translatedByAi) ...[
+                      const SizedBox(height: 5),
+                      Row(mainAxisSize: MainAxisSize.min, children: [
+                        Icon(Icons.auto_awesome_rounded, size: 11, color: isMe ? Colors.white70 : AppColors.purple),
+                        const SizedBox(width: 4),
+                        AppText('مترجمة بالذكاء الاصطناعي', style: TextStyle(fontSize: 10.5, color: isMe ? Colors.white70 : (isDark ? AppColors.darkMuted : AppColors.lightMuted), fontWeight: FontWeight.w700)),
+                      ]),
+                    ],
                     const SizedBox(height: 4),
                     Row(mainAxisSize: MainAxisSize.min, children: [
                       AppText(_formatTime(msg.createdAt), style: TextStyle(fontSize: 10.5, color: isMe ? Colors.white70 : (isDark ? AppColors.darkMuted : AppColors.lightMuted))),
@@ -4639,7 +5803,7 @@ class _InlineReplyPreview extends StatelessWidget {
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           AppText(sender.isEmpty ? 'رد' : sender, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10.5, color: isMe ? Colors.white : AppColors.purple)),
           const SizedBox(height: 2),
-          AppText(text, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 11, color: isMe ? Colors.white70 : null)),
+          Text(text, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 11, color: isMe ? Colors.white70 : null)),
         ]),
       ),
     );
@@ -6177,7 +7341,7 @@ class _ChatImageMessage extends StatelessWidget {
         if ((caption ?? '').trim().isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(top: 8),
-            child: AppText(
+            child: Text(
               caption!,
               style: const TextStyle(color: Colors.white),
             ),
@@ -6236,7 +7400,7 @@ class _ChatVideoMessage extends StatelessWidget {
         if ((caption ?? '').trim().isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(top: 8),
-            child: AppText(
+            child: Text(
               caption!,
               style: const TextStyle(color: Colors.white),
             ),
@@ -6447,7 +7611,7 @@ class _ChatMediaGalleryMessage extends StatelessWidget {
           const SizedBox(height: 7),
           ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 218),
-            child: AppText(
+            child: Text(
               cleanCaption,
               style: TextStyle(color: isMe ? Colors.white : null, height: 1.35),
             ),

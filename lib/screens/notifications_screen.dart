@@ -467,7 +467,11 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         String title;
         String body;
         IconData icon;
-        if (type == 'community_report_rejected' || type == 'report_rejected_reporter') {
+        if (type == 'community_post_hidden') {
+          title = 'تم عمل هايد لتغريدتك';
+          body = text.trim().isEmpty ? 'تم إخفاء تغريدتك داخل المجتمع بسبب مخالفة أحد القوانين.' : text;
+          icon = Icons.visibility_off_rounded;
+        } else if (type == 'community_report_rejected' || type == 'report_rejected_reporter') {
           title = 'نتيجة البلاغ';
           body = text.trim().isEmpty ? 'راجعنا البلاغ، والتغريدة سليمة ولا يوجد عليها إجراء.' : text;
           icon = Icons.verified_user_rounded;
@@ -595,7 +599,13 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             String title;
             String body;
             IconData icon;
-            if (type == 'community_report_rejected' || type == 'report_rejected_reporter') {
+            if (type == 'community_post_hidden') {
+              title = 'تم عمل هايد لتغريدتك';
+              body = (item['text'] ?? '').toString().trim().isEmpty
+                  ? 'تم إخفاء تغريدتك داخل ${(item['communityName'] ?? 'المجتمع').toString()} بسبب مخالفة أحد القوانين.'
+                  : (item['text'] ?? '').toString();
+              icon = Icons.visibility_off_rounded;
+            } else if (type == 'community_report_rejected' || type == 'report_rejected_reporter') {
               title = 'نتيجة البلاغ';
               body = (item['text'] ?? '').toString().trim().isEmpty
                   ? 'راجعنا البلاغ داخل ${(item['communityName'] ?? 'المجتمع').toString()}، والتغريدة سليمة ولا يوجد عليها إجراء.'
@@ -985,11 +995,13 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           itemCount: _items.length,
           itemBuilder: (context, i) {
             final n = _items[i];
-            return InkWell(
-              borderRadius: BorderRadius.circular(22),
-              onTap: (n.postId ?? '').isEmpty ? () => _openNotificationDetails(n) : () => _openPostFromNotification(n),
-              child: GlassCard(
-                child: ListTile(
+            return Padding(
+              padding: EdgeInsets.only(bottom: i == _items.length - 1 ? 0 : 14),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(22),
+                onTap: (n.postId ?? '').isEmpty ? () => _openNotificationDetails(n) : () => _openPostFromNotification(n),
+                child: GlassCard(
+                  child: ListTile(
                   contentPadding: EdgeInsets.zero,
                   leading: Stack(
                     clipBehavior: Clip.none,
@@ -1030,6 +1042,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                       ),
                     ],
                   ),
+                ),
                 ),
               ),
             ).animate().fadeIn(delay: (45 * i).ms).slideX(begin: 0.04);

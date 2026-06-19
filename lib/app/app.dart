@@ -166,7 +166,12 @@ class _AuthGateState extends State<AuthGate> {
 
     await Future.wait<void>([
       // على الويب نخلي الإشعارات والمكالمات خارج التشغيل حتى لا تعطل TestSprite.
-      if (!kIsWeb) _safe(() => PushNotificationService.registerTokenForCurrentUser()),
+      // initialize + syncDeviceAndToken مهم جدًا بعد وجود جلسة محفوظة حتى لا يبقى المستخدم بدون FCM token أو device id.
+      if (!kIsWeb)
+        _safe(() async {
+          await PushNotificationService.initialize();
+          await PushNotificationService.syncDeviceAndToken();
+        }),
       _safe(() => RealtimeNotificationService.start()),
       _safe(() => FeedScreen.preloadForSplash(limit: 24)),
     ]);

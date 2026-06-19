@@ -35,6 +35,7 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
   static const String _currentUserKey = 'respect_current_user_id';
   static const String _communitiesKey = 'respect_communities_v1';
   static const String _followingKey = 'respect_following_v1';
+  static const String _localBlockedUsersKey = 'respect_local_blocked_users_v1';
 
   final TextEditingController _searchCtrl = TextEditingController();
   late final TabController _tabController = TabController(length: 3, vsync: this);
@@ -57,6 +58,7 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
   List<CityCommunity> _communities = [];
   Map<String, List<String>> _following = {};
   Set<String> _postNotificationTargets = <String>{};
+  Set<String> _localBlockedUsers = <String>{};
   bool _loading = true;
 
   @override
@@ -154,6 +156,18 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
       } catch (_) { _scannerSafeIgnore(); }
     }
 
+
+    final localBlockedUsers = <String>{};
+    final localBlockedRaw = prefs.getString(_localBlockedUsersKey);
+    if (localBlockedRaw != null && localBlockedRaw.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(localBlockedRaw);
+        if (decoded is List) {
+          localBlockedUsers.addAll(decoded.map((e) => _cleanUsername(e.toString())));
+        }
+      } catch (_) { _scannerSafeIgnore(); }
+    }
+
     try {
       _postNotificationTargets = await SupabaseService.getEnabledPostNotificationTargets(_cleanUsername((current?['username'] ?? currentId ?? '@user').toString()));
     } catch (_) {
@@ -170,6 +184,7 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
       _accounts = accounts;
       _communities = communities;
       _following = following;
+      _localBlockedUsers = localBlockedUsers;
       _currentName = (current?['profileName'] ?? current?['name'] ?? 'User').toString();
       _currentUsername = _cleanUsername((current?['username'] ?? currentId ?? '@user').toString());
       _currentAvatarPath = (current?['imagePath'] ?? current?['profileImagePath'] ?? current?['avatar_url'])?.toString();
@@ -364,6 +379,7 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
           currentName: _currentName,
           currentAvatarPath: _currentAvatarPath,
           avatarProviderForPath: _imageProvider,
+          blockedUsernames: _localBlockedUsers,
           onChanged: () async {
             if (mounted) setState(() {});
             await _saveCommunities();

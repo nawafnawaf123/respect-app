@@ -16,10 +16,12 @@ import 'package:webview_flutter/webview_flutter.dart';
 
 import '../theme/app_theme.dart';
 import '../widgets/glass_card.dart';
+import '../widgets/app_dialog.dart';
 import '../widgets/primary_button.dart';
 import '../services/supabase_service.dart';
 import '../services/notification_service.dart';
 import 'search_screen.dart';
+import 'feed_screen.dart';
 
 import '../app/app_language.dart';
 void _scannerSafeIgnore([Object? error, StackTrace? stackTrace]) {}
@@ -1476,17 +1478,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
       if (items.isEmpty) continue;
 
-      final keepAdding = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-          title: const AppText('إضافة عنصر آخر؟', style: TextStyle(fontWeight: FontWeight.w900)),
-          content: AppText('تم اختيار ${items.length} عنصر. تقدر تضيف صور أو فيديوهات زيادة قبل النشر.'),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context, false), child: const AppText('نشر الآن')),
-            FilledButton(onPressed: () => Navigator.pop(context, true), child: const AppText('إضافة المزيد')),
-          ],
-        ),
+      final keepAdding = await AppDialog.confirm(
+        context,
+        title: 'إضافة عنصر آخر؟',
+        message: 'تم اختيار ${items.length} عنصر. تقدر تضيف صور أو فيديوهات زيادة قبل النشر.',
+        confirmText: 'إضافة المزيد',
+        cancelText: 'نشر الآن',
+        type: AppDialogType.question,
+        icon: Icons.add_photo_alternate_rounded,
       );
 
       if (keepAdding != true) break;
@@ -1593,6 +1592,244 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
     patch(_profilePosts);
     patch(_profileMedia);
+  }
+
+  Map<String, dynamic>? _profilePostById(String postId) {
+    final id = postId.trim();
+    if (id.isEmpty) return null;
+    for (final post in _profilePosts) {
+      if (_postId(post) == id) return post;
+    }
+    for (final post in _profileMedia) {
+      if (_postId(post) == id) return post;
+    }
+    return null;
+  }
+
+  String _formatProfilePostTime(String raw) {
+    final value = raw.trim();
+    if (value.isEmpty) return 'الآن';
+    final dt = DateTime.tryParse(value)?.toLocal();
+    if (dt == null) return value;
+    final diff = DateTime.now().difference(dt);
+    if (diff.inMinutes < 1) return 'الآن';
+    if (diff.inMinutes < 60) return 'قبل ${diff.inMinutes}د';
+    if (diff.inHours < 24) return 'قبل ${diff.inHours}س';
+    if (diff.inDays < 7) return 'قبل ${diff.inDays}ي';
+    return '${dt.year}/${dt.month.toString().padLeft(2, '0')}/${dt.day.toString().padLeft(2, '0')}';
+  }
+
+  CityMediaType? _profileMediaTypeFromMap(Map<String, dynamic> post) {
+    final image = (post['image_url'] ?? post['imageUrl'] ?? '').toString().trim();
+    final video = (post['video_url'] ?? post['videoUrl'] ?? '').toString().trim();
+    if (image.isNotEmpty) return CityMediaType.image;
+    if (video.isNotEmpty) return CityMediaType.video;
+
+    final rawType = (post['mediaType'] ?? post['media_type'] ?? '').toString().trim().toLowerCase();
+    if (rawType == 'video') return CityMediaType.video;
+    if (rawType == 'gif') return CityMediaType.gif;
+    if (rawType == 'image') return CityMediaType.image;
+
+    final mediaPath = (post['mediaPath'] ?? post['media_url'] ?? '').toString().trim().split('?').first.toLowerCase();
+    if (mediaPath.endsWith('.mp4') || mediaPath.endsWith('.mov') || mediaPath.endsWith('.m4v') || mediaPath.endsWith('.webm') || mediaPath.endsWith('.mkv')) {
+      return CityMediaType.video;
+    }
+    if (mediaPath.endsWith('.gif')) return CityMediaType.gif;
+    if (mediaPath.endsWith('.jpg') || mediaPath.endsWith('.jpeg') || mediaPath.endsWith('.png') || mediaPath.endsWith('.webp')) {
+      return CityMediaType.image;
+    }
+    return null;
+  }
+
+  String? _profileMediaPathFromMap(Map<String, dynamic> post) {
+    final image = (post['image_url'] ?? post['imageUrl'] ?? '').toString().trim();
+    if (image.isNotEmpty) return image;
+
+    final video = (post['video_url'] ?? post['videoUrl'] ?? '').toString().trim();
+    if (video.isNotEmpty) return video;
+
+    final media = (post['mediaPath'] ?? post['media_url'] ?? '').toString().trim();
+    final rawType = (post['mediaType'] ?? post['media_type'] ?? '').toString().trim().toLowerCase();
+    if (media.isEmpty || rawType == 'voice' || rawType == 'audio') return null;
+    return media;
+  }
+
+  String? _profileVoicePathFromMap(Map<String, dynamic> post) {
+    final voice = (post['voice_url'] ?? post['voiceUrl'] ?? post['voicePath'] ?? '').toString().trim();
+    if (voice.isNotEmpty) return voice;
+
+    final media = (post['mediaPath'] ?? post['media_url'] ?? '').toString().trim();
+    final rawType = (post['mediaType'] ?? post['media_type'] ?? '').toString().trim().toLowerCase();
+    if (media.isNotEmpty && (rawType == 'voice' || rawType == 'audio')) return media;
+    return null;
+  }
+
+  List<CityReply> _localRepliesFromProfilePost(Map<String, dynamic> post) {
+    final rawReplies = post['replies'];
+    if (rawReplies is! List) return <CityReply>[];
+    return rawReplies
+        .whereType<Map>()
+        .map((reply) => CityReply.fromJson(reply.map((key, value) => MapEntry(key.toString(), value))))
+        .toList();
+  }
+
+  Future<CityPost> _cityPostFromProfilePost(Map<String, dynamic> post) async {
+    final id = _postId(post);
+    final username = SupabaseService.displayUsername((post['username'] ?? _usernameCtrl.text).toString());
+    final createdAt = (post['created_at'] ?? post['createdAt'] ?? post['time'] ?? '').toString();
+    final mediaPath = _profileMediaPathFromMap(post);
+    final mediaType = _profileMediaTypeFromMap(post);
+    final voicePath = _profileVoicePathFromMap(post);
+    var replies = _localRepliesFromProfilePost(post);
+
+    if (id.isNotEmpty) {
+      try {
+        final freshReplies = await SupabaseService
+            .getPostReplies(id, currentUsername: _cleanUsername(_usernameCtrl.text))
+            .timeout(const Duration(seconds: 7));
+        replies = freshReplies
+            .whereType<Map>()
+            .map((reply) => CityReply.fromJson(reply.map((key, value) => MapEntry(key.toString(), value))))
+            .toList();
+      } catch (_) { _scannerSafeIgnore(); }
+    }
+
+    return CityPost(
+      id: id.isEmpty ? DateTime.now().microsecondsSinceEpoch.toString() : id,
+      user: (post['name'] ?? post['user'] ?? displayNameForPostFallback()).toString(),
+      username: username,
+      text: _postText(post),
+      time: _formatProfilePostTime(createdAt),
+      avatarPath: (post['avatar_url'] ?? post['avatarPath'] ?? _profileImagePath ?? '').toString().trim(),
+      mediaPath: mediaPath,
+      mediaType: mediaPath == null ? null : mediaType,
+      voicePath: voicePath,
+      voiceSeconds: _safeInt(post['voice_seconds'] ?? post['voiceSeconds']),
+      replies: replies,
+      likes: _safeInt(post['likes']),
+      reposts: _safeInt(post['reposts']),
+      shares: _safeInt(post['shares']),
+      views: _safeInt(post['views']),
+      replyCount: replies.isNotEmpty
+          ? replies.length
+          : _safeInt(post['reply_count'] ?? post['replyCount'] ?? post['comments']),
+      isLiked: _likedPostIds.contains(id) || post['isLiked'] == true || post['is_liked'] == true,
+      isFavorite: _savedPostIds.contains(id) || post['isSaved'] == true || post['is_saved'] == true,
+      isReposted: _repostedPostIds.contains(id) || post['isReposted'] == true || post['is_reposted'] == true,
+      timelineSortMillis: DateTime.tryParse(createdAt)?.toLocal().millisecondsSinceEpoch,
+      authorVerified: SupabaseService.truthy(post['author_verified'] ?? post['authorVerified'] ?? post['is_verified'] ?? post['verified']) || _profileVerified,
+      subscriptionTier: (post['author_subscription_tier'] ?? post['subscriptionTier'] ?? post['subscription_tier'] ?? _profileSubscriptionTier).toString(),
+      authorSubscriptionPriority: _safeInt(post['author_subscription_priority'] ?? post['authorSubscriptionPriority']),
+      authorSubscriptionBoostUntil: (post['author_subscription_boost_until'] ?? post['authorSubscriptionBoostUntil'])?.toString(),
+      authorSubscriptionLabel: (post['author_subscription_label'] ?? post['authorSubscriptionLabel'] ?? '').toString(),
+      audience: (post['audience'] ?? 'public').toString(),
+      communityId: (post['community_id'] ?? post['communityId'] ?? '').toString(),
+      communityName: (post['community_name'] ?? post['communityName'] ?? '').toString(),
+      hiddenFromCommunity: post['hiddenFromCommunity'] == true || post['hidden_from_community'] == true,
+      pinnedInCommunity: post['pinnedInCommunity'] == true || post['pinned_in_community'] == true,
+    );
+  }
+
+  String displayNameForPostFallback() {
+    final name = _nameCtrl.text.trim();
+    if (name.isNotEmpty) return name;
+    return 'User';
+  }
+
+  void _syncProfileMapFromCityPost(CityPost post) {
+    final result = <String, dynamic>{
+      'likes': post.likes,
+      'reposts': post.reposts,
+      'shares': post.shares,
+      'views': post.views,
+      'reply_count': post.replyCount,
+      'comments': post.replyCount,
+    };
+
+    setState(() {
+      _patchPostCounters(post.id, result);
+      if (post.isLiked) {
+        _likedPostIds.add(post.id);
+      } else {
+        _likedPostIds.remove(post.id);
+      }
+      if (post.isReposted) {
+        _repostedPostIds.add(post.id);
+      } else {
+        _repostedPostIds.remove(post.id);
+      }
+      if (post.isFavorite) {
+        _savedPostIds.add(post.id);
+      } else {
+        _savedPostIds.remove(post.id);
+      }
+    });
+  }
+
+  Future<void> _toggleLikeCityPost(CityPost cityPost, Map<String, dynamic> sourcePost) async {
+    await _toggleLikePost(sourcePost);
+    final latest = _profilePostById(cityPost.id) ?? sourcePost;
+    cityPost
+      ..isLiked = _likedPostIds.contains(cityPost.id)
+      ..likes = _safeInt(latest['likes']);
+  }
+
+  Future<void> _toggleRepostCityPost(CityPost cityPost, Map<String, dynamic> sourcePost) async {
+    await _toggleRepostPost(sourcePost);
+    final latest = _profilePostById(cityPost.id) ?? sourcePost;
+    cityPost
+      ..isReposted = _repostedPostIds.contains(cityPost.id)
+      ..reposts = _safeInt(latest['reposts']);
+  }
+
+  Future<void> _toggleSaveCityPost(CityPost cityPost, Map<String, dynamic> sourcePost) async {
+    await _toggleSavePost(sourcePost);
+    cityPost.isFavorite = _savedPostIds.contains(cityPost.id);
+  }
+
+  Future<void> _shareCityPost(CityPost cityPost) async {
+    cityPost.shares += 1;
+    try {
+      final counters = await SupabaseService.incrementPostShare(cityPost.id);
+      cityPost.shares = counters['shares'] ?? cityPost.shares;
+    } catch (_) { _scannerSafeIgnore(); }
+
+    await Clipboard.setData(ClipboardData(text: '${cityPost.user} ${cityPost.username}\n\n${cityPost.text}'.trim()));
+    if (!mounted) return;
+    setState(() => _patchPostCounters(cityPost.id, {'shares': cityPost.shares}));
+    NotificationService.showTopNotification(context.tr('تم نسخ التغريدة'));
+  }
+
+  Future<void> _openProfilePostReplies(Map<String, dynamic> post) async {
+    final id = _postId(post);
+    if (id.isEmpty) return;
+
+    final cityPost = await _cityPostFromProfilePost(post);
+    if (!mounted) return;
+
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => RepliesScreen(
+          post: cityPost,
+          currentName: displayNameForPostFallback(),
+          currentUsername: _cleanUsername(_usernameCtrl.text),
+          currentAvatarPath: _profileImagePath,
+          currentAvatarProvider: _fileImage(_profileImagePath),
+          avatarProviderForPath: _fileImage,
+          onLike: (p) => _toggleLikeCityPost(p, post),
+          onFavorite: (p) => _toggleSaveCityPost(p, post),
+          onRepost: (p) => _toggleRepostCityPost(p, post),
+          onShare: _shareCityPost,
+          onChanged: () async {
+            if (mounted) _syncProfileMapFromCityPost(cityPost);
+          },
+        ),
+      ),
+    );
+
+    if (!mounted) return;
+    _syncProfileMapFromCityPost(cityPost);
+    unawaited(_loadProfileContent());
   }
 
   Future<void> _toggleLikePost(Map<String, dynamic> post) async {
@@ -1757,16 +1994,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Future<void> _deletePostFromProfile(Map<String, dynamic> post) async {
     final id = _postId(post);
     if (id.isEmpty) return;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const AppText('حذف التغريدة؟'),
-        content: const AppText('سيتم حذف التغريدة وتفاعلاتها وردودها. لا يمكن التراجع عن هذا الإجراء.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const AppText('إلغاء')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), style: FilledButton.styleFrom(backgroundColor: Colors.red), child: const AppText('حذف')),
-        ],
-      ),
+    final ok = await AppDialog.delete(
+      context,
+      title: 'حذف التغريدة؟',
+      message: 'سيتم حذف التغريدة وتفاعلاتها وردودها. لا يمكن التراجع عن هذا الإجراء.',
+      confirmText: 'حذف',
+      cancelText: 'إلغاء',
     );
     if (ok != true) return;
     try {
@@ -2329,6 +2562,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     onLike: _toggleLikePost,
                     onRepost: _toggleRepostPost,
                     onSave: _toggleSavePost,
+                    onOpenReplies: _openProfilePostReplies,
                     onOptions: _openPostOptions,
                     onRefresh: _refreshProfileTimeline,
                   ),
@@ -2506,17 +2740,12 @@ class _ProfileStoryViewerState extends State<_ProfileStoryViewer> {
 
   Future<void> _deleteCurrentStoryItem() async {
     if (!widget.ownerMode || _storyId.isEmpty) return;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        title: const AppText('حذف هذا العنصر؟', style: TextStyle(fontWeight: FontWeight.w900)),
-        content: const AppText('سيتم حذف الصورة أو الفيديو الحالي فقط من الستوري.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const AppText('إلغاء')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const AppText('حذف')),
-        ],
-      ),
+    final ok = await AppDialog.delete(
+      context,
+      title: 'حذف هذا العنصر؟',
+      message: 'سيتم حذف الصورة أو الفيديو الحالي فقط من الستوري.',
+      confirmText: 'حذف',
+      cancelText: 'إلغاء',
     );
     if (ok != true) return;
     await SupabaseService.deleteStoryItem(storyId: _storyId, username: _ownerUsername);
@@ -2535,17 +2764,12 @@ class _ProfileStoryViewerState extends State<_ProfileStoryViewer> {
 
   Future<void> _deleteAllStories() async {
     if (!widget.ownerMode) return;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        title: const AppText('حذف الستوري كامل؟', style: TextStyle(fontWeight: FontWeight.w900)),
-        content: const AppText('سيتم حذف كل صور وفيديوهات الستوري الحالية.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const AppText('إلغاء')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const AppText('حذف الكل')),
-        ],
-      ),
+    final ok = await AppDialog.delete(
+      context,
+      title: 'حذف الستوري كامل؟',
+      message: 'سيتم حذف كل صور وفيديوهات الستوري الحالية.',
+      confirmText: 'حذف الكل',
+      cancelText: 'إلغاء',
     );
     if (ok != true) return;
     await SupabaseService.deleteAllActiveStoriesForUser(_ownerUsername);
@@ -3621,6 +3845,7 @@ class _ProfileContentTabs extends StatelessWidget {
   final Future<void> Function(Map<String, dynamic> post) onLike;
   final Future<void> Function(Map<String, dynamic> post) onRepost;
   final Future<void> Function(Map<String, dynamic> post) onSave;
+  final Future<void> Function(Map<String, dynamic> post) onOpenReplies;
   final void Function(Map<String, dynamic> post) onOptions;
   final Future<void> Function() onRefresh;
 
@@ -3645,6 +3870,7 @@ class _ProfileContentTabs extends StatelessWidget {
     required this.onLike,
     required this.onRepost,
     required this.onSave,
+    required this.onOpenReplies,
     required this.onOptions,
     required this.onRefresh,
   });
@@ -3670,6 +3896,7 @@ class _ProfileContentTabs extends StatelessWidget {
       onLike: () => onLike(p),
       onRepost: () => onRepost(p),
       onSave: () => onSave(p),
+      onOpenReplies: () => onOpenReplies(p),
       onOptions: () => onOptions(p),
     );
   }
@@ -3918,6 +4145,7 @@ class _ProfilePostsList extends StatelessWidget {
   final Future<void> Function(Map<String, dynamic> post) onLike;
   final Future<void> Function(Map<String, dynamic> post) onRepost;
   final Future<void> Function(Map<String, dynamic> post) onSave;
+  final Future<void> Function(Map<String, dynamic> post) onOpenReplies;
   final void Function(Map<String, dynamic> post) onOptions;
   final Future<void> Function() onRefresh;
 
@@ -3938,6 +4166,7 @@ class _ProfilePostsList extends StatelessWidget {
     required this.onLike,
     required this.onRepost,
     required this.onSave,
+    required this.onOpenReplies,
     required this.onOptions,
     required this.onRefresh,
     this.mediaOnly = false,
@@ -3984,6 +4213,7 @@ class _ProfilePostsList extends StatelessWidget {
             onLike: () => onLike(p),
             onRepost: () => onRepost(p),
             onSave: () => onSave(p),
+            onOpenReplies: () => onOpenReplies(p),
             onOptions: () => onOptions(p),
           );
         },
@@ -4009,6 +4239,7 @@ class _ProfileTweetCard extends StatelessWidget {
   final VoidCallback onLike;
   final VoidCallback onRepost;
   final VoidCallback onSave;
+  final VoidCallback onOpenReplies;
   final VoidCallback onOptions;
 
   const _ProfileTweetCard({
@@ -4028,6 +4259,7 @@ class _ProfileTweetCard extends StatelessWidget {
     required this.onLike,
     required this.onRepost,
     required this.onSave,
+    required this.onOpenReplies,
     required this.onOptions,
   });
 
@@ -4065,10 +4297,13 @@ class _ProfileTweetCard extends StatelessWidget {
     final muted = isDark ? AppColors.darkMuted : AppColors.lightMuted;
     final hasMedia = image.isNotEmpty || video.isNotEmpty;
 
-    return Container(
-      padding: const EdgeInsets.fromLTRB(14, 14, 10, 12),
-      color: Colors.transparent,
-      child: Row(
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onOpenReplies,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(14, 14, 10, 12),
+        color: Colors.transparent,
+        child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           CircleAvatar(
@@ -4121,7 +4356,7 @@ class _ProfileTweetCard extends StatelessWidget {
                 const SizedBox(height: 8),
                 Row(
                   children: [
-                    _TweetAction(icon: Icons.chat_bubble_outline_rounded, value: _int(post['reply_count'] ?? post['comments']), color: muted),
+                    _TweetAction(icon: Icons.chat_bubble_outline_rounded, value: _int(post['reply_count'] ?? post['comments']), color: muted, onTap: onOpenReplies),
                     _TweetAction(icon: reposted ? Icons.repeat_on_rounded : Icons.repeat_rounded, value: _int(post['reposts']), color: reposted ? AppColors.success : muted, onTap: busy ? null : onRepost),
                     _TweetAction(icon: liked ? Icons.favorite_rounded : Icons.favorite_border_rounded, value: _int(post['likes']), color: liked ? Colors.pinkAccent : muted, onTap: busy ? null : onLike),
                     _TweetAction(icon: saved ? Icons.bookmark_rounded : Icons.bookmark_border_rounded, value: 0, color: saved ? AppColors.purple : muted, onTap: busy ? null : onSave, hideZero: true),
@@ -4132,6 +4367,7 @@ class _ProfileTweetCard extends StatelessWidget {
             ),
           ),
         ],
+        ),
       ),
     );
   }
@@ -4728,26 +4964,14 @@ class _PaddleCheckoutWebViewScreenState extends State<_PaddleCheckoutWebViewScre
   Future<bool> _confirmClose() async {
     if (_paidSignalSeen) return true;
 
-    final close = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
-        title: const AppText('إغلاق صفحة الدفع؟', style: TextStyle(fontWeight: FontWeight.w900)),
-        content: const AppText(
-          'إذا أغلقت الصفحة قبل إكمال الدفع لن يتم تفعيل الاشتراك. إذا أكملت الدفع فعلًا، سيقوم التطبيق بتحديث الحالة تلقائيًا.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const AppText('متابعة الدفع'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: FilledButton.styleFrom(backgroundColor: AppColors.purple),
-            child: const AppText('إغلاق'),
-          ),
-        ],
-      ),
+    final close = await AppDialog.confirm(
+      context,
+      title: 'إغلاق صفحة الدفع؟',
+      message: 'إذا أغلقت الصفحة قبل إكمال الدفع لن يتم تفعيل الاشتراك. إذا أكملت الدفع فعلًا، سيقوم التطبيق بتحديث الحالة تلقائيًا.',
+      confirmText: 'إغلاق',
+      cancelText: 'متابعة الدفع',
+      type: AppDialogType.warning,
+      icon: Icons.payment_rounded,
     );
 
     return close == true;

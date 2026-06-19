@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../theme/app_theme.dart';
 import '../widgets/glass_card.dart';
+import '../widgets/app_dialog.dart';
 import '../services/supabase_service.dart';
 import '../services/notification_service.dart';
 
@@ -58,7 +59,10 @@ class _AdminScreenState extends State<AdminScreen> {
   List<dynamic> _posts = <dynamic>[];
   List<dynamic> _communities = <dynamic>[];
   List<Map<String, dynamic>> _postReports = <Map<String, dynamic>>[];
+  List<Map<String, dynamic>> _appFeedbackReports = <Map<String, dynamic>>[];
   final Set<String> _reviewingReportIds = <String>{};
+  final Set<String> _updatingAppFeedbackIds = <String>{};
+  final Set<String> _deletingContentUserIds = <String>{};
   Map<String, dynamic> _following = <String, dynamic>{};
   Set<String> _blocked = <String>{};
 
@@ -157,6 +161,11 @@ class _AdminScreenState extends State<AdminScreen> {
       }
     }
 
+    List<Map<String, dynamic>> appFeedbackReports = <Map<String, dynamic>>[];
+    try {
+      appFeedbackReports = await SupabaseService.listAppFeedbackReports(adminUsername: _primaryAdminId, limit: 160);
+    } catch (e, st) { _respectSafeLog(e, st); }
+
     if (!mounted) return;
     setState(() {
       _usersMap = dedupedUsers;
@@ -165,6 +174,7 @@ class _AdminScreenState extends State<AdminScreen> {
       _posts = _decodeList(postsRaw);
       _communities = _decodeList(communitiesRaw);
       _postReports = _decodeList(reportsRaw).whereType<Map>().map((e) => e.map((k, v) => MapEntry(k.toString(), v))).toList();
+      _appFeedbackReports = appFeedbackReports;
       _hideStatisticsCards = hideStatsCards;
       _following = _decodeMap(followingRaw);
       _blocked = blockedSet.where((e) => e.trim().isNotEmpty).toSet();
@@ -293,7 +303,7 @@ class _AdminScreenState extends State<AdminScreen> {
   }
 
   int get _reportsCount {
-    var total = _postReports.length;
+    var total = _postReports.length + _appFeedbackReports.length;
 
     for (final post in _posts) {
       final map = _asStringMap(post);
@@ -748,6 +758,7 @@ class _AdminScreenState extends State<AdminScreen> {
         blocked: blocked,
         reason: reason,
         adminUsername: (adminUser?['username'] ?? 'admin').toString(),
+        deviceId: user.deviceId,
       );
     } catch (e) {
       _snack('تم تحديث الحظر محليًا، لكن تعذر مزامنته مع السيرفر: ${e.toString().replaceFirst('Exception: ', '')}');
@@ -1175,24 +1186,77 @@ class _AdminScreenState extends State<AdminScreen> {
   }
 
   Future<void> _deleteUserContent(_AdminUser user) async {
+    final userKey = _cleanId(user.username.isNotEmpty ? user.username : user.id);
+    if (_deletingContentUserIds.contains(userKey)) return;
+
     final ok = await _confirm(
-      title: 'حذف محتوى المستخدم؟',
-      message: 'سيتم حذف منشورات المستخدم وإزالته من المتابعات والمجتمعات. الحساب نفسه سيبقى موجودًا.',
+      title: 'حذف كل محتوى المستخدم؟',
+      message: 'سيتم حذف منشورات المستخدم وردوده وستوريه ورسائله وتفاعلاته وبلاغاته وقنوات اللايف المرتبطة به. الحساب نفسه سيبقى موجودًا.',
       danger: true,
     );
     if (!ok) return;
 
+    if (mounted) setState(() => _deletingContentUserIds.add(userKey));
+
+    Map<String, int> serverSummary = <String, int>{};
+    try {
+      serverSummary = await SupabaseService.deleteUserContentForAdmin(user.username);
+    } catch (e, st) {
+      _respectSafeLog(e, st);
+      _snack("تعذر حذف كامل المحتوى من السيرفر: ${e.toString().replaceFirst('Exception: ', '')}", error: true);
+    }
+
     final prefs = await SharedPreferences.getInstance();
-    final username = user.username;
+    final username = _cleanUsername(user.username);
+    final clean = _cleanId(username);
+    final variants = <String>{username, clean, '@$clean'};
+
+    bool sameUserValue(dynamic value) {
+      final raw = value?.toString() ?? '';
+      if (raw.trim().isEmpty) return false;
+      return variants.contains(_cleanUsername(raw)) || variants.contains(_cleanId(raw));
+    }
 
     _posts.removeWhere((post) {
       final map = _asStringMap(post);
-      return _cleanUsername((map['username'] ?? '').toString()) == username;
+      final shouldDelete = sameUserValue(map['username']) ||
+          sameUserValue(map['author_username']) ||
+          sameUserValue(map['author']) ||
+          sameUserValue(map['postUsername']);
+      return shouldDelete;
     });
 
-    _following.remove(username);
+    _postReports.removeWhere((report) {
+      final map = _asStringMap(report);
+      return sameUserValue(map['reporter_username']) ||
+          sameUserValue(map['post_username']) ||
+          sameUserValue(map['reported_username']) ||
+          sameUserValue(map['username']);
+    });
+
+    _appFeedbackReports.removeWhere((report) {
+      final map = _asStringMap(report);
+      return sameUserValue(map['username']) ||
+          sameUserValue(map['user_username']) ||
+          sameUserValue(map['reporter_username']);
+    });
+
+    _streamerChannels.removeWhere((streamer) {
+      final map = _asStringMap(streamer);
+      return sameUserValue(map['username']) ||
+          sameUserValue(map['host_username']) ||
+          sameUserValue(map['owner_username']) ||
+          _cleanId((map['id'] ?? '').toString()) == clean;
+    });
+
+    _following.removeWhere((key, value) => sameUserValue(key));
     _following.updateAll((key, value) {
-      if (value is List) return value.where((e) => _cleanUsername(e.toString()) != username).toList();
+      if (value is List) return value.where((e) => !sameUserValue(e)).toList();
+      if (value is Map) {
+        final copy = value.map((k, v) => MapEntry(k.toString(), v));
+        copy.removeWhere((k, v) => sameUserValue(k));
+        return copy;
+      }
       return value;
     });
 
@@ -1200,21 +1264,38 @@ class _AdminScreenState extends State<AdminScreen> {
       final map = _asStringMap(_communities[i]);
       if (map.isEmpty) continue;
       final members = (map['members'] is List ? map['members'] as List : const [])
-          .where((e) => _cleanUsername(e.toString()) != username)
+          .where((e) => !sameUserValue(e))
           .toList();
       final moderators = (map['moderators'] is List ? map['moderators'] as List : const [])
-          .where((e) => _cleanUsername(e.toString()) != username)
+          .where((e) => !sameUserValue(e))
           .toList();
-      _communities[i] = {...map, 'members': members, 'moderators': moderators};
+      final messages = (map['messages'] is List ? map['messages'] as List : const [])
+          .where((message) {
+            final m = _asStringMap(message);
+            return !(sameUserValue(m['username']) || sameUserValue(m['sender_username']) || sameUserValue(m['author_username']));
+          })
+          .toList();
+      _communities[i] = {...map, 'members': members, 'moderators': moderators, 'messages': messages};
     }
 
     await prefs.setString(_postsKey, jsonEncode(_posts));
     await prefs.setString(_followingKey, jsonEncode(_following));
     await prefs.setString(_communitiesKey, jsonEncode(_communities));
+    await prefs.setString(_postReportsKey, jsonEncode(_postReports));
+    await prefs.setString(_streamersKey, jsonEncode(_streamerChannels));
 
     if (!mounted) return;
-    setState(() {});
-    _snack('تم حذف محتوى ${user.name}', success: true);
+    setState(() => _deletingContentUserIds.remove(userKey));
+
+    final remotePosts = serverSummary['posts'] ?? 0;
+    final remoteReplies = serverSummary['replies'] ?? 0;
+    final remoteStories = serverSummary['stories'] ?? 0;
+    final remoteMessages = serverSummary['messages'] ?? 0;
+    final totalRemote = serverSummary.values.fold<int>(0, (sum, value) => sum + value);
+    final details = totalRemote > 0
+        ? 'السيرفر: $remotePosts منشور، $remoteReplies رد، $remoteStories ستوري، $remoteMessages رسالة.'
+        : 'تم تنظيف البيانات المحلية أيضًا.';
+    _snack('تم حذف محتوى ${user.name}. $details', success: true);
   }
 
   Future<void> _showBlockSheet(_AdminUser user) async {
@@ -1374,28 +1455,17 @@ class _AdminScreenState extends State<AdminScreen> {
     required String title,
     required String message,
     bool danger = false,
-  }) async {
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: AppText(title, style: const TextStyle(fontWeight: FontWeight.w900)),
-          content: AppText(message),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context, false), child: const AppText('إلغاء')),
-            FilledButton(
-              style: FilledButton.styleFrom(
-                backgroundColor: danger ? AppColors.danger : AppColors.purple,
-                foregroundColor: Colors.white,
-              ),
-              onPressed: () => Navigator.pop(context, true),
-              child: const AppText('تأكيد'),
-            ),
-          ],
-        );
-      },
+  }) {
+    return AppDialog.confirm(
+      context,
+      title: title,
+      message: message,
+      confirmText: danger ? 'حذف' : 'تأكيد',
+      cancelText: 'إلغاء',
+      type: danger ? AppDialogType.danger : AppDialogType.question,
+      destructive: danger,
+      icon: danger ? Icons.delete_rounded : Icons.help_rounded,
     );
-    return result == true;
   }
 
   String _reportValue(Map<String, dynamic> report, String key, [String fallback = '']) {
@@ -1706,11 +1776,11 @@ class _AdminScreenState extends State<AdminScreen> {
                           subtitle: '${_users.where((u) => !u.isBlocked).length} نشط',
                         ),
                         _StatCard(
-                          title: 'البلاغات',
-                          value: _formatNumber(_postReports.length),
+                          title: 'البلاغات والملاحظات',
+                          value: _formatNumber(_postReports.length + _appFeedbackReports.length),
                           icon: Icons.report_rounded,
-                          subtitle: '${_reviewingReportIds.length} قيد المراجعة',
-                          danger: _postReports.isNotEmpty,
+                          subtitle: '${_appFeedbackReports.where((r) => _appFeedbackValue(r, 'status', 'pending') == 'pending').length} ملاحظات معلقة',
+                          danger: _postReports.isNotEmpty || _appFeedbackReports.isNotEmpty,
                         ),
                         _StatCard(
                           title: 'المنشورات',
@@ -1933,6 +2003,7 @@ class _AdminScreenState extends State<AdminScreen> {
         ),
         tabs: [
           Tab(icon: const Icon(Icons.report_rounded, size: 19), child: AppText('البلاغات ${_postReports.length}')),
+          Tab(icon: const Icon(Icons.bug_report_rounded, size: 19), child: AppText('الملاحظات ${_appFeedbackReports.length}')),
           Tab(icon: const Icon(Icons.people_alt_rounded, size: 19), child: AppText('المستخدمين ${_users.length}')),
           Tab(icon: const Icon(Icons.article_rounded, size: 19), child: AppText('المنشورات ${_posts.length}')),
           Tab(icon: const Icon(Icons.live_tv_rounded, size: 19), child: AppText('الستريمرز $_streamersCount')),
@@ -2036,6 +2107,158 @@ class _AdminScreenState extends State<AdminScreen> {
                 onOpen: () => _openReportDetails(report),
                 onReview: () => _reviewReportWithRespectAi(report),
                 onDelete: () => _deleteReport(report),
+              ),
+            ).animate().fadeIn(delay: (25 * i).ms).slideY(begin: .02);
+          }),
+        ],
+      ),
+    );
+  }
+
+
+  String _appFeedbackValue(Map<String, dynamic> report, String key, [String fallback = '']) {
+    final value = report[key];
+    return value == null ? fallback : value.toString();
+  }
+
+  List<Map<String, dynamic>> get _filteredAppFeedbackReports {
+    final q = _query.trim().toLowerCase();
+    final rows = List<Map<String, dynamic>>.from(_appFeedbackReports);
+    rows.sort((a, b) {
+      final ad = _appFeedbackValue(a, 'created_at', _appFeedbackValue(a, 'createdAt'));
+      final bd = _appFeedbackValue(b, 'created_at', _appFeedbackValue(b, 'createdAt'));
+      return bd.compareTo(ad);
+    });
+    if (q.isEmpty) return rows;
+    return rows.where((r) {
+      final deviceInfo = r['device_info'] is Map ? Map<String, dynamic>.from(r['device_info'] as Map) : <String, dynamic>{};
+      final haystack = [
+        r['id'],
+        r['username'],
+        r['name'],
+        r['title'],
+        r['note'],
+        r['screen'],
+        r['status'],
+        deviceInfo['platform'],
+      ].map((e) => (e ?? '').toString().toLowerCase()).join(' ');
+      return haystack.contains(q);
+    }).toList();
+  }
+
+  Future<void> _deleteAppFeedbackReport(Map<String, dynamic> report) async {
+    final id = _appFeedbackValue(report, 'id', _appFeedbackValue(report, 'reportId'));
+    if (id.trim().isEmpty) return;
+    final ok = await _confirm(
+      title: 'رفض البلاغ؟',
+      message: 'سيتم حذف البلاغ من تبويب الملاحظات والمشاكل نهائيًا.',
+      danger: true,
+    );
+    if (!ok) return;
+    if (mounted) setState(() => _updatingAppFeedbackIds.add(id));
+    try {
+      await SupabaseService.deleteAppFeedbackReport(
+        reportId: id,
+        adminUsername: _primaryAdminId,
+      );
+      if (!mounted) return;
+      setState(() => _appFeedbackReports.removeWhere((r) => _appFeedbackValue(r, 'id') == id));
+      _snack('تم رفض البلاغ وحذفه', success: true);
+    } catch (e) {
+      _snack('تعذر حذف البلاغ: $e', error: true);
+    } finally {
+      if (mounted) setState(() => _updatingAppFeedbackIds.remove(id));
+    }
+  }
+
+  Future<void> _resolveAppFeedbackReport(Map<String, dynamic> report) async {
+    final id = _appFeedbackValue(report, 'id', _appFeedbackValue(report, 'reportId'));
+    if (id.trim().isEmpty) return;
+    final title = _appFeedbackValue(report, 'title', 'بلاغ مشكلة');
+    final ok = await _confirm(
+      title: 'تم حل المشكلة؟',
+      message: 'سيتم تحديث حالة البلاغ وإرسال إشعار داخلي وخارجي للمستخدم بأن المشكلة تم حلها.\n\n$title',
+    );
+    if (!ok) return;
+    if (mounted) setState(() => _updatingAppFeedbackIds.add(id));
+    try {
+      final result = await SupabaseService.resolveAppFeedbackReport(
+        reportId: id,
+        adminUsername: _primaryAdminId,
+      );
+      final updated = result['item'] is Map
+          ? Map<String, dynamic>.from(result['item'] as Map)
+          : <String, dynamic>{...report, 'status': 'resolved', 'resolved_at': DateTime.now().toUtc().toIso8601String()};
+      if (!mounted) return;
+      setState(() {
+        final index = _appFeedbackReports.indexWhere((r) => _appFeedbackValue(r, 'id') == id);
+        if (index >= 0) _appFeedbackReports[index] = updated;
+      });
+      _snack('تم حل البلاغ وإرسال إشعار للمستخدم', success: true);
+    } catch (e) {
+      _snack('تعذر تحديث البلاغ: $e', error: true);
+    } finally {
+      if (mounted) setState(() => _updatingAppFeedbackIds.remove(id));
+    }
+  }
+
+  Future<void> _openAppFeedbackDetails(Map<String, dynamic> report) async {
+    final id = _appFeedbackValue(report, 'id', _appFeedbackValue(report, 'reportId'));
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => _AppFeedbackDetailsScreen(
+          report: report,
+          updating: _updatingAppFeedbackIds.contains(id),
+          onResolve: () async {
+            await _resolveAppFeedbackReport(report);
+            if (mounted && Navigator.of(context).canPop()) Navigator.of(context).pop();
+          },
+          onDelete: () async {
+            await _deleteAppFeedbackReport(report);
+            if (mounted && Navigator.of(context).canPop()) Navigator.of(context).pop();
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAppFeedbackTab() {
+    final rows = _filteredAppFeedbackReports;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    if (rows.isEmpty) {
+      return _tabRefresh(
+        child: _emptyState(
+          icon: Icons.mark_chat_read_rounded,
+          title: 'لا توجد ملاحظات أو مشاكل حالياً',
+          subtitle: _query.isEmpty ? 'أي ملاحظة يرسلها المستخدم من صفحة الإعدادات ستظهر هنا.' : 'لا توجد نتائج مطابقة للبحث.',
+        ),
+      );
+    }
+
+    return _tabRefresh(
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 6, 16, 120),
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: AppText('ملاحظات ومشاكل التطبيق', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: isDark ? Colors.white : Colors.black87)),
+              ),
+              AppText('${rows.length} بلاغ', style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, fontWeight: FontWeight.w800)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          ...List.generate(rows.length, (i) {
+            final report = rows[i];
+            final id = _appFeedbackValue(report, 'id', _appFeedbackValue(report, 'reportId'));
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: _AppFeedbackCard(
+                report: report,
+                updating: _updatingAppFeedbackIds.contains(id),
+                onOpen: () => _openAppFeedbackDetails(report),
+                onResolve: () => _resolveAppFeedbackReport(report),
+                onDelete: () => _deleteAppFeedbackReport(report),
               ),
             ).animate().fadeIn(delay: (25 * i).ms).slideY(begin: .02);
           }),
@@ -2250,7 +2473,7 @@ class _AdminScreenState extends State<AdminScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator(color: AppColors.purple))
           : DefaultTabController(
-        length: 5,
+        length: 6,
         child: Container(
           decoration: BoxDecoration(
             gradient: LinearGradient(
@@ -2294,6 +2517,7 @@ class _AdminScreenState extends State<AdminScreen> {
                 physics: const BouncingScrollPhysics(),
                 children: [
                   _buildReportsTab(),
+                  _buildAppFeedbackTab(),
                   _buildUsersTab(),
                   _buildPostsTab(),
                   _buildStreamersTab(),
@@ -2446,6 +2670,417 @@ class _AdminPostCard extends StatelessWidget {
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+
+class _AppFeedbackCard extends StatelessWidget {
+  final Map<String, dynamic> report;
+  final bool updating;
+  final VoidCallback onOpen;
+  final VoidCallback onResolve;
+  final VoidCallback onDelete;
+
+  const _AppFeedbackCard({
+    required this.report,
+    required this.updating,
+    required this.onOpen,
+    required this.onResolve,
+    required this.onDelete,
+  });
+
+  String _value(String key, [String fallback = '']) => (report[key] ?? fallback).toString();
+
+  Map<String, dynamic> get _deviceInfo {
+    final raw = report['device_info'] ?? report['deviceInfo'];
+    if (raw is Map) return raw.map((k, v) => MapEntry(k.toString(), v));
+    return <String, dynamic>{};
+  }
+
+  List<Map<String, dynamic>> get _attachments {
+    final device = _deviceInfo;
+    final feedbackMedia = device['feedbackMedia'] is Map
+        ? Map<String, dynamic>.from(device['feedbackMedia'] as Map)
+        : <String, dynamic>{};
+    final raw = report['media_attachments'] ?? report['mediaAttachments'] ?? feedbackMedia['attachments'];
+    final items = <Map<String, dynamic>>[];
+    if (raw is List) {
+      for (final item in raw) {
+        if (item is Map) {
+          final map = item.map((k, v) => MapEntry(k.toString(), v));
+          if ((map['url'] ?? map['mediaUrl'] ?? '').toString().trim().isNotEmpty) items.add(map);
+        }
+      }
+    }
+    final mediaUrl = _value('media_url', _value('mediaUrl', (feedbackMedia['mediaUrl'] ?? '').toString()));
+    if (mediaUrl.trim().isNotEmpty && items.every((e) => (e['url'] ?? e['mediaUrl'] ?? '').toString() != mediaUrl)) {
+      items.insert(0, {
+        'url': mediaUrl,
+        'type': _value('media_type', _value('mediaType', (feedbackMedia['mediaType'] ?? '').toString())),
+        'name': _value('media_name', _value('mediaName', (feedbackMedia['mediaName'] ?? '').toString())),
+      });
+    }
+    return items;
+  }
+
+  bool get _isResolved {
+    final status = _value('status').toLowerCase().trim();
+    return status == 'resolved' || status == 'done';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final muted = isDark ? AppColors.darkMuted : AppColors.lightMuted;
+    final id = _value('id', _value('reportId'));
+    final title = _value('title', 'بلاغ مشكلة');
+    final note = _value('note', _value('description'));
+    final username = _value('username', '@user');
+    final name = _value('name', username);
+    final screen = _value('screen');
+    final status = _value('status', 'pending');
+    final createdAt = _value('created_at', _value('createdAt'));
+    final attachments = _attachments;
+    final statusColor = _isResolved ? AppColors.success : AppColors.purple;
+
+    return InkWell(
+      onTap: onOpen,
+      borderRadius: BorderRadius.circular(22),
+      child: GlassCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 46,
+                  height: 46,
+                  decoration: BoxDecoration(
+                    color: statusColor.withValues(alpha: .14),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(_isResolved ? Icons.task_alt_rounded : Icons.bug_report_rounded, color: statusColor),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      AppText(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+                      const SizedBox(height: 2),
+                      AppText('$name • $username', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: muted, fontWeight: FontWeight.w800, fontSize: 12)),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  tooltip: context.tr('فتح التفاصيل'),
+                  onPressed: onOpen,
+                  icon: const Icon(Icons.open_in_new_rounded, color: AppColors.purple),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: isDark ? AppColors.darkCard2 : AppColors.lightCard2,
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
+              ),
+              child: AppText(
+                note.trim().isEmpty ? 'لا يوجد وصف إضافي' : note,
+                maxLines: 4,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(height: 1.45, fontWeight: FontWeight.w700),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 7,
+              children: [
+                _MiniChip(text: _isResolved ? 'تم حل المشكلة' : 'معلق', color: statusColor),
+                if (screen.trim().isNotEmpty) _MiniChip(text: screen, color: AppColors.purple),
+                if (createdAt.trim().isNotEmpty) _MiniChip(text: createdAt.split('T').first, color: muted),
+                if (attachments.isNotEmpty) _MiniChip(text: '${attachments.length} مرفق', color: AppColors.success),
+                if (id.trim().isNotEmpty) _MiniChip(text: id.length > 18 ? id.substring(0, 18) : id, color: muted),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: updating || _isResolved ? null : onResolve,
+                    icon: updating
+                        ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        : const Icon(Icons.task_alt_rounded),
+                    label: AppText(_isResolved ? 'تم حلها' : 'تم حل المشكلة'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.success,
+                      foregroundColor: Colors.white,
+                      disabledBackgroundColor: AppColors.success.withValues(alpha: .42),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton.filledTonal(
+                  tooltip: context.tr('رفض / حذف البلاغ'),
+                  onPressed: updating ? null : onDelete,
+                  icon: const Icon(Icons.delete_rounded, color: AppColors.danger),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AppFeedbackDetailsScreen extends StatelessWidget {
+  final Map<String, dynamic> report;
+  final bool updating;
+  final Future<void> Function() onResolve;
+  final Future<void> Function() onDelete;
+
+  const _AppFeedbackDetailsScreen({
+    required this.report,
+    required this.updating,
+    required this.onResolve,
+    required this.onDelete,
+  });
+
+  String _value(String key, [String fallback = '']) => (report[key] ?? fallback).toString();
+
+  Map<String, dynamic> get _deviceInfo {
+    final raw = report['device_info'] ?? report['deviceInfo'];
+    if (raw is Map) return raw.map((k, v) => MapEntry(k.toString(), v));
+    return <String, dynamic>{};
+  }
+
+  List<Map<String, dynamic>> get _attachments {
+    final device = _deviceInfo;
+    final feedbackMedia = device['feedbackMedia'] is Map
+        ? Map<String, dynamic>.from(device['feedbackMedia'] as Map)
+        : <String, dynamic>{};
+    final raw = report['media_attachments'] ?? report['mediaAttachments'] ?? feedbackMedia['attachments'];
+    final items = <Map<String, dynamic>>[];
+    if (raw is List) {
+      for (final item in raw) {
+        if (item is Map) {
+          final map = item.map((k, v) => MapEntry(k.toString(), v));
+          if ((map['url'] ?? map['mediaUrl'] ?? '').toString().trim().isNotEmpty) items.add(map);
+        }
+      }
+    }
+    final mediaUrl = _value('media_url', _value('mediaUrl', (feedbackMedia['mediaUrl'] ?? '').toString()));
+    if (mediaUrl.trim().isNotEmpty && items.every((e) => (e['url'] ?? e['mediaUrl'] ?? '').toString() != mediaUrl)) {
+      items.insert(0, {
+        'url': mediaUrl,
+        'type': _value('media_type', _value('mediaType', (feedbackMedia['mediaType'] ?? '').toString())),
+        'name': _value('media_name', _value('mediaName', (feedbackMedia['mediaName'] ?? '').toString())),
+      });
+    }
+    return items;
+  }
+
+  bool get _isResolved {
+    final status = _value('status').toLowerCase().trim();
+    return status == 'resolved' || status == 'done';
+  }
+
+  Widget _mediaPreview(BuildContext context, Map<String, dynamic> item) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final muted = isDark ? AppColors.darkMuted : AppColors.lightMuted;
+    final url = (item['url'] ?? item['mediaUrl'] ?? '').toString().trim();
+    final type = (item['type'] ?? item['mediaType'] ?? '').toString().trim().toLowerCase();
+    final name = (item['name'] ?? item['mediaName'] ?? '').toString().trim();
+    final isImage = type == 'image' || RegExp(r'\.(png|jpe?g|webp|gif)(\?|$)', caseSensitive: false).hasMatch(url);
+
+    return Container(
+      margin: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: isDark ? AppColors.darkCard2 : AppColors.lightCard2,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(isImage ? Icons.image_rounded : Icons.videocam_rounded, color: AppColors.purple, size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: AppText(
+                  name.isEmpty ? (isImage ? 'صورة مرفقة' : 'فيديو مرفق') : name,
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (isImage)
+            ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: Image.network(
+                url,
+                width: double.infinity,
+                height: 220,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => Container(
+                  height: 90,
+                  alignment: Alignment.center,
+                  child: AppText('تعذر عرض الصورة', style: TextStyle(color: muted, fontWeight: FontWeight.w800)),
+                ),
+              ),
+            )
+          else
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.purple.withValues(alpha: .08),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: AppText('رابط الفيديو:\n$url', textDirection: TextDirection.ltr, style: TextStyle(color: muted, fontWeight: FontWeight.w800, height: 1.4)),
+            ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final muted = isDark ? AppColors.darkMuted : AppColors.lightMuted;
+    final id = _value('id', _value('reportId'));
+    final username = _value('username', '@user');
+    final name = _value('name', username);
+    final title = _value('title', 'بلاغ مشكلة');
+    final note = _value('note', _value('description'));
+    final screen = _value('screen');
+    final status = _value('status', 'pending');
+    final createdAt = _value('created_at', _value('createdAt'));
+    final updatedAt = _value('updated_at', _value('updatedAt'));
+    final appVersion = _value('app_version', _value('appVersion'));
+    final platform = (_deviceInfo['platform'] ?? '').toString();
+    final attachments = _attachments;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const AppText('تفاصيل الملاحظة', style: TextStyle(fontWeight: FontWeight.w900)),
+        centerTitle: true,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+      ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 120),
+        children: [
+          GlassCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 48,
+                      height: 48,
+                      decoration: BoxDecoration(
+                        color: (_isResolved ? AppColors.success : AppColors.purple).withValues(alpha: .16),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(_isResolved ? Icons.task_alt_rounded : Icons.bug_report_rounded, color: _isResolved ? AppColors.success : AppColors.purple),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          AppText(title, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 17)),
+                          const SizedBox(height: 2),
+                          AppText('$name • $username', style: TextStyle(color: muted, fontSize: 12, fontWeight: FontWeight.w800)),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                _DetailLine(label: 'وصف المشكلة', value: note.trim().isEmpty ? 'لا يوجد وصف إضافي' : note),
+                const SizedBox(height: 10),
+                _DetailLine(label: 'مكان المشكلة / الصفحة', value: screen.trim().isEmpty ? 'غير محدد' : screen),
+                const SizedBox(height: 10),
+                _DetailLine(label: 'الحالة', value: _isResolved ? 'تم حل المشكلة' : status),
+                const SizedBox(height: 10),
+                _DetailLine(label: 'رقم البلاغ', value: id.trim().isEmpty ? 'غير متوفر' : id),
+                const SizedBox(height: 10),
+                _DetailLine(label: 'إصدار التطبيق', value: appVersion.trim().isEmpty ? 'غير محدد' : appVersion),
+                if (platform.trim().isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  _DetailLine(label: 'الجهاز / النظام', value: platform),
+                ],
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    if (createdAt.trim().isNotEmpty) _MiniChip(text: 'أرسل: ${createdAt.split("T").first}', color: muted),
+                    if (updatedAt.trim().isNotEmpty) _MiniChip(text: 'آخر تحديث: ${updatedAt.split("T").first}', color: muted),
+                    if (attachments.isNotEmpty) _MiniChip(text: '${attachments.length} مرفق', color: AppColors.success),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          if (attachments.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            GlassCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const AppText('المرفقات', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+                  ...attachments.map((item) => _mediaPreview(context, item)),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+      bottomNavigationBar: SafeArea(
+        minimum: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+        child: Row(
+          children: [
+            Expanded(
+              child: ElevatedButton.icon(
+                onPressed: updating || _isResolved ? null : onResolve,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.success,
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size.fromHeight(52),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+                ),
+                icon: updating
+                    ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Icon(Icons.task_alt_rounded),
+                label: AppText(_isResolved ? 'تم حلها' : 'تم حل المشكلة', style: const TextStyle(fontWeight: FontWeight.w900)),
+              ),
+            ),
+            const SizedBox(width: 10),
+            IconButton.filledTonal(
+              tooltip: context.tr('رفض / حذف البلاغ'),
+              onPressed: updating ? null : onDelete,
+              icon: const Icon(Icons.delete_rounded, color: AppColors.danger),
+            ),
+          ],
+        ),
       ),
     );
   }

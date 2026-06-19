@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_messaging/firebase_messaging.dart';
 
 import 'app/theme_provider.dart';
 import 'app/app.dart';
@@ -27,7 +26,10 @@ Future<void> main() async {
   );
 
   if (!foundation.kIsWeb) {
-    FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+    // تسجيل معالج FCM الخلفي مبكرًا جدًا حتى تعمل الإشعارات والتطبيق مغلق.
+    PushNotificationService.registerBackgroundHandler();
+
+    // تهيئة القنوات المحلية + FCM.
     await NotificationService.initialize();
     await PushNotificationService.initialize();
   }

@@ -5,10 +5,12 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../services/supabase_service.dart';
 import '../services/notification_service.dart';
+import '../services/push_notification_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/primary_button.dart';
 import 'home_screen.dart';
@@ -65,7 +67,7 @@ class _LoginScreenState extends State<LoginScreen> {
           _showMessage('تعذر تسجيل الدخول بجوجل أو الحساب محظور');
           return;
         }
-        _goHome();
+        await _finishLoginAndGoHome();
       } catch (e) {
         _showMessage(e.toString().replaceFirst('Exception: ', ''));
       } finally {
@@ -92,6 +94,21 @@ class _LoginScreenState extends State<LoginScreen> {
   void _showMessage(String message) {
     if (!mounted) return;
     NotificationService.showTopNotification(message);
+  }
+
+  Future<void> _syncPushAfterSuccessfulLogin() async {
+    if (kIsWeb) return;
+    try {
+      await PushNotificationService.initialize();
+      await PushNotificationService.syncDeviceAndToken();
+    } catch (_) {
+      // لا نوقف الدخول إذا فشل حفظ التوكن أو الجهاز؛ سيحاول التطبيق المزامنة لاحقًا.
+    }
+  }
+
+  Future<void> _finishLoginAndGoHome() async {
+    await _syncPushAfterSuccessfulLogin();
+    _goHome();
   }
 
   Future<void> _pickBirthDate() async {
@@ -262,7 +279,7 @@ class _LoginScreenState extends State<LoginScreen> {
             await SupabaseService.trustCurrentDeviceForUsername((user['username'] ?? loginInput).toString());
           }
           _showMessage('تم تسجيل الدخول عبر رمز SMS');
-          _goHome();
+          await _finishLoginAndGoHome();
           return;
         }
 
@@ -346,7 +363,7 @@ class _LoginScreenState extends State<LoginScreen> {
         }
       }
 
-      _goHome();
+      await _finishLoginAndGoHome();
     } catch (e) {
       final msg = e.toString().replaceFirst('Exception: ', '');
       _showMessage(msg);
@@ -371,7 +388,7 @@ class _LoginScreenState extends State<LoginScreen> {
         _showMessage('تم إلغاء تسجيل الدخول بجوجل');
         return;
       }
-      _goHome();
+      await _finishLoginAndGoHome();
     } catch (e) {
       _showMessage(e.toString().replaceFirst('Exception: ', ''));
     } finally {

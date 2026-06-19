@@ -6,16 +6,25 @@ import re
 import smtplib
 import hashlib
 import hmac
+import math
 import html as html_lib
 import secrets
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 import tempfile
+import subprocess
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
+from difflib import SequenceMatcher
 from typing import Any, Dict, Optional
 
 import requests
+try:
+    import redis as redis_lib
+except Exception:  # redis package is optional; the server keeps working without it.
+    redis_lib = None
 from fastapi import FastAPI, Header, HTTPException, Request as FastAPIRequest
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
@@ -265,11 +274,36 @@ TWILIO_TIMEOUT_SECONDS = int(os.getenv("TWILIO_TIMEOUT_SECONDS", "20"))
 QWEN_API_KEY = os.getenv("QWEN_API_KEY", "").strip()
 # موديل النصوص: راجع التغريدات والردود النصية.
 QWEN_TEXT_MODEL = os.getenv("QWEN_TEXT_MODEL", os.getenv("QWEN_MODEL", "qwen-plus")).strip() or "qwen-plus"
+# موديل الترجمة الفورية داخل الدردشة. تستطيع جعله qwen-max إذا متاح في حساب Alibaba.
+QWEN_TRANSLATION_MODEL = os.getenv("QWEN_TRANSLATION_MODEL", QWEN_TEXT_MODEL).strip() or QWEN_TEXT_MODEL
 # موديل الصور: راجع صور المنشورات بعد رفعها إلى Supabase Storage.
 QWEN_VISION_MODEL = os.getenv("QWEN_VISION_MODEL", "qwen-vl-plus").strip() or "qwen-vl-plus"
 # اسم قديم للتوافق مع باقي الكود القديم.
 QWEN_MODEL = QWEN_TEXT_MODEL
 QWEN_BASE_URL = os.getenv("QWEN_BASE_URL", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1").rstrip("/")
+
+# ================= Respect AI Topic Memory =================
+# ذاكرة جانبية تقلل استدعاءات الذكاء الاصطناعي:
+# إذا وجدت الذاكرة تطابقًا قويًا، يتم التصنيف بدون Qwen.
+AI_TOPIC_MEMORY_MIN_CONFIDENCE = float(os.getenv("AI_TOPIC_MEMORY_MIN_CONFIDENCE", "0.58"))
+AI_TOPIC_MEMORY_MAX_ROWS = int(os.getenv("AI_TOPIC_MEMORY_MAX_ROWS", "3000"))
+AI_TOPIC_MEMORY_LEARN_MIN_CONFIDENCE = float(os.getenv("AI_TOPIC_MEMORY_LEARN_MIN_CONFIDENCE", "0.62"))
+AI_TOPIC_MEMORY_MAX_TERMS_PER_POST = int(os.getenv("AI_TOPIC_MEMORY_MAX_TERMS_PER_POST", "22"))
+POST_TOPIC_STORE_MIN_CONFIDENCE = float(os.getenv("POST_TOPIC_STORE_MIN_CONFIDENCE", "0.35"))
+
+# ================= Respect AI Q&A Reply Memory =================
+# ذاكرة الأسئلة والأجوبة تقلل استدعاءات Qwen للأسئلة المتكررة.
+# الفكرة: إذا تكرر نفس السؤال أو سؤال شديد التشابه في نفس السياق، يرجع Respect AI الجواب المتعلم مباشرة.
+RESPECT_AI_QA_MEMORY_TABLE = os.getenv("RESPECT_AI_QA_MEMORY_TABLE", "respect_ai_qa_memory").strip() or "respect_ai_qa_memory"
+RESPECT_AI_QA_MEMORY_ENABLED = os.getenv("RESPECT_AI_QA_MEMORY_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
+RESPECT_AI_QA_MEMORY_AUTO_APPROVE = os.getenv("RESPECT_AI_QA_MEMORY_AUTO_APPROVE", "true").strip().lower() not in {"0", "false", "no", "off"}
+RESPECT_AI_QA_MEMORY_MATCH_THRESHOLD = float(os.getenv("RESPECT_AI_QA_MEMORY_MATCH_THRESHOLD", "0.92"))
+RESPECT_AI_QA_MEMORY_MIN_CONFIDENCE = float(os.getenv("RESPECT_AI_QA_MEMORY_MIN_CONFIDENCE", "0.74"))
+RESPECT_AI_QA_MEMORY_MIN_QUESTION_CHARS = int(os.getenv("RESPECT_AI_QA_MEMORY_MIN_QUESTION_CHARS", "4"))
+RESPECT_AI_QA_MEMORY_MAX_QUESTION_CHARS = int(os.getenv("RESPECT_AI_QA_MEMORY_MAX_QUESTION_CHARS", "520"))
+RESPECT_AI_QA_MEMORY_MAX_ANSWER_CHARS = int(os.getenv("RESPECT_AI_QA_MEMORY_MAX_ANSWER_CHARS", "1200"))
+RESPECT_AI_QA_MEMORY_SIMILAR_SCAN_LIMIT = int(os.getenv("RESPECT_AI_QA_MEMORY_SIMILAR_SCAN_LIMIT", "250"))
+
 
 # ================= Respect App AI Fixer / GitHub =================
 # يقرأ ملفات المشروع من GitHub، يجعل Qwen3-Coder يحلل البلاغ، ثم بعد موافقة الأدمن
@@ -290,6 +324,43 @@ AI_FIX_ADMIN_USERNAMES = {
 APP_AI_FEEDBACK_TABLE = os.getenv("APP_AI_FEEDBACK_TABLE", "app_ai_feedback").strip() or "app_ai_feedback"
 AI_FIX_MAX_FILES = int(os.getenv("AI_FIX_MAX_FILES", "10"))
 AI_FIX_MAX_FILE_CHARS = int(os.getenv("AI_FIX_MAX_FILE_CHARS", "18000"))
+
+# ================= Respect App Triple AI Patch Review =================
+# أقوى تركيبة صينية مجانية عبر OpenRouter:
+# 1) Qwen3-Coder Free يصنع unified diff فقط.
+# 2) DeepSeek V4 Flash Free يراجع التصحيح syntax/logic.
+# 3) Kimi K2.6 Free يراجع مراجعة النموذج الثاني ويعطي القرار النهائي.
+# ضع OPENROUTER_API_KEY في Render فقط، ولا تضعه داخل Flutter.
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
+OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
+
+# ================= AI Fixer OpenRouter multi-model fallback =================
+# تستطيع إضافة موديلات كثيرة من Render بدون تعديل الكود:
+# AI_FIX_EXTRA_MODELS=qwen/qwen3-coder:free,deepseek/deepseek-v4-flash:free,moonshotai/kimi-k2.6:free,openai/gpt-oss-120b:free
+#
+# النظام يجرب النموذج المطلوب أولًا، ثم بقية القائمة بالترتيب.
+# إذا رجع 429/402/503/timeout/JSON invalid ينتقل للنموذج التالي بدل أن يفشل البلاغ.
+AI_FIX_MODEL_1 = os.getenv("AI_FIX_MODEL_1", "qwen/qwen3-coder:free").strip() or "qwen/qwen3-coder:free"
+AI_FIX_MODEL_2 = os.getenv("AI_FIX_MODEL_2", "deepseek/deepseek-v4-flash:free").strip() or "deepseek/deepseek-v4-flash:free"
+AI_FIX_MODEL_3 = os.getenv("AI_FIX_MODEL_3", "moonshotai/kimi-k2.6:free").strip() or "moonshotai/kimi-k2.6:free"
+AI_FIX_EXTRA_MODELS = os.getenv(
+    "AI_FIX_EXTRA_MODELS",
+    (
+        "openrouter/free,"
+        "qwen/qwen3-coder:free,"
+        "deepseek/deepseek-v4-flash:free,"
+        "moonshotai/kimi-k2.6:free,"
+        "openai/gpt-oss-120b:free,"
+        "meta-llama/llama-3.3-70b-instruct:free,"
+        "google/gemma-3-27b-it:free,"
+        "mistralai/mistral-small-3.2-24b-instruct:free,"
+        "z-ai/glm-4.5-air:free"
+    ),
+).strip()
+AI_FIX_REVIEW_MODE = os.getenv("AI_FIX_REVIEW_MODE", "multi_free_fallback_patch").strip() or "multi_free_fallback_patch"
+AI_FIX_PATCH_ONLY = os.getenv("AI_FIX_PATCH_ONLY", "true").strip().lower() not in {"0", "false", "no", "off"}
+AI_FIX_MAX_PATCH_CHARS = int(os.getenv("AI_FIX_MAX_PATCH_CHARS", "90000"))
+AI_FIX_MAX_MODEL_ATTEMPTS = int(os.getenv("AI_FIX_MAX_MODEL_ATTEMPTS", "12"))
 
 
 # ================= Respect Cyber AI / Hugging Face Inference Providers =================
@@ -313,6 +384,103 @@ GOOGLE_SAFE_BROWSING_ENDPOINT = "https://safebrowsing.googleapis.com/v4/threatMa
 # طبقة ثانية اختيارية للروابط المشبوهة فقط. ضع المفتاح في Render:
 VIRUSTOTAL_API_KEY = os.getenv("VIRUSTOTAL_API_KEY", "").strip()
 VIRUSTOTAL_BASE_URL = "https://www.virustotal.com/api/v3"
+
+# ================= Shared Redis / Cross-instance state =================
+# اختياري لكنه مهم للإنتاج على Render مع أكثر من instance:
+# REDIS_URL=redis://...
+# إذا لم يكن Redis متاحًا يرجع السيرفر تلقائيًا للذاكرة المحلية القديمة بدون أن يتوقف.
+REDIS_URL = os.getenv("REDIS_URL", "").strip()
+REDIS_PREFIX = os.getenv("REDIS_PREFIX", "respect").strip() or "respect"
+REDIS_SOCKET_TIMEOUT_SECONDS = float(os.getenv("REDIS_SOCKET_TIMEOUT_SECONDS", "2") or "2")
+REDIS_CLIENT = None
+if REDIS_URL and redis_lib is not None:
+    try:
+        REDIS_CLIENT = redis_lib.from_url(
+            REDIS_URL,
+            decode_responses=True,
+            socket_timeout=REDIS_SOCKET_TIMEOUT_SECONDS,
+            socket_connect_timeout=REDIS_SOCKET_TIMEOUT_SECONDS,
+            health_check_interval=30,
+        )
+        REDIS_CLIENT.ping()
+        logger.info("Redis enabled for shared Respect state")
+    except Exception as exc:
+        logger.warning("Redis disabled/fallback to local memory: %s", exc)
+        REDIS_CLIENT = None
+elif REDIS_URL and redis_lib is None:
+    logger.warning("REDIS_URL is set but redis package is not installed. Add redis to requirements.txt to enable shared state.")
+
+
+def _redis_available() -> bool:
+    return REDIS_CLIENT is not None
+
+
+def _redis_key(*parts: str) -> str:
+    clean_parts = [re.sub(r"[^A-Za-z0-9_.:-]+", "_", str(p or "").strip()) for p in parts if str(p or "").strip()]
+    return ":".join([REDIS_PREFIX, *clean_parts])
+
+
+def _redis_get_json(key: str) -> Any:
+    if not _redis_available():
+        return None
+    try:
+        raw = REDIS_CLIENT.get(key)
+        if not raw:
+            return None
+        return json.loads(raw)
+    except Exception as exc:
+        logger.debug("redis get json failed key=%s error=%s", key, exc)
+        return None
+
+
+def _redis_set_json(key: str, value: Any, ttl_seconds: int) -> bool:
+    if not _redis_available():
+        return False
+    try:
+        REDIS_CLIENT.setex(key, max(1, int(ttl_seconds)), json.dumps(value, ensure_ascii=False, default=str))
+        return True
+    except Exception as exc:
+        logger.debug("redis set json failed key=%s error=%s", key, exc)
+        return False
+
+
+def _redis_delete(key: str) -> None:
+    if not _redis_available():
+        return
+    try:
+        REDIS_CLIENT.delete(key)
+    except Exception as exc:
+        logger.debug("redis delete failed key=%s error=%s", key, exc)
+
+
+def _redis_incr_with_ttl(key: str, ttl_seconds: int) -> Optional[int]:
+    if not _redis_available():
+        return None
+    try:
+        pipe = REDIS_CLIENT.pipeline()
+        pipe.incr(key, 1)
+        pipe.ttl(key)
+        count, ttl = pipe.execute()
+        if int(ttl or -1) < 0:
+            REDIS_CLIENT.expire(key, max(1, int(ttl_seconds)))
+        return int(count)
+    except Exception as exc:
+        logger.debug("redis incr failed key=%s error=%s", key, exc)
+        return None
+
+
+HTTP_SESSION = requests.Session()
+
+
+def _redis_set_nx_ttl(key: str, ttl_seconds: int, value: str = "1") -> Optional[bool]:
+    if not _redis_available():
+        return None
+    try:
+        return bool(REDIS_CLIENT.set(key, value, ex=max(1, int(ttl_seconds)), nx=True))
+    except Exception as exc:
+        logger.debug("redis setnx failed key=%s error=%s", key, exc)
+        return None
+
 
 # احتياطي اختياري: لو حبيت ترجع Groq مؤقتًا بدون تعديل الكود.
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
@@ -339,6 +507,46 @@ app.add_middleware(
         "X-Respect-Platform",
     ],
 )
+# ================= Background execution / moderation queue =================
+# يخفف تجمد API: الطلب يرجع بسرعة، والفحص الثقيل للصور/الفيديو/Qwen يعمل بالخلفية.
+RESPECT_MODERATION_ASYNC = os.getenv("RESPECT_MODERATION_ASYNC", "true").strip().lower() not in {"0", "false", "no", "off"}
+RESPECT_GENERAL_PUSH_ASYNC = os.getenv("RESPECT_GENERAL_PUSH_ASYNC", "true").strip().lower() not in {"0", "false", "no", "off"}
+RESPECT_BACKGROUND_WORKERS = max(1, int(os.getenv("RESPECT_BACKGROUND_WORKERS", "2") or "2"))
+RESPECT_VIDEO_MODERATION_MAX_CONCURRENCY = max(1, int(os.getenv("RESPECT_VIDEO_MODERATION_MAX_CONCURRENCY", "1") or "1"))
+# يقلل الحذف الخاطئ عند قراءة OCR داخل الصور/الفيديوهات:
+# مثال: نص ديني أو تعليمي عادي عن "المرأة" أو "يوم القيامة" لا يعتبر محتوى جنسيًا ولا إساءة دينية.
+RESPECT_VISION_TEXT_CONTEXT_RELAXATION = os.getenv("RESPECT_VISION_TEXT_CONTEXT_RELAXATION", "true").strip().lower() not in {"0", "false", "no", "off"}
+_background_executor = ThreadPoolExecutor(max_workers=RESPECT_BACKGROUND_WORKERS, thread_name_prefix="respect-bg")
+_video_moderation_semaphore = threading.BoundedSemaphore(RESPECT_VIDEO_MODERATION_MAX_CONCURRENCY)
+
+
+def _model_to_dict(model: Any) -> Dict[str, Any]:
+    if hasattr(model, "model_dump"):
+        return dict(model.model_dump())
+    if hasattr(model, "dict"):
+        return dict(model.dict())
+    if isinstance(model, dict):
+        return dict(model)
+    return {}
+
+
+def _new_background_job_id(prefix: str) -> str:
+    return f"{prefix}_{int(time.time() * 1000)}_{secrets.token_hex(5)}"
+
+
+def _run_background_job(job_name: str, fn: Any, *args: Any, **kwargs: Any) -> None:
+    try:
+        fn(*args, **kwargs)
+    except HTTPException as exc:
+        logger.warning("background job %s failed status=%s detail=%s", job_name, exc.status_code, _safe_response_text(str(exc.detail), 500))
+    except Exception as exc:
+        logger.exception("background job %s crashed: %s", job_name, exc)
+
+
+def _submit_background_job(job_name: str, fn: Any, *args: Any, **kwargs: Any) -> str:
+    job_id = _new_background_job_id(job_name)
+    _background_executor.submit(_run_background_job, job_id, fn, *args, **kwargs)
+    return job_id
 
 
 _moderation_rate: Dict[str, list[float]] = defaultdict(list)
@@ -354,6 +562,15 @@ def _client_ip(request: FastAPIRequest) -> str:
 
 
 def _enforce_moderation_rate(ip: str, limit: int = 60) -> None:
+    if limit <= 0:
+        return
+    key = _redis_key("rate", "moderation", hashlib.sha256(str(ip or "unknown").encode("utf-8")).hexdigest())
+    count = _redis_incr_with_ttl(key, 60)
+    if count is not None:
+        if count > limit:
+            raise HTTPException(status_code=429, detail="Too many moderation requests")
+        return
+
     now = time.time()
     window = [t for t in _moderation_rate[ip] if now - t < 60]
     if len(window) >= limit:
@@ -387,8 +604,16 @@ def _is_sensitive_app_path(path: str) -> bool:
 def _enforce_app_request_rate(ip: str, path: str) -> None:
     if APP_REQUEST_RATE_LIMIT_PER_MINUTE <= 0:
         return
-    now = time.time()
     family = path.strip("/").split("/", 1)[0] or "root"
+    key_hash = hashlib.sha256(f"{ip}:{family}".encode("utf-8")).hexdigest()
+    redis_key = _redis_key("rate", "app", key_hash)
+    count = _redis_incr_with_ttl(redis_key, 60)
+    if count is not None:
+        if count > APP_REQUEST_RATE_LIMIT_PER_MINUTE:
+            raise HTTPException(status_code=429, detail="Too many requests")
+        return
+
+    now = time.time()
     key = f"{ip}:{family}"
     window = [t for t in _app_request_rate[key] if now - t < 60]
     if len(window) >= APP_REQUEST_RATE_LIMIT_PER_MINUTE:
@@ -441,8 +666,8 @@ def _verify_signed_request(path: str, body: bytes, headers: Any) -> None:
 
     _cleanup_request_nonces(now)
     nonce_key = f"{timestamp}:{nonce}"
-    if _seen_request_nonces.get(nonce_key, 0) > now:
-        raise HTTPException(status_code=401, detail="Replay request blocked")
+    nonce_hash = hashlib.sha256(nonce_key.encode("utf-8")).hexdigest()
+    redis_nonce_key = _redis_key("nonce", nonce_hash)
 
     body_text = body.decode("utf-8", errors="replace")
     payload = f"{timestamp}\n{nonce}\n{path}\n{body_text}".encode("utf-8")
@@ -453,7 +678,13 @@ def _verify_signed_request(path: str, body: bytes, headers: Any) -> None:
     if not hmac.compare_digest(signature, expected):
         raise HTTPException(status_code=401, detail="Invalid request signature")
 
-    _seen_request_nonces[nonce_key] = now + REQUEST_NONCE_TTL_SECONDS
+    redis_set = _redis_set_nx_ttl(redis_nonce_key, REQUEST_NONCE_TTL_SECONDS)
+    if redis_set is False:
+        raise HTTPException(status_code=401, detail="Replay request blocked")
+    if redis_set is None:
+        if _seen_request_nonces.get(nonce_key, 0) > now:
+            raise HTTPException(status_code=401, detail="Replay request blocked")
+        _seen_request_nonces[nonce_key] = now + REQUEST_NONCE_TTL_SECONDS
 
 
 @app.middleware("http")
@@ -705,6 +936,24 @@ def normalize_language(value: str) -> str:
         return "ar"
     primary = v.split("-", 1)[0]
     return primary if primary in SUPPORTED_APP_LANGUAGES else "ar"
+
+
+def _language_display_name(code: str) -> str:
+    names = {
+        "ar": "Arabic",
+        "en": "English",
+        "fr": "French",
+        "es": "Spanish",
+        "de": "German",
+        "tr": "Turkish",
+        "id": "Indonesian",
+        "hi": "Hindi",
+        "ur": "Urdu",
+        "fa": "Persian",
+        "ru": "Russian",
+        "pt": "Portuguese",
+    }
+    return names.get(normalize_language(code), "Arabic")
 
 
 def _language_from_user_row(row: Dict[str, Any], fallback: str = "ar") -> str:
@@ -1103,7 +1352,7 @@ class MessagePushRequest(BaseModel):
     senderName: str = ""
     messageId: str
     text: str = ""
-    language: str = "ar" ""
+    language: str = "ar"
 
 
 class CallPushRequest(BaseModel):
@@ -1142,6 +1391,28 @@ class RespectAIResponse(BaseModel):
     ok: bool
     reply: str
     model: str
+    source: str = "respect_ai"
+    memoryUsed: bool = False
+    memoryId: str = ""
+    confidence: float = 0.0
+    category: str = ""
+
+
+class RespectAIChatTranslateRequest(BaseModel):
+    text: str = Field(default="", min_length=1)
+    targetLanguage: str = "ar"
+    targetDialect: str = "auto"
+    sourceLanguage: str = "auto"
+    username: str = ""
+    context: str = "chat"
+
+
+class RespectAIChatTranslateResponse(BaseModel):
+    ok: bool
+    translatedText: str
+    model: str
+    targetLanguage: str
+    targetDialect: str = "auto"
 
 
 class RespectAISearchExpandRequest(BaseModel):
@@ -1156,6 +1427,32 @@ class RespectAISearchExpandResponse(BaseModel):
     model: str
 
 
+class RespectAIPostClassifyRequest(BaseModel):
+    postId: str = ""
+    username: str = ""
+    text: str = ""
+    imageUrls: list[str] = Field(default_factory=list)
+    imageUrl: str = ""
+    videoUrl: str = ""
+    voiceUrl: str = ""
+    mediaType: str = "text"  # text / image / video / voice / gif
+    language: str = "ar"
+
+
+class RespectAIPostClassifyResponse(BaseModel):
+    ok: bool
+    topics: list[str]
+    primaryTopic: str = "general"
+    confidence: float = 0.0
+    model: str = ""
+    stored: bool = False
+    fallback: bool = False
+    memoryUsed: bool = False
+    source: str = ""
+    reason: str = ""
+    keywords: list[str] = Field(default_factory=list)
+
+
 class AppAIFeedbackSubmitRequest(BaseModel):
     username: str = ""
     name: str = ""
@@ -1163,6 +1460,13 @@ class AppAIFeedbackSubmitRequest(BaseModel):
     note: str = Field(default="", min_length=8)
     screen: str = ""
     appVersion: str = ""
+    mediaUrl: str = ""
+    mediaType: str = ""
+    mediaName: str = ""
+    mediaUrls: list[str] = Field(default_factory=list)
+    imageUrls: list[str] = Field(default_factory=list)
+    videoUrls: list[str] = Field(default_factory=list)
+    mediaAttachments: list[Dict[str, Any]] = Field(default_factory=list)
     deviceInfo: Dict[str, Any] = Field(default_factory=dict)
     language: str = "ar"
 
@@ -1170,6 +1474,18 @@ class AppAIFeedbackSubmitRequest(BaseModel):
 class AppAIFeedbackApproveRequest(BaseModel):
     reportId: str = Field(default="", min_length=3)
     approvedBy: str = ""
+
+
+class AppFeedbackListRequest(BaseModel):
+    adminUsername: str = ""
+    status: str = "all"
+    limit: int = 120
+
+
+class AppFeedbackActionRequest(BaseModel):
+    reportId: str = Field(default="", min_length=3)
+    adminUsername: str = ""
+    adminNote: str = ""
 
 
 
@@ -1224,6 +1540,73 @@ def _string_data(data: Dict[str, Any], msg_type: str, title: str, body: str) -> 
     merged = {**data, "type": msg_type, "title": title, "body": body}
     return {str(k): "" if v is None else str(v) for k, v in merged.items()}
 
+def _android_channel_id_for_type(msg_type: str) -> str:
+    kind = (msg_type or "").strip().lower()
+    if kind in {"general", "general_notification"}:
+        return "respect_general_channel"
+    if kind == "call":
+        return "respect_calls_channel"
+    if kind in {
+        "post",
+        "post_event",
+        "post_moderation_deleted",
+        "post_deleted_by_moderation",
+        "app_feedback_resolved",
+        "community_report_rejected",
+        "community_report_accepted",
+        "report_rejected_reporter",
+        "report_accepted_reporter",
+        "report_accepted_owner",
+    }:
+        return "respect_posts_channel"
+    return "respect_messages_channel"
+
+
+def _android_should_include_notification(msg_type: str, privacy_data_only: bool) -> bool:
+    # Data-only لا يظهر دائمًا إذا التطبيق مقفل/مقتول على Android.
+    # لذلك نضيف notification payload للأنواع غير الحساسة أو التي نصها عام/مترجم.
+    kind = (msg_type or "").strip().lower()
+    if kind == "call":
+        return False
+    if not privacy_data_only:
+        return True
+    return kind in {
+        "message",                 # نص عام: لديك رسالة جديدة، بدون محتوى الرسالة.
+        "general_notification",    # إشعار إداري مقصود ظهوره خارج التطبيق.
+        "general",
+        "post_event",
+        "app_feedback_resolved",
+        "post_moderation_deleted",
+        "post_deleted_by_moderation",
+    }
+
+
+def _is_bad_fcm_token_error(detail: Any) -> bool:
+    text = str(detail or "").upper()
+    return any(marker in text for marker in [
+        "UNREGISTERED",
+        "NOT_FOUND",
+        "INVALID_ARGUMENT",
+        "SENDER_ID_MISMATCH",
+        "INVALID_REGISTRATION",
+    ])
+
+
+def clear_fcm_token_value(token: str) -> None:
+    clean = (token or "").strip()
+    if not clean or not SB_URL or not (SB_SERVICE or SB_ANON):
+        return
+    try:
+        requests.patch(
+            f"{SB_URL}/rest/v1/users",
+            headers={**_supabase_headers(use_service_role=True), "Prefer": "return=minimal"},
+            params={"fcm_token": f"eq.{clean}"},
+            json={"fcm_token": None, "fcm_updated_at": datetime.now(timezone.utc).isoformat()},
+            timeout=12,
+        )
+    except Exception as exc:
+        logger.warning("Failed to clear stale FCM token: %s", exc)
+
 
 def _fcm_ios_apns_config(msg_type: str, clean_data: Dict[str, str], privacy_data_only: bool, title: str, body: str) -> Dict[str, Any]:
     """
@@ -1270,10 +1653,11 @@ def send_fcm_v1(token: str, msg_type: str, title: str, body: str, data: Dict[str
     privacy_data_only = os.getenv("FCM_PRIVACY_DATA_ONLY", "true").strip().lower() in {"1", "true", "yes", "on"}
 
     ios_apns = _fcm_ios_apns_config(msg_type, clean_data, privacy_data_only, title, body)
+    include_android_notification = _android_should_include_notification(msg_type, privacy_data_only)
+    channel_id = _android_channel_id_for_type(msg_type)
 
-    if msg_type == "call" or privacy_data_only:
-        # Privacy-first: Android يبقى Data Only، و iOS يأخذ APNs alert عام حتى لا يضيع الإشعار بالخلفية.
-        # لا نضع أسماء أو نصوص حساسة داخل notification payload.
+    if msg_type == "call" or not include_android_notification:
+        # Data-only يبقى للمكالمات أو الأنواع الحساسة فقط.
         payload = {
             "message": {
                 "token": token,
@@ -1286,7 +1670,7 @@ def send_fcm_v1(token: str, msg_type: str, title: str, body: str, data: Dict[str
             }
         }
     else:
-        # احتياطي اختياري لو عطلت FCM_PRIVACY_DATA_ONLY، يبقى الإشعار عامًا بدون محتوى حساس.
+        # Android يحتاج notification payload حتى يظهر الإشعار عندما التطبيق مقفل/مقتول.
         payload = {
             "message": {
                 "token": token,
@@ -1297,16 +1681,19 @@ def send_fcm_v1(token: str, msg_type: str, title: str, body: str, data: Dict[str
                 "data": clean_data,
                 "android": {
                     "priority": "HIGH",
+                    "ttl": "3600s",
                     "notification": {
-                        "channel_id": "respect_messages_channel",
+                        "channel_id": channel_id,
                         "sound": "default",
+                        "default_sound": True,
+                        "notification_priority": "PRIORITY_HIGH",
                     },
                 },
                 "apns": ios_apns,
             }
         }
 
-    response = requests.post(
+    response = HTTP_SESSION.post(
         url,
         headers={
             "Authorization": f"Bearer {access_token}",
@@ -1320,14 +1707,14 @@ def send_fcm_v1(token: str, msg_type: str, title: str, body: str, data: Dict[str
     logger.debug("FCM response body=%s", _safe_response_text(response.text))
 
     if response.status_code >= 400:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "firebase_status": response.status_code,
-                "firebase_body": response.text,
-                "hint": "SENDER_ID_MISMATCH يعني google-services.json أو service account من مشروع مختلف. UNREGISTERED يعني التوكن قديم.",
-            },
-        )
+        detail = {
+            "firebase_status": response.status_code,
+            "firebase_body": response.text,
+            "hint": "SENDER_ID_MISMATCH يعني google-services.json أو service account من مشروع مختلف. UNREGISTERED يعني التوكن قديم.",
+        }
+        if _is_bad_fcm_token_error(detail):
+            clear_fcm_token_value(token)
+        raise HTTPException(status_code=400, detail=detail)
 
     try:
         firebase_body = response.json()
@@ -1337,9 +1724,151 @@ def send_fcm_v1(token: str, msg_type: str, title: str, body: str, data: Dict[str
     return {
         "ok": True,
         "firebase": firebase_body,
-        "sent_as": "data_only" if (msg_type == "call" or privacy_data_only) else "notification",
+        "sent_as": "notification" if include_android_notification else "data_only",
         "type": msg_type,
     }
+
+
+def _moderation_delete_source_kind(decision_source: str, memory_used: bool = False) -> str:
+    """
+    يرجع نوع مصدر قرار الحذف بشكل موحد حتى يظهر للمستخدم:
+    - memory: ذاكرة Respect AI أو قاموس البلاغات المتعلم.
+    - ai: مراجعة Respect AI/Qwen.
+    - link_guard: فحص الروابط الخارجي.
+    - local: حماية محلية احتياطية.
+    """
+    src = (decision_source or "").strip().lower()
+    if memory_used or src in {
+        "respect_ai_moderation_memory",
+        "moderation_memory",
+        "learned_report_dictionary",
+        "learned_dictionary",
+        "topic_memory",
+    }:
+        return "memory"
+    if "memory" in src or "learned" in src:
+        return "memory"
+    if "safe-browsing" in src or "virustotal" in src or "link" in src:
+        return "link_guard"
+    if "local" in src or "fallback" in src:
+        return "local"
+    return "ai"
+
+
+def _moderation_delete_source_label(kind: str, language: str = "ar") -> str:
+    lang = normalize_language(language)
+    k = (kind or "").strip().lower()
+    if lang == "ar":
+        if k == "memory":
+            return "ذاكرة Respect AI"
+        if k == "link_guard":
+            return "فحص الروابط الأمني"
+        if k == "local":
+            return "نظام الحماية المحلي"
+        return "Respect AI"
+    if k == "memory":
+        return "Respect AI Memory"
+    if k == "link_guard":
+        return "Link Safety Guard"
+    if k == "local":
+        return "Local Safety Guard"
+    return "Respect AI"
+
+
+def _moderation_delete_body(language: str, source_label: str, category: str, reason: str) -> str:
+    lang = normalize_language(language)
+    clean_reason = (reason or "").strip()
+    clean_category = (category or "violation").strip()
+    if lang == "ar":
+        if clean_reason:
+            return f"تم حذف تغريدتك بواسطة {source_label}. السبب: {clean_reason[:180]}"
+        return f"تم حذف تغريدتك بواسطة {source_label}. التصنيف: {clean_category}"
+    if clean_reason:
+        return f"Your tweet was deleted by {source_label}. Reason: {clean_reason[:180]}"
+    return f"Your tweet was deleted by {source_label}. Category: {clean_category}"
+
+
+def _send_post_moderation_deleted_push(
+    username: str,
+    post_id: str,
+    reason: str,
+    category: str,
+    confidence: float,
+    decision_source: str,
+    memory_used: bool = False,
+    matched_term: str = "",
+    fallback_language: str = "ar",
+) -> Dict[str, Any]:
+    """
+    يرسل إشعارًا لصاحب التغريدة عند حذفها بواسطة مراقبة Respect AI.
+    مهم: لا يجعل فشل FCM يفشل حذف المنشور؛ يرجع نتيجة واضحة في response والـ logs.
+    """
+    user = display_username(username)
+    pid = (post_id or "").strip()
+    if not user or user == "@user":
+        return {"sent": False, "reason": "missing_username", "postId": pid}
+
+    try:
+        target = get_user_push_target(user, fallback_language=fallback_language)
+        if not target:
+            return {"sent": False, "reason": "missing_fcm_token", "username": user, "postId": pid}
+
+        language = normalize_language(target.get("language") or fallback_language)
+        kind = _moderation_delete_source_kind(decision_source, memory_used=memory_used)
+        source_label = _moderation_delete_source_label(kind, language)
+        title = _t_push("post_deleted", language)
+        body = _moderation_delete_body(language, source_label, category, reason)
+
+        data = _localized_data(
+            {
+                "postId": pid,
+                "username": user,
+                "category": category or "violation",
+                "reason": (reason or "")[:700],
+                "confidence": round(float(confidence or 0.0), 4),
+                "decisionSource": decision_source or ("respect_ai_moderation_memory" if kind == "memory" else "respect_ai"),
+                "decisionSourceKind": kind,
+                "decisionSourceLabel": source_label,
+                "deletedBy": source_label,
+                "memoryUsed": bool(memory_used),
+                "moderationMemoryUsed": bool(memory_used),
+                "matchedTerm": (matched_term or "")[:160],
+            },
+            language,
+            title,
+            body,
+        )
+
+        result = send_fcm_v1(
+            target["token"],
+            "post_moderation_deleted",
+            title,
+            body,
+            data,
+        )
+        return {
+            "sent": True,
+            "username": user,
+            "postId": pid,
+            "decisionSourceKind": kind,
+            "decisionSourceLabel": source_label,
+            "firebase": result.get("firebase"),
+        }
+    except Exception as exc:
+        logger.warning(
+            "post moderation delete push failed username=%s post_id=%s source=%s error=%s",
+            user,
+            pid,
+            decision_source,
+            exc,
+        )
+        return {
+            "sent": False,
+            "reason": "push_exception",
+            "error": str(exc)[:500],
+            "username": user,
+            "postId": pid,
+        }
 
 
 @app.head("/")
@@ -1356,6 +1885,7 @@ def health():
         "using_service_account_json_env": bool(SA_JSON),
         "service_account_file_configured": bool(SA_FILE),
         "ai_provider": "qwen",
+        "topic_taxonomy_version": "v4_primary_secondary",
         "respect_ai_enabled": bool(QWEN_API_KEY),
         "respect_cyber_ai_enabled": bool(HF_TOKEN),
         "cyber_admin_page": "/respect-ai/cyber",
@@ -1368,6 +1898,15 @@ def health():
         "qwen_coder_model": QWEN_CODER_MODEL,
         "qwen_coder_timeout_seconds": QWEN_CODER_TIMEOUT_SECONDS,
         "qwen_base_url": QWEN_BASE_URL,
+        "openrouter_enabled": bool(OPENROUTER_API_KEY),
+        "ai_fix_review_mode": AI_FIX_REVIEW_MODE,
+        "ai_fix_patch_only": AI_FIX_PATCH_ONLY,
+        "ai_fix_model_1": AI_FIX_MODEL_1,
+        "ai_fix_model_2": AI_FIX_MODEL_2,
+        "ai_fix_model_3": AI_FIX_MODEL_3,
+        "ai_fix_extra_models": AI_FIX_EXTRA_MODELS,
+        "ai_fix_model_chain": AI_FIX_MODEL_CHAIN,
+        "ai_fix_max_model_attempts": AI_FIX_MAX_MODEL_ATTEMPTS,
         "moderation_endpoint": "/respect-ai/moderate",
         "story_moderation_endpoint": "/respect-ai/moderate-story",
         "turn_enabled": bool(METERED_API_KEY),
@@ -1793,9 +2332,31 @@ def _login_attempt_key(login: str, device_id: str = "") -> str:
     return f"{clean}|{dev}"
 
 
+def _login_failure_redis_key(key: str) -> str:
+    return _redis_key("login_failures", hashlib.sha256(key.encode("utf-8")).hexdigest())
+
+
+def _read_login_failure_row(key: str) -> Dict[str, Any]:
+    cached = _redis_get_json(_login_failure_redis_key(key))
+    if isinstance(cached, dict):
+        return cached
+    return _login_failures.get(key) or {"attempts": 0, "locked_until": None}
+
+
+def _write_login_failure_row(key: str, row: Dict[str, Any]) -> None:
+    _login_failures[key] = dict(row)
+    ttl = max(3600, LOGIN_LOCK_MINUTES * 60 + 300)
+    _redis_set_json(_login_failure_redis_key(key), row, ttl)
+
+
+def _clear_login_failure_row(key: str) -> None:
+    _login_failures.pop(key, None)
+    _redis_delete(_login_failure_redis_key(key))
+
+
 def _login_attempt_status(login: str, device_id: str = "") -> Dict[str, Any]:
     key = _login_attempt_key(login, device_id)
-    row = _login_failures.get(key) or {"attempts": 0, "locked_until": None}
+    row = _read_login_failure_row(key)
     now = datetime.now(timezone.utc)
     locked_until = row.get("locked_until")
     if isinstance(locked_until, str):
@@ -1816,7 +2377,7 @@ def _login_attempt_status(login: str, device_id: str = "") -> Dict[str, Any]:
             "message": "تم إيقاف تسجيل الدخول مؤقتًا بعد 6 محاولات فاشلة. استخدم نسيت كلمة المرور أو حاول لاحقًا.",
         }
     if locked_until and locked_until <= now:
-        _login_failures.pop(key, None)
+        _clear_login_failure_row(key)
         row = {"attempts": 0, "locked_until": None}
     attempts = int(row.get("attempts") or 0)
     return {
@@ -1831,14 +2392,14 @@ def _login_attempt_status(login: str, device_id: str = "") -> Dict[str, Any]:
 def _record_login_attempt(login: str, device_id: str = "", success: bool = False) -> Dict[str, Any]:
     key = _login_attempt_key(login, device_id)
     if success:
-        _login_failures.pop(key, None)
+        _clear_login_failure_row(key)
         return _login_attempt_status(login, device_id)
-    row = _login_failures.get(key) or {"attempts": 0, "locked_until": None}
+    row = _read_login_failure_row(key)
     attempts = int(row.get("attempts") or 0) + 1
     locked_until = None
     if attempts >= LOGIN_MAX_FAILED_ATTEMPTS:
         locked_until = datetime.now(timezone.utc) + timedelta(minutes=LOGIN_LOCK_MINUTES)
-    _login_failures[key] = {"attempts": attempts, "locked_until": locked_until.isoformat() if locked_until else None}
+    _write_login_failure_row(key, {"attempts": attempts, "locked_until": locked_until.isoformat() if locked_until else None})
     status = _login_attempt_status(login, device_id)
     status["attempts"] = attempts
     status["remainingAttempts"] = max(0, LOGIN_MAX_FAILED_ATTEMPTS - attempts)
@@ -2075,9 +2636,15 @@ def _password_reset_token_hash(token: str) -> str:
     return hmac.new(_otp_secret(), str(token or "").encode("utf-8"), hashlib.sha256).hexdigest()
 
 
+def _password_reset_redis_key(token_hash: str) -> str:
+    return _redis_key("password_reset", hashlib.sha256(str(token_hash or "").encode("utf-8")).hexdigest())
+
+
 def _store_password_reset_token(email: str, token_hash: str, username: str, device_id: str = "") -> None:
     expires = datetime.now(timezone.utc) + timedelta(minutes=PASSWORD_RESET_TTL_MINUTES)
-    _password_reset_tokens[token_hash] = {"email": email, "username": username, "device_id": device_id, "expires_at": expires.isoformat(), "used": False}
+    row = {"email": email, "username": username, "device_id": device_id, "expires_at": expires.isoformat(), "used": False, "token_hash": token_hash}
+    _password_reset_tokens[token_hash] = dict(row)
+    _redis_set_json(_password_reset_redis_key(token_hash), row, PASSWORD_RESET_TTL_MINUTES * 60)
     try:
         requests.post(
             f"{SB_URL}/rest/v1/respect_password_resets",
@@ -2104,7 +2671,8 @@ def _read_password_reset_token(token: str) -> Dict[str, Any]:
                 return data[0]
     except Exception as exc:
         logger.warning("password reset token DB read skipped: %s", exc)
-    row = _password_reset_tokens.get(token_hash)
+    redis_row = _redis_get_json(_password_reset_redis_key(token_hash))
+    row = redis_row if isinstance(redis_row, dict) else _password_reset_tokens.get(token_hash)
     if not row or row.get("used"):
         raise HTTPException(status_code=400, detail="رابط إعادة التعيين غير صحيح أو مستخدم")
     return {**row, "token_hash": token_hash}
@@ -2121,6 +2689,7 @@ def _consume_password_reset_token(token_hash: str) -> None:
         )
     except Exception:
         pass
+    _redis_delete(_password_reset_redis_key(token_hash))
     if token_hash in _password_reset_tokens:
         _password_reset_tokens[token_hash]["used"] = True
 
@@ -3195,6 +3764,55 @@ def send_user_push(req: UserPushRequest, x_app_secret: Optional[str] = Header(de
     )
 
 
+def _send_general_push_background(
+    *,
+    notification_id: str,
+    tokens: list[Dict[str, Any]],
+    title: str,
+    body: str,
+    req_data: Dict[str, Any],
+    created_at: str,
+) -> Dict[str, Any]:
+    sent = 0
+    failed = 0
+    errors = []
+    sender_username = display_username(str(req_data.get("senderUsername") or ""))
+    sender_name = str(req_data.get("senderName") or "Respect Admin")
+    base_data = req_data.get("data") if isinstance(req_data.get("data"), dict) else {}
+    language_fallback = str(req_data.get("language") or "ar")
+
+    for item in tokens:
+        language = normalize_language(item.get("language") or language_fallback)
+        localized_title = title or _t_push("respect", language)
+        localized_body = body or _t_push("new_notification", language)
+        data = _localized_data({
+            **base_data,
+            "type": "general_notification",
+            "id": notification_id,
+            "notificationId": notification_id,
+            "title": title,
+            "body": body,
+            "created_at": created_at,
+            "senderUsername": sender_username,
+            "senderName": sender_name,
+        }, language, localized_title, localized_body)
+        try:
+            send_fcm_v1(item["token"], "general_notification", localized_title, localized_body, data)
+            sent += 1
+        except HTTPException as exc:
+            failed += 1
+            if len(errors) < 10:
+                errors.append({"username": item.get("username", ""), "error": exc.detail})
+        except Exception as exc:
+            failed += 1
+            if len(errors) < 10:
+                errors.append({"username": item.get("username", ""), "error": str(exc)})
+    logger.info("general push finished id=%s total=%s sent=%s failed=%s", notification_id, len(tokens), sent, failed)
+    if errors:
+        logger.warning("general push errors id=%s sample=%s", notification_id, _safe_response_text(json.dumps(errors, ensure_ascii=False), 1000))
+    return {"ok": True, "id": notification_id, "total": len(tokens), "sent": sent, "failed": failed, "errors": errors}
+
+
 @app.post("/send_general_push")
 def send_general_push(req: GeneralPushRequest, x_app_secret: Optional[str] = Header(default=None)):
     _check_secret(x_app_secret)
@@ -3205,46 +3823,44 @@ def send_general_push(req: GeneralPushRequest, x_app_secret: Optional[str] = Hea
 
     notification_id = create_general_notification_row(title, body, req.senderUsername, req.senderName)
     tokens = get_all_user_fcm_tokens()
-    sent = 0
-    failed = 0
-    errors = []
     created_at = datetime.now(timezone.utc).isoformat()
-
-    for item in tokens:
-        language = normalize_language(item.get("language") or req.language)
-        localized_title = title or _t_push("respect", language)
-        localized_body = body or _t_push("new_notification", language)
-        data = _localized_data({
-            **(req.data or {}),
-            "type": "general_notification",
-            "id": notification_id,
-            "notificationId": notification_id,
-            "title": title,
-            "body": body,
-            "created_at": created_at,
-            "senderUsername": display_username(req.senderUsername),
-            "senderName": req.senderName or "Respect Admin",
-        }, language, localized_title, localized_body)
-        try:
-            send_fcm_v1(item["token"], "general_notification", localized_title, localized_body, data)
-            sent += 1
-        except HTTPException as exc:
-            failed += 1
-            if len(errors) < 5:
-                errors.append({"username": item.get("username", ""), "error": exc.detail})
-        except Exception as exc:
-            failed += 1
-            if len(errors) < 5:
-                errors.append({"username": item.get("username", ""), "error": str(exc)})
-
-    return {
-        "ok": True,
-        "id": notification_id,
-        "total": len(tokens),
-        "sent": sent,
-        "failed": failed,
-        "errors": errors,
+    req_data = {
+        "data": req.data or {},
+        "language": req.language,
+        "senderUsername": req.senderUsername,
+        "senderName": req.senderName,
     }
+
+    if RESPECT_GENERAL_PUSH_ASYNC:
+        job_id = _submit_background_job(
+            "general_push",
+            _send_general_push_background,
+            notification_id=notification_id,
+            tokens=tokens,
+            title=title,
+            body=body,
+            req_data=req_data,
+            created_at=created_at,
+        )
+        return {
+            "ok": True,
+            "id": notification_id,
+            "total": len(tokens),
+            "queued": True,
+            "jobId": job_id,
+            "sent": 0,
+            "failed": 0,
+            "errors": [],
+        }
+
+    return _send_general_push_background(
+        notification_id=notification_id,
+        tokens=tokens,
+        title=title,
+        body=body,
+        req_data=req_data,
+        created_at=created_at,
+    )
 
 
 @app.post("/send_message_push")
@@ -3498,11 +4114,20 @@ def _chat_completion_request(
     logger.debug("Respect AI %s response body=%s", log_label, _safe_response_text(response.text, 800))
 
     if response.status_code >= 400:
+        # مهم: لا نحول كل أخطاء مزود الذكاء إلى 400.
+        # 429 مثلًا تعني Rate Limit، ونحتاج أن يعرف endpoint بلاغات التطبيق أنها مشكلة مؤقتة
+        # حتى يحفظ البلاغ بدل أن يفشله بالكامل.
+        provider_status = int(response.status_code)
+        client_status = provider_status if provider_status in {408, 409, 425, 429, 500, 502, 503, 504} else 400
         raise HTTPException(
-            status_code=400,
+            status_code=client_status,
             detail={
-                f"{log_label.lower()}_status": response.status_code,
+                f"{log_label.lower()}_status": provider_status,
                 f"{log_label.lower()}_body": response.text,
+                "provider_status": provider_status,
+                "provider": base_url,
+                "model": model,
+                "retryable": provider_status in {408, 409, 425, 429, 500, 502, 503, 504},
             },
         )
 
@@ -3657,6 +4282,356 @@ def ask_groq_ai(
 
 
 
+
+
+# ================= Respect AI Q&A Reply Memory Helpers =================
+def _qa_memory_enabled() -> bool:
+    return bool(RESPECT_AI_QA_MEMORY_ENABLED and SB_URL and (SB_SERVICE or SB_ANON))
+
+
+def _qa_memory_clean_question(value: str) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"(?i)@?respect\s*ai|@respectai|@respect_ai|ريسبكت\s*ai|رسبكت\s*اي", " ", text)
+    text = _normalize_arabic_for_moderation(text)
+    text = re.sub(r"[\u200b-\u200f\u202a-\u202e\ufeff]", "", text)
+    text = re.sub(r"https?://\S+|www\.\S+", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"[^0-9a-zA-Z\u0600-\u06FF\s؟?]+", " ", text)
+    text = re.sub(r"(.)\1{2,}", r"\1\1", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:RESPECT_AI_QA_MEMORY_MAX_QUESTION_CHARS]
+
+
+def _qa_memory_context_text(post_text: str = "", parent_reply_text: str = "", recent_replies_text: str = "") -> str:
+    parts = [
+        str(post_text or "").strip(),
+        str(parent_reply_text or "").strip(),
+        str(recent_replies_text or "").strip(),
+    ]
+    clean = "\n".join(p for p in parts if p)
+    clean = re.sub(r"\s+", " ", clean).strip()
+    return clean[:1500]
+
+
+def _qa_memory_context_hash(post_text: str = "", parent_reply_text: str = "", recent_replies_text: str = "") -> str:
+    context = _qa_memory_context_text(post_text, parent_reply_text, recent_replies_text)
+    if not context:
+        return "global"
+    normalized = _qa_memory_clean_question(context)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest() if normalized else "global"
+
+
+def _qa_memory_hash(normalized_question: str, mode: str, context_hash: str) -> str:
+    base = f"{mode or 'reply'}|{context_hash or 'global'}|{normalized_question}"
+    return hashlib.sha256(base.encode("utf-8")).hexdigest()
+
+
+def _qa_memory_category(question: str, mode: str = "reply") -> str:
+    q = _qa_memory_clean_question(question)
+    m = (mode or "reply").strip().lower()
+    if m.startswith("daily_"):
+        return "daily"
+    if any(x in q for x in ["كود", "برمجه", "برمجة", "flutter", "dart", "python", "sql", "supabase", "fastapi"]):
+        return "programming"
+    if any(x in q for x in ["اشرح", "شرح", "ماهو", "ما هو", "كيف", "ليش", "لماذا"]):
+        return "question"
+    if any(x in q for x in ["لخص", "تلخيص", "اختصر"]):
+        return "summary"
+    return "general"
+
+
+def _qa_memory_has_fresh_or_sensitive_topic(question: str, answer: str = "") -> bool:
+    text = _qa_memory_clean_question(f"{question} {answer}")
+    if not text:
+        return True
+    fresh_terms = {
+        "الان", "حاليا", "اليوم", "امس", "بكره", "غدا", "اخر", "آخر", "اخبار", "خبر", "ترند",
+        "سعر", "اسعار", "بورصه", "بورصة", "سهم", "اسهم", "عملة", "دولار", "طقس", "مباراه", "مباراة",
+        "نتيجه", "نتيجة", "رئيس", "وزير", "انتخابات", "قانون", "رسوم", "موعد", "جدول",
+        "today", "now", "latest", "news", "price", "weather", "stock", "crypto", "election", "president",
+    }
+    sensitive_terms = {
+        "كلمه المرور", "كلمة المرور", "باسورد", "رمز التحقق", "otp", "token", "api key", "secret",
+        "ايميلي", "ايميل", "رقمي", "عنواني", "بطاقتي", "حسابي", "خصوصي", "private", "password",
+    }
+    medical_legal_terms = {
+        "تشخيص", "دواء", "علاج", "محكمه", "محكمة", "قضيه", "قضية", "فتوى", "حلال", "حرام",
+        "diagnosis", "medicine", "lawyer", "court", "legal",
+    }
+    return any(term in text for term in fresh_terms | sensitive_terms | medical_legal_terms)
+
+
+def _qa_memory_is_cacheable(question: str, answer: str = "", mode: str = "reply") -> bool:
+    q = _qa_memory_clean_question(question)
+    a = str(answer or "").strip()
+    m = (mode or "reply").strip().lower()
+    if not _qa_memory_enabled():
+        return False
+    if m.startswith("daily_") or m in {"poll", "daily_poll", "daily_question", "daily_info"}:
+        return False
+    if len(q) < RESPECT_AI_QA_MEMORY_MIN_QUESTION_CHARS:
+        return False
+    if len(q) > RESPECT_AI_QA_MEMORY_MAX_QUESTION_CHARS:
+        return False
+    if answer is not None:
+        if len(a) < 2 or len(a) > RESPECT_AI_QA_MEMORY_MAX_ANSWER_CHARS:
+            return False
+        if "NO_REPEATED_QUESTION" in a:
+            return False
+    if _qa_memory_has_fresh_or_sensitive_topic(q, a):
+        return False
+    return True
+
+
+def _qa_memory_confidence(question: str, answer: str, context_hash: str) -> float:
+    q = _qa_memory_clean_question(question)
+    a = str(answer or "").strip()
+    score = 0.80
+    if len(q) >= 18:
+        score += 0.04
+    if len(a) >= 25:
+        score += 0.04
+    if context_hash and context_hash != "global":
+        score += 0.03
+    return round(min(0.93, max(0.70, score)), 3)
+
+
+def _qa_memory_rest_get(params: Dict[str, str], *, limit: int = 1) -> list[Dict[str, Any]]:
+    if not _qa_memory_enabled():
+        return []
+    try:
+        q = dict(params or {})
+        if limit:
+            q["limit"] = str(limit)
+        r = requests.get(
+            f"{SB_URL}/rest/v1/{RESPECT_AI_QA_MEMORY_TABLE}",
+            headers=_supabase_headers(use_service_role=True),
+            params=q,
+            timeout=8,
+        )
+        if r.status_code >= 400:
+            logger.warning("qa_memory read skipped status=%s body=%s", r.status_code, _safe_response_text(r.text, 300))
+            return []
+        data = r.json()
+        return data if isinstance(data, list) else []
+    except Exception as e:
+        logger.warning("qa_memory read exception: %s", e)
+        return []
+
+
+def _qa_memory_touch(row: Dict[str, Any], *, memory_hit: bool = True, ai_hit: bool = False) -> None:
+    try:
+        row_id = str(row.get("id") or "").strip()
+        if not row_id:
+            return
+        payload = {
+            "hits": int(row.get("hits") or 0) + 1,
+            "memory_hits": int(row.get("memory_hits") or 0) + (1 if memory_hit else 0),
+            "ai_hits": int(row.get("ai_hits") or 0) + (1 if ai_hit else 0),
+            "last_used_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        requests.patch(
+            f"{SB_URL}/rest/v1/{RESPECT_AI_QA_MEMORY_TABLE}",
+            headers={**_supabase_headers(use_service_role=True), "Prefer": "return=minimal"},
+            params={"id": f"eq.{row_id}"},
+            json=payload,
+            timeout=8,
+        )
+    except Exception as e:
+        logger.debug("qa_memory touch skipped: %s", e)
+
+
+def _qa_memory_similarity(a: str, b: str) -> float:
+    a = _qa_memory_clean_question(a)
+    b = _qa_memory_clean_question(b)
+    if not a or not b:
+        return 0.0
+    if a == b:
+        return 1.0
+    ratio = SequenceMatcher(None, a, b).ratio()
+    at = set(a.split())
+    bt = set(b.split())
+    token_ratio = (len(at & bt) / max(1, len(at | bt))) if at and bt else 0.0
+    return max(ratio, token_ratio)
+
+
+def _qa_memory_row_to_reply(row: Dict[str, Any], *, match_score: float) -> Dict[str, Any]:
+    _qa_memory_touch(row, memory_hit=True, ai_hit=False)
+    return {
+        "reply": str(row.get("answer") or "").strip(),
+        "model": str(row.get("model") or "respect_ai_qa_memory_v1"),
+        "memoryUsed": True,
+        "memoryId": str(row.get("id") or ""),
+        "source": "qa_memory",
+        "confidence": float(row.get("confidence") or match_score or 0.0),
+        "category": str(row.get("category") or "general"),
+        "matchScore": float(match_score or 0.0),
+    }
+
+
+def _qa_memory_lookup(
+    question: str,
+    *,
+    mode: str = "reply",
+    post_text: str = "",
+    parent_reply_text: str = "",
+    recent_replies_text: str = "",
+) -> Optional[Dict[str, Any]]:
+    if not _qa_memory_is_cacheable(question, answer="cached", mode=mode):
+        return None
+
+    normalized = _qa_memory_clean_question(question)
+    context_hash = _qa_memory_context_hash(post_text, parent_reply_text, recent_replies_text)
+    safe_mode = (mode or "reply").strip().lower() or "reply"
+    q_hash = _qa_memory_hash(normalized, safe_mode, context_hash)
+
+    select_cols = "id,question_hash,normalized_question,answer,category,confidence,hits,ai_hits,memory_hits,source,model,active,approved,context_hash,mode"
+    exact_rows = _qa_memory_rest_get(
+        {
+            "select": select_cols,
+            "question_hash": f"eq.{q_hash}",
+            "active": "eq.true",
+            "limit": "1",
+        },
+        limit=1,
+    )
+    for row in exact_rows:
+        if row.get("approved") is False:
+            continue
+        answer = str(row.get("answer") or "").strip()
+        confidence = float(row.get("confidence") or 0.0)
+        if answer and confidence >= RESPECT_AI_QA_MEMORY_MIN_CONFIDENCE:
+            return _qa_memory_row_to_reply(row, match_score=1.0)
+
+    # التشابه العام فقط بدون سياق حتى لا نستخدم جواب منشور في منشور مختلف.
+    if context_hash != "global":
+        return None
+
+    rows = _qa_memory_rest_get(
+        {
+            "select": select_cols,
+            "context_hash": "eq.global",
+            "mode": f"eq.{safe_mode}",
+            "active": "eq.true",
+            "approved": "eq.true",
+            "order": "hits.desc,updated_at.desc",
+        },
+        limit=RESPECT_AI_QA_MEMORY_SIMILAR_SCAN_LIMIT,
+    )
+    best: Optional[Dict[str, Any]] = None
+    best_score = 0.0
+    for row in rows:
+        answer = str(row.get("answer") or "").strip()
+        confidence = float(row.get("confidence") or 0.0)
+        if not answer or confidence < RESPECT_AI_QA_MEMORY_MIN_CONFIDENCE:
+            continue
+        score = _qa_memory_similarity(normalized, str(row.get("normalized_question") or ""))
+        if score > best_score:
+            best = row
+            best_score = score
+
+    if best is not None and best_score >= RESPECT_AI_QA_MEMORY_MATCH_THRESHOLD:
+        return _qa_memory_row_to_reply(best, match_score=best_score)
+    return None
+
+
+def _qa_memory_learn(
+    question: str,
+    answer: str,
+    *,
+    mode: str = "reply",
+    username: str = "",
+    post_text: str = "",
+    parent_reply_text: str = "",
+    recent_replies_text: str = "",
+    model: str = "",
+) -> Dict[str, Any]:
+    if not _qa_memory_is_cacheable(question, answer=answer, mode=mode):
+        return {"ok": False, "learned": False, "reason": "not_cacheable"}
+
+    normalized = _qa_memory_clean_question(question)
+    safe_mode = (mode or "reply").strip().lower() or "reply"
+    context_hash = _qa_memory_context_hash(post_text, parent_reply_text, recent_replies_text)
+    q_hash = _qa_memory_hash(normalized, safe_mode, context_hash)
+    now = datetime.now(timezone.utc).isoformat()
+
+    existing = _qa_memory_rest_get(
+        {"select": "id,hits,ai_hits,memory_hits,confidence", "question_hash": f"eq.{q_hash}", "limit": "1"},
+        limit=1,
+    )
+    confidence = _qa_memory_confidence(normalized, answer, context_hash)
+    sample_question = re.sub(r"\s+", " ", str(question or "").strip())[:RESPECT_AI_QA_MEMORY_MAX_QUESTION_CHARS]
+    clean_answer = str(answer or "").strip()[:RESPECT_AI_QA_MEMORY_MAX_ANSWER_CHARS]
+
+    if existing:
+        row = existing[0]
+        row_id = str(row.get("id") or "")
+        payload = {
+            "answer": clean_answer,
+            "confidence": max(float(row.get("confidence") or 0.0), confidence),
+            "hits": int(row.get("hits") or 0) + 1,
+            "ai_hits": int(row.get("ai_hits") or 0) + 1,
+            "sample_question": sample_question,
+            "sample_username": _display_username(username),
+            "model": model or QWEN_MODEL,
+            "source": "respect_ai",
+            "active": True,
+            "updated_at": now,
+        }
+        try:
+            r = requests.patch(
+                f"{SB_URL}/rest/v1/{RESPECT_AI_QA_MEMORY_TABLE}",
+                headers={**_supabase_headers(use_service_role=True), "Prefer": "return=representation"},
+                params={"id": f"eq.{row_id}"},
+                json=payload,
+                timeout=10,
+            )
+            if r.status_code >= 400:
+                logger.warning("qa_memory patch failed status=%s body=%s", r.status_code, _safe_response_text(r.text, 300))
+                return {"ok": False, "learned": False, "reason": "patch_failed", "status": r.status_code}
+            return {"ok": True, "learned": True, "updated": True, "memoryId": row_id}
+        except Exception as e:
+            logger.warning("qa_memory patch exception: %s", e)
+            return {"ok": False, "learned": False, "reason": "patch_exception"}
+
+    payload = {
+        "question_hash": q_hash,
+        "normalized_question": normalized,
+        "sample_question": sample_question,
+        "answer": clean_answer,
+        "category": _qa_memory_category(normalized, safe_mode),
+        "mode": safe_mode,
+        "context_hash": context_hash,
+        "confidence": confidence,
+        "hits": 1,
+        "ai_hits": 1,
+        "memory_hits": 0,
+        "approved": bool(RESPECT_AI_QA_MEMORY_AUTO_APPROVE),
+        "active": True,
+        "source": "respect_ai",
+        "model": model or QWEN_MODEL,
+        "sample_username": _display_username(username),
+        "created_at": now,
+        "updated_at": now,
+        "last_used_at": now,
+    }
+    try:
+        r = requests.post(
+            f"{SB_URL}/rest/v1/{RESPECT_AI_QA_MEMORY_TABLE}",
+            headers={**_supabase_headers(use_service_role=True), "Prefer": "return=representation"},
+            json=payload,
+            timeout=10,
+        )
+        if r.status_code >= 400:
+            logger.warning("qa_memory insert failed status=%s body=%s", r.status_code, _safe_response_text(r.text, 300))
+            return {"ok": False, "learned": False, "reason": "insert_failed", "status": r.status_code}
+        data = r.json()
+        row = data[0] if isinstance(data, list) and data else {}
+        return {"ok": True, "learned": True, "inserted": True, "memoryId": str(row.get("id") or "")}
+    except Exception as e:
+        logger.warning("qa_memory insert exception: %s", e)
+        return {"ok": False, "learned": False, "reason": "insert_exception"}
+
 def _normalize_arabic_for_moderation(value: str) -> str:
     text = (value or "").strip().lower()
     text = text.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
@@ -3703,6 +4678,7 @@ def _local_hard_violation_guard(text: str) -> Optional[Dict[str, Any]]:
     """
     طبقة أولى صارمة قبل أي fast-safe أو سياق RP.
     تكشف السب/الألفاظ الجنسية/التهديدات الواضحة حتى لو كانت مفصولة بفواصل أو نقاط أو مسافات.
+    ترجع matchedTerm/matchedTerms حتى تتعلم الذاكرة الكلمة المسيئة فورًا وليس الجملة فقط.
     """
     if not (text or "").strip():
         return None
@@ -3713,86 +4689,92 @@ def _local_hard_violation_guard(text: str) -> Optional[Dict[str, Any]]:
     tokens = set(spaced.split())
 
     def hit_word(words: list[str]) -> Optional[str]:
-        normalized_words = [_normalize_obfuscated_text_for_moderation(w)["compact"] for w in words]
-        for w in normalized_words:
-            if not w:
-                continue
+        normalized_words: list[tuple[str, str]] = []
+        for original in words:
+            normalized = _normalize_obfuscated_text_for_moderation(original)["compact"]
+            if normalized:
+                normalized_words.append((str(original), normalized))
+
+        for original, w in normalized_words:
             # الكلمات القصيرة جدًا نفحصها كتوكن مستقل أو كتمويه واضح داخل compact.
             if len(w) <= 2:
                 if w in tokens:
-                    return w
+                    return original
                 # يسمح بكشف: ك.س أو ك س أو كسسس، بدون أن نحذف كلمات طبيعية مثل كسر/كأس.
                 if re.search(rf"(^|[^ء-يa-zA-Z0-9]){re.escape(w)}($|[^ء-يa-zA-Z0-9])", spaced):
-                    return w
+                    return original
                 # كشف التمويه بحرفين مفصولين: ك.س / ك س / ز-ب ... بدون حذف كلمات طبيعية مثل كسر.
                 if len(w) == 2 and re.search(rf"(^|\s){re.escape(w[0])}\s+{re.escape(w[1])}(\s|$)", spaced):
-                    return w
+                    return original
                 if compact == w or compact.startswith(w + "سري") or compact.endswith(w):
-                    return w
+                    return original
             else:
-                if w in compact:
-                    return w
+                if w in tokens or w in compact:
+                    return original
         return None
+
+    def result(category: str, reason: str, confidence: float, matched: str) -> Dict[str, Any]:
+        clean_match = _safe_term_phrase(matched or "", 120)
+        return {
+            "shouldDelete": True,
+            "deleteParentReply": False,
+            "category": category,
+            "reason": reason,
+            "confidence": confidence,
+            "checks": 1,
+            "local_guard": True,
+            "normalizedText": spaced,
+            "matchedTerm": clean_match,
+            "matchedTerms": [clean_match] if clean_match else [],
+        }
 
     # تهديدات وتحريض واضح.
     threat_terms = ["اقتلوه", "اقتلو", "اقتله", "انتحر", "يموت", "موتوا", "اذبحه", "ذبح", "kill yourself", "i will kill"]
-    if hit_word(threat_terms):
-        return {
-            "shouldDelete": True,
-            "deleteParentReply": False,
-            "category": "threat",
-            "reason": "تهديد أو تحريض واضح تم كشفه بعد تطبيع النص",
-            "confidence": 0.98,
-            "checks": 1,
-            "local_guard": True,
-            "normalizedText": spaced,
-        }
+    hit = hit_word(threat_terms)
+    if hit:
+        return result(
+            "threat",
+            "تهديد أو تحريض واضح تم كشفه بعد تطبيع النص",
+            0.98,
+            hit,
+        )
 
     # ألفاظ جنسية/فاحشة مباشرة. وجودها في سؤال RP لا يجعلها آمنة.
     sexual_terms = [
-        "كس", "زب", "نيك", "منيوك", "منيوكة", "شرموط", "شرموطة", "قحبة", "قحبه",
-        "طيز", "طيزك", "طيزه", "ممحون", "ممحونة", "مص", "لحس", "fuck", "bitch", "pussy", "dick",
+        "كس", "زب", "زبي", "زبك", "زبه", "زبها", "نيك", "منيوك", "منيوكة", "شرموط", "شرموطة", "قحبة", "قحبه",
+        "طيز", "طيزي", "طيزك", "طيزه", "طيزها", "طيزهم", "ممحون", "ممحونة", "مص", "لحس", "fuck", "bitch", "pussy", "dick",
     ]
-    if hit_word(sexual_terms):
-        return {
-            "shouldDelete": True,
-            "deleteParentReply": False,
-            "category": "sexual_profanity",
-            "reason": "لفظ جنسي/فاحش مباشر داخل النص حتى لو كان ضمن سياق لعبة أو مكتوبًا بتمويه",
-            "confidence": 0.99,
-            "checks": 1,
-            "local_guard": True,
-            "normalizedText": spaced,
-        }
+    hit = hit_word(sexual_terms)
+    if hit:
+        return result(
+            "sexual_profanity",
+            "لفظ جنسي/فاحش مباشر داخل النص حتى لو كان ضمن سياق لعبة أو مكتوبًا بتمويه",
+            0.99,
+            hit,
+        )
 
     # سب مباشر وإهانات واضحة.
     insult_terms = ["كلب", "حمار", "خنزير", "حقير", "وسخ", "زباله", "غبي", "اغبياء", "خرا", "زق", "asshole"]
     addressed = bool(re.search(r"(^|\s)(يا|انت|انتي|انتم|انتو|ياعيال|يا\s+عيال|لك|لها|له)($|\s)", spaced))
-    if addressed and hit_word(insult_terms):
-        return {
-            "shouldDelete": True,
-            "deleteParentReply": False,
-            "category": "insult",
-            "reason": "سب أو إهانة مباشرة موجهة داخل النص وتم كشفها بعد التطبيع",
-            "confidence": 0.97,
-            "checks": 1,
-            "local_guard": True,
-            "normalizedText": spaced,
-        }
+    hit = hit_word(insult_terms)
+    if addressed and hit:
+        return result(
+            "insult",
+            "سب أو إهانة مباشرة موجهة داخل النص وتم كشفها بعد التطبيع",
+            0.97,
+            hit,
+        )
 
     # إساءة دينية واضحة.
     religion_patterns = [r"سب\s*الدين", r"سب\s*الله", r"اهان[هة]\s*الدين", r"لعن\s*الدين"]
-    if any(re.search(pat, spaced) or re.search(pat.replace("\\s*", ""), compact) for pat in religion_patterns):
-        return {
-            "shouldDelete": True,
-            "deleteParentReply": False,
-            "category": "religion_abuse",
-            "reason": "إساءة دينية واضحة تم كشفها بعد تطبيع النص",
-            "confidence": 0.99,
-            "checks": 1,
-            "local_guard": True,
-            "normalizedText": spaced,
-        }
+    for pat in religion_patterns:
+        if re.search(pat, spaced) or re.search(pat.replace("\\s*", ""), compact):
+            return result(
+                "religion_abuse",
+                "إساءة دينية واضحة تم كشفها بعد تطبيع النص",
+                0.99,
+                "إساءة دينية",
+            )
 
     return None
 
@@ -3870,6 +4852,7 @@ def _simple_safe_moderation(text: str) -> Optional[Dict[str, Any]]:
 
     hard_violation = _local_hard_violation_guard(text)
     if hard_violation is not None:
+        # _simple_safe_moderation لا يملك req؛ التعلم يتم في moderate_with_qwen قبل الوصول هنا.
         return hard_violation
 
     safe_phrases = {
@@ -3914,6 +4897,15 @@ _LEARNED_TERMS_CACHE: Dict[str, Any] = {"ts": 0.0, "items": []}
 _LEARNED_TERMS_TTL_SECONDS = int(os.getenv("RESPECT_AI_LEARNED_TERMS_CACHE_TTL", "60") or "60")
 
 
+def _learned_terms_cache_key() -> str:
+    return _redis_key("cache", LEARNED_TERMS_TABLE, "active")
+
+
+def _invalidate_learned_terms_cache() -> None:
+    _LEARNED_TERMS_CACHE["ts"] = 0.0
+    _redis_delete(_learned_terms_cache_key())
+
+
 def _learned_normalized(value: str) -> Dict[str, str]:
     n = _normalize_obfuscated_text_for_moderation(value or "")
     return {"raw": str(value or "").strip(), "spaced": n.get("spaced_collapsed") or n.get("spaced") or "", "compact": n.get("compact") or ""}
@@ -3939,6 +4931,163 @@ def _is_learnable_term(term: str) -> bool:
         return False
     boring = {"هذا", "هذه", "الى", "على", "في", "من", "عن", "مع", "ليش", "ليه", "ياعيال", "التغريده", "المنشور", "بلاغ", "محتوى", "مسيء", "مخالف", "spam", "report", "post"}
     return compact not in boring and spaced not in boring
+
+
+# فلتر أضيق لذاكرة المراقبة من فلتر البلاغات.
+# الهدف: لا نحفظ كلمات عامة مثل "واحد" و"فيكم" و"احط" داخل respect_ai_moderation_memory،
+# لكن نبقي العبارات التي تحتوي على كلمة/جذر مسيء واضح حتى يستفيد النظام من الذاكرة بدون حذف خاطئ.
+_MODERATION_MEMORY_GENERIC_PHRASE_WORDS = {
+    "انا", "انت", "انتي", "انتم", "هو", "هي", "هم", "نحن", "احنا", "همه",
+    "هذا", "هذه", "هذي", "هادا", "هاي", "ذا", "دي", "الي", "اللي", "الى", "إلى",
+    "على", "في", "من", "عن", "مع", "عند", "عندي", "عندك", "لك", "لكم", "لنا",
+    "واحد", "وحد", "احد", "حد", "اثنين", "كل", "كلهم", "كلنا", "ناس", "شخص",
+    "فيكم", "فيك", "فيني", "فيهم", "عليك", "عليكم", "علينا", "عليهم",
+    "احط", "حط", "حطيت", "بحط", "رح", "راح", "ابي", "ابغى", "بدي",
+    "جدا", "مرة", "مره", "اليوم", "امس", "بكرا", "الان", "هنا", "هناك",
+    "the", "and", "for", "with", "this", "that", "you", "are", "was", "were", "post", "tweet",
+}
+
+_MODERATION_MEMORY_STRONG_DELETE_TOKENS = {
+    # عربي/عامي واضح - نحفظه ككلمة منفردة أو داخل عبارة.
+    "زبي", "زب", "زبك", "زبه", "زبها", "كسمك", "كسم", "كس", "طيز", "طيزي", "طيزك", "طيزه", "طيزها", "طيزهم",
+    "نيك", "منيوك", "منيوكة", "شرموط", "شرموطه", "شرموطة", "قحبة", "قحبه", "عرص", "وسخ",
+    "كلب", "حمار", "خرا", "زق",
+    # English obvious insults/slurs used by local/Qwen moderation.
+    "fuck", "bitch", "asshole", "slut", "whore", "pussy", "dick",
+}
+
+def _is_moderation_memory_strong_delete_token(value: str) -> bool:
+    n = _learned_normalized(value or "")
+    spaced = n.get("spaced") or ""
+    compact = n.get("compact") or ""
+    if not compact:
+        return False
+    if compact in _MODERATION_MEMORY_STRONG_DELETE_TOKENS or spaced in _MODERATION_MEMORY_STRONG_DELETE_TOKENS:
+        return True
+    tokens = [t for t in spaced.split() if t]
+    return any(t in _MODERATION_MEMORY_STRONG_DELETE_TOKENS for t in tokens)
+
+
+def _moderation_memory_strong_delete_token_hits(value: str) -> list[str]:
+    """يرجع الكلمات المسيئة الواضحة الموجودة داخل النص بعد التطبيع، لاستخدامها كذاكرة phrase منفردة."""
+    n = _learned_normalized(value or "")
+    spaced = n.get("spaced") or ""
+    compact = n.get("compact") or ""
+    tokens = [t for t in spaced.split() if t]
+    hits: list[str] = []
+
+    def add(term: str) -> None:
+        clean = _safe_term_phrase(term, 80)
+        if not clean:
+            return
+        c = _learned_normalized(clean).get("compact") or ""
+        if not c:
+            return
+        if c not in {_learned_normalized(x).get("compact") for x in hits}:
+            hits.append(clean)
+
+    for token in tokens:
+        tcompact = _learned_normalized(token).get("compact") or ""
+        if not tcompact:
+            continue
+        if tcompact in _MODERATION_MEMORY_STRONG_DELETE_TOKENS:
+            add(token)
+            continue
+        # صيغ الملكية الشائعة بدون فتح الباب لكلمات عامة.
+        for root in ("زب", "طيز", "كسم", "كس", "نيك"):
+            if tcompact.startswith(root) and 2 <= len(tcompact) <= 12:
+                add(token)
+                break
+
+    for strong in _MODERATION_MEMORY_STRONG_DELETE_TOKENS:
+        scompact = _learned_normalized(strong).get("compact") or ""
+        # لا نضيف جذور قصيرة مثل "زب" بسبب وجودها داخل كلمة أطول؛ تحفظ فقط إذا ظهرت كتوكن مستقل أعلاه.
+        if scompact and len(scompact) >= 3 and scompact in compact:
+            add(strong)
+
+    return hits[:12]
+
+
+def _extract_moderation_delete_memory_phrases(text: str, result: Dict[str, Any]) -> list[str]:
+    """
+    استخراج مركز للعبارات التي تحفظ كـ phrase عند الحذف:
+    - matchedTerm من الفلتر/الذكاء.
+    - الكلمة المسيئة المفردة من النص.
+    - لا يحفظ كلمات عامة مثل: واحد/فيكم/احط.
+    """
+    candidates: list[str] = []
+
+    def add(value: Any) -> None:
+        phrase = _safe_term_phrase(str(value or ""), 90)
+        if not phrase:
+            return
+        if not _is_moderation_memory_learnable_delete_phrase(phrase, full_text=text):
+            return
+        pcompact = _learned_normalized(phrase).get("compact") or ""
+        if not pcompact:
+            return
+        existing = {_learned_normalized(x).get("compact") for x in candidates}
+        if pcompact not in existing:
+            candidates.append(phrase)
+
+    # 1) أي matchedTerm صريح يرجع من الفلتر أو Qwen.
+    add(result.get("matchedTerm"))
+    matched_terms = result.get("matchedTerms")
+    if isinstance(matched_terms, list):
+        for item in matched_terms:
+            add(item)
+
+    # 2) الكلمة المسيئة الواضحة وحدها من النص الكامل.
+    for hit in _moderation_memory_strong_delete_token_hits(text):
+        add(hit)
+
+    # 3) احتياط محدود: fallback يستخرج n-grams، لكن الفلتر أعلاه لا يقبل إلا ما يحتوي سب واضح.
+    for phrase in _extract_learned_terms_fallback(text):
+        add(phrase)
+
+    return candidates[:AI_MODERATION_MEMORY_MAX_LEARNED_PHRASES]
+
+def _is_moderation_memory_generic_phrase(value: str) -> bool:
+    n = _learned_normalized(value or "")
+    spaced = n.get("spaced") or ""
+    compact = n.get("compact") or ""
+    if not compact:
+        return True
+    tokens = [t for t in spaced.split() if t]
+    if not tokens:
+        return True
+    if compact in _MODERATION_MEMORY_GENERIC_PHRASE_WORDS or spaced in _MODERATION_MEMORY_GENERIC_PHRASE_WORDS:
+        return True
+    if all(t in _MODERATION_MEMORY_GENERIC_PHRASE_WORDS for t in tokens):
+        return True
+    return False
+
+def _is_moderation_memory_learnable_delete_phrase(value: str, *, full_text: str = "") -> bool:
+    phrase = _safe_term_phrase(value)
+    if not _is_learnable_term(phrase):
+        return False
+    pn = _learned_normalized(phrase)
+    pcompact = pn.get("compact") or ""
+    tokens = [t for t in (pn.get("spaced") or "").split() if t]
+
+    # لا نحفظ الكلمات العامة أو العبارات التي كلها كلمات عامة.
+    if _is_moderation_memory_generic_phrase(phrase):
+        return False
+
+    # الكلمة المفردة لا تحفظ إلا إذا كانت كلمة مسيئة واضحة جدًا.
+    if len(tokens) <= 1:
+        return _is_moderation_memory_strong_delete_token(phrase)
+
+    # أي عبارة مخالفة يجب أن تحتوي على كلمة مسيئة واضحة، وإلا تصبح عرضة لحذف خاطئ.
+    if _is_moderation_memory_strong_delete_token(phrase):
+        return True
+
+    # احتياط: لو الجملة الأصلية فيها كلمة مسيئة واضحة، لا نحفظ عبارة لا تحتوي هي نفسها عليها.
+    # هذا يمنع "واحد واحد" و"فيكم واحد" من جملة مخالفة بسبب كلمة أخرى.
+    if full_text and _is_moderation_memory_strong_delete_token(full_text):
+        return False
+
+    return False
 
 
 def _extract_learned_terms_fallback(post_text: str) -> list[str]:
@@ -4035,7 +5184,7 @@ def _insert_learned_abuse_term(*, term: str, category: str, reason: str, source_
     try:
         r = requests.post(f"{SB_URL}/rest/v1/{LEARNED_TERMS_TABLE}", headers=headers, params={"on_conflict": "term_hash"}, json=payload, timeout=12)
         if r.status_code in (200, 201):
-            _LEARNED_TERMS_CACHE["ts"] = 0.0
+            _invalidate_learned_terms_cache()
             return {"inserted": True, "term": phrase, "hash": payload["term_hash"]}
         logger.warning("Insert learned term failed status=%s body=%s", r.status_code, _safe_response_text(r.text, 300))
         return {"inserted": False, "status": r.status_code, "body": r.text[:300], "term": phrase}
@@ -4064,8 +5213,14 @@ def _learn_abuse_terms_from_valid_report(req: RespectAIModerationRequest, result
 
 def _load_active_learned_terms(force: bool = False) -> list[Dict[str, Any]]:
     now = time.time()
-    if not force and (now - float(_LEARNED_TERMS_CACHE.get("ts") or 0)) < _LEARNED_TERMS_TTL_SECONDS:
-        return list(_LEARNED_TERMS_CACHE.get("items") or [])
+    if not force:
+        redis_items = _redis_get_json(_learned_terms_cache_key())
+        if isinstance(redis_items, list):
+            items = [dict(x) for x in redis_items if isinstance(x, dict)]
+            _LEARNED_TERMS_CACHE.update({"ts": now, "items": items})
+            return items
+        if (now - float(_LEARNED_TERMS_CACHE.get("ts") or 0)) < _LEARNED_TERMS_TTL_SECONDS:
+            return list(_LEARNED_TERMS_CACHE.get("items") or [])
     try:
         r = requests.get(
             f"{SB_URL}/rest/v1/{LEARNED_TERMS_TABLE}",
@@ -4080,6 +5235,7 @@ def _load_active_learned_terms(force: bool = False) -> list[Dict[str, Any]]:
         data = r.json() if r.text else []
         items = [dict(x) for x in data if isinstance(x, dict)] if isinstance(data, list) else []
         _LEARNED_TERMS_CACHE.update({"ts": now, "items": items})
+        _redis_set_json(_learned_terms_cache_key(), items, _LEARNED_TERMS_TTL_SECONDS)
         return items
     except Exception as e:
         logger.warning("Load learned terms exception: %s", e)
@@ -4123,6 +5279,579 @@ def _learned_abuse_violation_guard(text: str) -> Optional[Dict[str, Any]]:
                 "matchedTerm": str(item.get("term") or ""),
             }
     return None
+
+
+# ================= Respect AI Moderation Memory =================
+# ذاكرة عامة لمراجعة المحتوى: تتعلم من قرارات Qwen القوية ثم تستخدمها قبل استدعاء Qwen لاحقًا.
+# الفرق بينها وبين respect_ai_learned_terms:
+# - learned_terms يتعلم من البلاغات المقبولة فقط.
+# - moderation_memory يتعلم من كل قرار AI قوي: آمن/مخالف، مع عتبات محافظة حتى لا تزيد الأخطاء.
+RESPECT_AI_MODERATION_MEMORY_TABLE = os.getenv(
+    "RESPECT_AI_MODERATION_MEMORY_TABLE",
+    "respect_ai_moderation_memory",
+).strip() or "respect_ai_moderation_memory"
+AI_MODERATION_MEMORY_ENABLED = os.getenv("AI_MODERATION_MEMORY_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
+AI_MODERATION_MEMORY_CACHE_TTL_SECONDS = int(os.getenv("AI_MODERATION_MEMORY_CACHE_TTL_SECONDS", "90") or "90")
+AI_MODERATION_MEMORY_MAX_ROWS = int(os.getenv("AI_MODERATION_MEMORY_MAX_ROWS", "2500") or "2500")
+AI_MODERATION_MEMORY_ALLOW_MIN_CONFIDENCE = float(os.getenv("AI_MODERATION_MEMORY_ALLOW_MIN_CONFIDENCE", "0.88") or "0.88")
+AI_MODERATION_MEMORY_DELETE_MIN_CONFIDENCE = float(os.getenv("AI_MODERATION_MEMORY_DELETE_MIN_CONFIDENCE", "0.93") or "0.93")
+AI_MODERATION_MEMORY_REVIEW_MIN_CONFIDENCE = float(os.getenv("AI_MODERATION_MEMORY_REVIEW_MIN_CONFIDENCE", "0.78") or "0.78")
+AI_MODERATION_MEMORY_MIN_HITS_FOR_PHRASE_DELETE = int(os.getenv("AI_MODERATION_MEMORY_MIN_HITS_FOR_PHRASE_DELETE", "1") or "1")
+AI_MODERATION_MEMORY_MIN_HITS_FOR_SAFE_EXACT = int(os.getenv("AI_MODERATION_MEMORY_MIN_HITS_FOR_SAFE_EXACT", "1") or "1")
+AI_MODERATION_MEMORY_LEARN_SAFE_MIN_CONFIDENCE = float(os.getenv("AI_MODERATION_MEMORY_LEARN_SAFE_MIN_CONFIDENCE", "0.80") or "0.80")
+AI_MODERATION_MEMORY_LEARN_DELETE_MIN_CONFIDENCE = float(os.getenv("AI_MODERATION_MEMORY_LEARN_DELETE_MIN_CONFIDENCE", "0.86") or "0.86")
+AI_MODERATION_MEMORY_MAX_LEARNED_PHRASES = int(os.getenv("AI_MODERATION_MEMORY_MAX_LEARNED_PHRASES", "8") or "8")
+_MODERATION_MEMORY_CACHE: Dict[str, Any] = {"ts": 0.0, "items": [], "table_missing": False}
+
+
+def _moderation_memory_cache_key() -> str:
+    return _redis_key("cache", RESPECT_AI_MODERATION_MEMORY_TABLE, "active")
+
+
+def _invalidate_moderation_memory_cache() -> None:
+    _MODERATION_MEMORY_CACHE["ts"] = 0.0
+    _redis_delete(_moderation_memory_cache_key())
+
+
+def _mm_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except Exception:
+        return default
+
+
+def _mm_int(value: Any, default: int = 0) -> int:
+    try:
+        if value is None:
+            return default
+        return int(float(value))
+    except Exception:
+        return default
+
+
+def _moderation_text_has_url(text: str) -> bool:
+    return bool(re.search(r"(?i)\b(?:https?://|www\.|[a-z0-9-]+\.(?:com|net|org|io|gg|co|app|dev|xyz)\b)", text or ""))
+
+
+def _moderation_memory_key(memory_type: str, value: str) -> str:
+    base = f"{memory_type}:{value}".strip().lower()
+    return hashlib.sha256(base.encode("utf-8")).hexdigest()
+
+
+def _moderation_memory_terms(text: str) -> Dict[str, Any]:
+    n = _learned_normalized(text or "")
+    spaced = n.get("spaced") or ""
+    compact = n.get("compact") or ""
+    tokens = [t for t in spaced.split() if len(t) >= 2]
+    stop = {
+        "هذا", "هذه", "هذي", "الي", "اللي", "على", "الى", "إلى", "في", "من", "عن", "مع", "كان", "صار",
+        "انا", "انت", "انتي", "انتم", "هو", "هي", "هم", "نحن", "اليوم", "امس", "بكرا", "جدا", "مرة", "مره",
+        "the", "and", "for", "with", "this", "that", "you", "are", "was", "were", "today", "post", "tweet",
+    }
+    tokens = [t for t in tokens if t not in stop]
+    phrases: list[str] = []
+    for size in (1, 2, 3, 4):
+        for i in range(0, max(0, len(tokens) - size + 1)):
+            phrase = " ".join(tokens[i:i + size]).strip()
+            if not phrase:
+                continue
+            # لا نخزن جمل طويلة جدًا ولا كلمات عامة جدًا.
+            compact_phrase = _learned_normalized(phrase).get("compact") or ""
+            if len(compact_phrase) < 2 or len(compact_phrase) > 80:
+                continue
+            if phrase not in phrases:
+                phrases.append(phrase)
+            if len(phrases) >= 60:
+                break
+        if len(phrases) >= 60:
+            break
+    return {"spaced": spaced, "compact": compact, "tokens": tokens[:80], "phrases": phrases[:80]}
+
+
+def _load_moderation_memory_rows(force: bool = False) -> list[Dict[str, Any]]:
+    if not AI_MODERATION_MEMORY_ENABLED or not SB_SERVICE:
+        return []
+    now = time.time()
+    if not force:
+        redis_payload = _redis_get_json(_moderation_memory_cache_key())
+        if isinstance(redis_payload, dict):
+            if redis_payload.get("table_missing") is True:
+                _MODERATION_MEMORY_CACHE.update({"ts": now, "items": [], "table_missing": True})
+                return []
+            items = [dict(x) for x in (redis_payload.get("items") or []) if isinstance(x, dict)]
+            _MODERATION_MEMORY_CACHE.update({"ts": now, "items": items, "table_missing": False})
+            return items
+        if (now - float(_MODERATION_MEMORY_CACHE.get("ts") or 0)) < AI_MODERATION_MEMORY_CACHE_TTL_SECONDS:
+            return list(_MODERATION_MEMORY_CACHE.get("items") or [])
+        if _MODERATION_MEMORY_CACHE.get("table_missing") is True:
+            return []
+    try:
+        r = requests.get(
+            f"{SB_URL}/rest/v1/{RESPECT_AI_MODERATION_MEMORY_TABLE}",
+            headers=_supabase_headers(use_service_role=True),
+            params={
+                "select": "id,memory_key,memory_type,normalized_spaced,normalized_compact,sample_text,decision,category,reason,confidence,hits,ai_hits,memory_hits,false_positive_count,false_negative_count,source,model,active,updated_at",
+                "active": "eq.true",
+                "order": "hits.desc,updated_at.desc",
+                "limit": str(max(200, AI_MODERATION_MEMORY_MAX_ROWS)),
+            },
+            timeout=10,
+        )
+        if r.status_code == 404 or (r.status_code == 400 and "does not exist" in r.text.lower()):
+            _MODERATION_MEMORY_CACHE.update({"ts": now, "items": [], "table_missing": True})
+            _redis_set_json(_moderation_memory_cache_key(), {"items": [], "table_missing": True}, AI_MODERATION_MEMORY_CACHE_TTL_SECONDS)
+            logger.warning("Moderation memory table is missing. Run the SQL migration for %s", RESPECT_AI_MODERATION_MEMORY_TABLE)
+            return []
+        if r.status_code >= 400:
+            logger.warning("moderation_memory read failed status=%s body=%s", r.status_code, _safe_response_text(r.text, 350))
+            _MODERATION_MEMORY_CACHE.update({"ts": now, "items": []})
+            _redis_set_json(_moderation_memory_cache_key(), {"items": [], "table_missing": False}, AI_MODERATION_MEMORY_CACHE_TTL_SECONDS)
+            return []
+        data = r.json() if r.text else []
+        items = [dict(x) for x in data if isinstance(x, dict)] if isinstance(data, list) else []
+        _MODERATION_MEMORY_CACHE.update({"ts": now, "items": items, "table_missing": False})
+        _redis_set_json(_moderation_memory_cache_key(), {"items": items, "table_missing": False}, AI_MODERATION_MEMORY_CACHE_TTL_SECONDS)
+        return items
+    except Exception as e:
+        logger.warning("moderation_memory read exception: %s", e)
+        return list(_MODERATION_MEMORY_CACHE.get("items") or [])
+
+
+@app.get("/admin/moderation-memory")
+def admin_moderation_memory(
+    limit: int = 120,
+    decision: str = "",
+    category: str = "",
+    q: str = "",
+    x_app_secret: Optional[str] = Header(default=None),
+):
+    """
+    يعرض ما تعلمته ذاكرة Respect AI من قرارات الحذف/السماح.
+    استخدمه من الطرفية فقط مع X-App-Secret.
+    """
+    if not APP_SHARED_SECRET:
+        raise HTTPException(status_code=500, detail="APP_SHARED_SECRET missing. ضع السر في Render ثم أرسله في X-App-Secret.")
+    _check_secret(x_app_secret)
+
+    safe_limit = max(1, min(int(limit or 120), 500))
+    rows = _load_moderation_memory_rows(force=True)
+
+    clean_decision = (decision or "").strip().lower()
+    if clean_decision:
+        rows = [r for r in rows if str(r.get("decision") or "").strip().lower() == clean_decision]
+
+    clean_category = (category or "").strip().lower()
+    if clean_category:
+        rows = [r for r in rows if clean_category in str(r.get("category") or "").strip().lower()]
+
+    clean_q = (q or "").strip().lower()
+    if clean_q:
+        rows = [
+            r for r in rows
+            if clean_q in str(r.get("sample_text") or "").lower()
+            or clean_q in str(r.get("normalized_spaced") or "").lower()
+            or clean_q in str(r.get("category") or "").lower()
+        ]
+
+    out: list[Dict[str, Any]] = []
+    for r in rows[:safe_limit]:
+        out.append({
+            "memory_type": str(r.get("memory_type") or ""),
+            "decision": str(r.get("decision") or ""),
+            "category": str(r.get("category") or ""),
+            "confidence": _mm_float(r.get("confidence"), 0.0),
+            "hits": _mm_int(r.get("hits"), 0),
+            "ai_hits": _mm_int(r.get("ai_hits"), 0),
+            "memory_hits": _mm_int(r.get("memory_hits"), 0),
+            "sample_text": str(r.get("sample_text") or ""),
+            "updated_at": str(r.get("updated_at") or ""),
+            "source": str(r.get("source") or ""),
+            "model": str(r.get("model") or ""),
+        })
+
+    return {
+        "ok": True,
+        "table": RESPECT_AI_MODERATION_MEMORY_TABLE,
+        "count": len(out),
+        "total_cached": len(rows),
+        "items": out,
+    }
+
+
+def _touch_moderation_memory_hit(row: Dict[str, Any]) -> None:
+    if not AI_MODERATION_MEMORY_ENABLED or not SB_SERVICE:
+        return
+    row_id = str(row.get("id") or "").strip()
+    if not row_id:
+        return
+    payload = {
+        "memory_hits": _mm_int(row.get("memory_hits"), 0) + 1,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        requests.patch(
+            f"{SB_URL}/rest/v1/{RESPECT_AI_MODERATION_MEMORY_TABLE}",
+            headers={**_supabase_headers(use_service_role=True), "Prefer": "return=minimal"},
+            params={"id": f"eq.{row_id}"},
+            json=payload,
+            timeout=7,
+        )
+    except Exception as e:
+        logger.debug("moderation_memory hit update skipped: %s", e)
+
+
+def _memory_row_to_moderation_result(row: Dict[str, Any], match_type: str, matched_text: str) -> Dict[str, Any]:
+    decision = str(row.get("decision") or "allow").strip().lower()
+    should_delete = decision in {"delete", "block", "deny", "remove"}
+    confidence = max(0.0, min(1.0, _mm_float(row.get("confidence"), 0.0)))
+    category = str(row.get("category") or ("moderation_memory_violation" if should_delete else "safe")).strip() or "safe"
+    base_reason = str(row.get("reason") or "").strip()
+    if not base_reason:
+        base_reason = "قرار سريع من ذاكرة Respect AI" if not should_delete else "محتوى يطابق نمطًا مخالفًا تعلمه Respect AI سابقًا"
+    return {
+        "shouldDelete": should_delete,
+        "deleteParentReply": False,
+        "category": category,
+        "reason": base_reason[:700],
+        "confidence": confidence,
+        "checks": 0,
+        "memoryUsed": True,
+        "moderationMemoryUsed": True,
+        "decisionSource": "respect_ai_moderation_memory",
+        "memoryDecision": decision,
+        "memoryType": str(row.get("memory_type") or ""),
+        "memoryMatchType": match_type,
+        "matchedTerm": matched_text[:120],
+        "model": "respect_ai_moderation_memory_v1",
+    }
+
+
+def _moderation_memory_guard(text: str, *, content_type: str = "post", has_media: bool = False) -> Optional[Dict[str, Any]]:
+    raw_text = (text or "").strip()
+    if not raw_text or not AI_MODERATION_MEMORY_ENABLED:
+        return None
+    # الروابط والصور والفيديوهات تبقى تمر على فحصها الخاص ولا نعتمد على ذاكرة النص وحدها.
+    if _moderation_text_has_url(raw_text):
+        return None
+
+    terms = _moderation_memory_terms(raw_text)
+    compact = str(terms.get("compact") or "")
+    spaced = str(terms.get("spaced") or "")
+    if len(compact) < 2:
+        return None
+
+    rows = _load_moderation_memory_rows()
+    if not rows:
+        return None
+
+    exact_key = _moderation_memory_key("exact", compact)
+    phrases = [str(x) for x in (terms.get("phrases") or []) if str(x).strip()]
+    phrase_norms = {_learned_normalized(p).get("compact") or "": p for p in phrases}
+
+    best: Optional[Dict[str, Any]] = None
+    best_score = -1.0
+    best_match_type = ""
+    best_text = ""
+
+    for row in rows:
+        decision = str(row.get("decision") or "allow").strip().lower()
+        memory_type = str(row.get("memory_type") or "exact").strip().lower()
+        confidence = max(0.0, min(1.0, _mm_float(row.get("confidence"), 0.0)))
+        hits = _mm_int(row.get("hits"), 0)
+        fp = _mm_int(row.get("false_positive_count"), 0)
+        fn = _mm_int(row.get("false_negative_count"), 0)
+        if fp >= 2 or fn >= 3:
+            continue
+
+        matched = False
+        match_type = ""
+        matched_text = ""
+        if memory_type == "exact" and str(row.get("memory_key") or "") == exact_key:
+            matched = True
+            match_type = "exact"
+            matched_text = raw_text[:120]
+        elif memory_type in {"phrase", "keyword"}:
+            row_compact = str(row.get("normalized_compact") or "").strip()
+            row_spaced = str(row.get("normalized_spaced") or "").strip()
+            if row_compact and _learned_phrase_matches_text(row_compact, row_spaced, compact, spaced):
+                matched = True
+                match_type = memory_type
+                matched_text = str(row.get("sample_text") or row_spaced or row_compact)
+            elif row_compact in phrase_norms:
+                matched = True
+                match_type = memory_type
+                matched_text = phrase_norms.get(row_compact, row_compact)
+        if not matched:
+            continue
+
+        is_delete = decision in {"delete", "block", "deny", "remove"}
+        is_allow = decision in {"allow", "safe", "approve"}
+        threshold = AI_MODERATION_MEMORY_REVIEW_MIN_CONFIDENCE
+        min_hits = 1
+        if is_delete:
+            threshold = AI_MODERATION_MEMORY_DELETE_MIN_CONFIDENCE
+            min_hits = AI_MODERATION_MEMORY_MIN_HITS_FOR_PHRASE_DELETE if memory_type != "exact" else 1
+        elif is_allow:
+            # السماح من الذاكرة يكون exact فقط؛ لا نسمح من phrase حتى لا تمرر مخالفات بسبب عبارة عادية مشتركة.
+            if memory_type != "exact" or has_media:
+                continue
+            threshold = AI_MODERATION_MEMORY_ALLOW_MIN_CONFIDENCE
+            min_hits = AI_MODERATION_MEMORY_MIN_HITS_FOR_SAFE_EXACT
+        else:
+            continue
+        if confidence < threshold or hits < min_hits:
+            continue
+
+        score = confidence + min(0.15, hits * 0.015) + (0.08 if match_type == "exact" else 0.0)
+        if score > best_score:
+            best = row
+            best_score = score
+            best_match_type = match_type
+            best_text = matched_text
+
+    if best is None:
+        return None
+    _touch_moderation_memory_hit(best)
+    return _memory_row_to_moderation_result(best, best_match_type, best_text)
+
+
+def _should_learn_moderation_memory(result: Dict[str, Any]) -> bool:
+    if not AI_MODERATION_MEMORY_ENABLED:
+        return False
+    if result.get("moderationMemoryUsed") is True or result.get("memoryUsed") is True:
+        return False
+    category = str(result.get("category") or "safe").strip().lower()
+    decision_source = str(result.get("decisionSource") or result.get("source") or "").strip().lower()
+    confidence = max(0.0, min(1.0, _mm_float(result.get("confidence"), 0.0)))
+    should_delete = bool(result.get("shouldDelete") is True or result.get("delete") is True or result.get("blocked") is True)
+    if should_delete:
+        return confidence >= AI_MODERATION_MEMORY_LEARN_DELETE_MIN_CONFIDENCE
+    if category.startswith("safe") or category in {"empty_or_media_only", "allowed"}:
+        # لا نخزن السماح الضعيف جدًا إلا إذا جاء من فحص صريح أو قاعدة آمنة معروفة.
+        return confidence >= AI_MODERATION_MEMORY_LEARN_SAFE_MIN_CONFIDENCE or "qwen" in decision_source or result.get("fast_safe") is True
+    return False
+
+
+def _upsert_moderation_memory_row(payload: Dict[str, Any]) -> Dict[str, Any]:
+    if not AI_MODERATION_MEMORY_ENABLED or not SB_SERVICE:
+        return {"ok": False, "reason": "disabled_or_missing_service_role"}
+    key = str(payload.get("memory_key") or "").strip()
+    if not key:
+        return {"ok": False, "reason": "missing_memory_key"}
+    now = datetime.now(timezone.utc).isoformat()
+    headers = _supabase_headers(use_service_role=True)
+    try:
+        existing_rows: list[Dict[str, Any]] = []
+        r = requests.get(
+            f"{SB_URL}/rest/v1/{RESPECT_AI_MODERATION_MEMORY_TABLE}",
+            headers=headers,
+            params={"select": "id,hits,ai_hits,confidence,false_positive_count,false_negative_count", "memory_key": f"eq.{key}", "limit": "1"},
+            timeout=8,
+        )
+        if r.status_code == 404 or (r.status_code == 400 and "does not exist" in r.text.lower()):
+            _MODERATION_MEMORY_CACHE.update({"table_missing": True, "ts": time.time(), "items": []})
+            return {"ok": False, "reason": "table_missing"}
+        if r.status_code // 100 == 2:
+            data = r.json() if r.text else []
+            if isinstance(data, list):
+                existing_rows = [dict(x) for x in data if isinstance(x, dict)]
+        elif r.status_code >= 400:
+            logger.warning("moderation_memory lookup failed status=%s body=%s", r.status_code, _safe_response_text(r.text, 250))
+            return {"ok": False, "status": r.status_code, "body": r.text[:250]}
+
+        if existing_rows:
+            old = existing_rows[0]
+            row_id = str(old.get("id") or "")
+            merged = dict(payload)
+            merged.pop("id", None)
+            merged["hits"] = _mm_int(old.get("hits"), 0) + 1
+            merged["ai_hits"] = _mm_int(old.get("ai_hits"), 0) + 1
+            merged["confidence"] = max(_mm_float(old.get("confidence"), 0.0), _mm_float(payload.get("confidence"), 0.0))
+            merged["false_positive_count"] = _mm_int(old.get("false_positive_count"), 0)
+            merged["false_negative_count"] = _mm_int(old.get("false_negative_count"), 0)
+            merged["updated_at"] = now
+            rr = requests.patch(
+                f"{SB_URL}/rest/v1/{RESPECT_AI_MODERATION_MEMORY_TABLE}",
+                headers={**headers, "Prefer": "return=minimal"},
+                params={"id": f"eq.{row_id}"},
+                json=merged,
+                timeout=8,
+            )
+            if rr.status_code >= 400:
+                logger.warning("moderation_memory patch failed status=%s body=%s", rr.status_code, _safe_response_text(rr.text, 250))
+                return {"ok": False, "status": rr.status_code, "body": rr.text[:250]}
+            _invalidate_moderation_memory_cache()
+            return {"ok": True, "updated": True, "memory_key": key}
+
+        new_payload = dict(payload)
+        new_payload.setdefault("hits", 1)
+        new_payload.setdefault("ai_hits", 1)
+        new_payload.setdefault("memory_hits", 0)
+        new_payload.setdefault("false_positive_count", 0)
+        new_payload.setdefault("false_negative_count", 0)
+        new_payload.setdefault("active", True)
+        new_payload.setdefault("created_at", now)
+        new_payload["updated_at"] = now
+        rr = requests.post(
+            f"{SB_URL}/rest/v1/{RESPECT_AI_MODERATION_MEMORY_TABLE}",
+            headers={**headers, "Prefer": "return=minimal"},
+            json=new_payload,
+            timeout=8,
+        )
+        if rr.status_code >= 400:
+            if rr.status_code == 404 or "does not exist" in rr.text.lower():
+                _MODERATION_MEMORY_CACHE.update({"table_missing": True, "ts": time.time(), "items": []})
+            logger.warning("moderation_memory insert failed status=%s body=%s", rr.status_code, _safe_response_text(rr.text, 250))
+            return {"ok": False, "status": rr.status_code, "body": rr.text[:250]}
+        _invalidate_moderation_memory_cache()
+        return {"ok": True, "inserted": True, "memory_key": key}
+    except Exception as e:
+        logger.warning("moderation_memory upsert exception: %s", e)
+        return {"ok": False, "error": str(e)[:250]}
+
+
+def _learn_moderation_memory_from_result(
+    req: RespectAIModerationRequest,
+    result: Dict[str, Any],
+    *,
+    text_result: Optional[Dict[str, Any]] = None,
+    source: str = "post_moderation",
+) -> Dict[str, Any]:
+    text = (req.text or req.postText or "").strip()
+    if not text or not _should_learn_moderation_memory(result):
+        return {"learned": False, "reason": "not_eligible"}
+    if _moderation_text_has_url(text):
+        return {"learned": False, "reason": "url_text_not_learned"}
+
+    terms = _moderation_memory_terms(text)
+    compact = str(terms.get("compact") or "")
+    spaced = str(terms.get("spaced") or "")
+    if len(compact) < 2:
+        return {"learned": False, "reason": "empty_normalized_text"}
+
+    should_delete = bool(result.get("shouldDelete") is True or result.get("delete") is True or result.get("blocked") is True)
+    decision = "delete" if should_delete else "allow"
+    confidence = max(0.0, min(1.0, _mm_float(result.get("confidence"), 0.0)))
+    if confidence <= 0 and not should_delete:
+        confidence = 0.82
+    category = str(result.get("category") or ("violation" if should_delete else "safe")).strip()[:80]
+    reason = str(result.get("reason") or "").strip()[:700]
+    model = str(result.get("model") or (text_result or {}).get("model") or QWEN_TEXT_MODEL or "respect_ai").strip()[:120]
+    now = datetime.now(timezone.utc).isoformat()
+    rows: list[Dict[str, Any]] = []
+
+    rows.append({
+        "memory_key": _moderation_memory_key("exact", compact),
+        "memory_type": "exact",
+        "normalized_spaced": spaced[:500],
+        "normalized_compact": compact[:500],
+        "sample_text": text[:500],
+        "decision": decision,
+        "category": category,
+        "reason": reason,
+        "confidence": confidence,
+        "source": source,
+        "model": model,
+        "active": True,
+        "created_at": now,
+        "updated_at": now,
+    })
+
+    # للمخالفات فقط نتعلم الجملة كاملة كـ exact أعلاه، ثم السبة/العبارة المخالفة وحدها كـ phrase.
+    # هذا يمنع حفظ الكلمات العامة، ويضمن أن "احط زبي فيكم واحد واحد" تحفظ exact كاملة + "زبي" وحدها فورًا.
+    if should_delete:
+        phrases = _extract_moderation_delete_memory_phrases(text, result)
+
+        seen = set()
+        for phrase in phrases[:AI_MODERATION_MEMORY_MAX_LEARNED_PHRASES]:
+            phrase = _safe_term_phrase(str(phrase))
+            pn = _learned_normalized(phrase)
+            pcompact = pn.get("compact") or ""
+            if not pcompact or pcompact in seen:
+                continue
+            seen.add(pcompact)
+            rows.append({
+                "memory_key": _moderation_memory_key("phrase", pcompact),
+                "memory_type": "phrase",
+                "normalized_spaced": (pn.get("spaced") or "")[:500],
+                "normalized_compact": pcompact[:500],
+                "sample_text": phrase[:500],
+                "decision": "delete",
+                "category": category,
+                "reason": reason or "عبارة مخالفة تعلمها Respect AI من قرار سابق",
+                "confidence": max(confidence, AI_MODERATION_MEMORY_LEARN_DELETE_MIN_CONFIDENCE),
+                "source": source,
+                "model": model,
+                "active": True,
+                "created_at": now,
+                "updated_at": now,
+            })
+
+    results = [_upsert_moderation_memory_row(row) for row in rows]
+    learned_rows: list[Dict[str, Any]] = []
+    for row, res in zip(rows, results):
+        if res.get("ok") is True:
+            learned_rows.append({
+                "memoryType": str(row.get("memory_type") or ""),
+                "decision": str(row.get("decision") or ""),
+                "category": str(row.get("category") or ""),
+                "confidence": _mm_float(row.get("confidence"), 0.0),
+                "sampleText": str(row.get("sample_text") or "")[:500],
+                "normalizedSpaced": str(row.get("normalized_spaced") or "")[:500],
+                "normalizedCompact": str(row.get("normalized_compact") or "")[:500],
+                "source": str(row.get("source") or "")[:120],
+            })
+    ok_count = sum(1 for x in results if x.get("ok") is True)
+    return {
+        "learned": ok_count > 0,
+        "count": ok_count,
+        "rows": len(rows),
+        "results": results[:5],
+        "learnedRows": learned_rows[:12],
+        "localMemoryRows": learned_rows[:12],
+        "learnedTerms": [r.get("sampleText") for r in learned_rows if str(r.get("sampleText") or "").strip()][:12],
+    }
+
+
+def _learn_moderation_memory_safely(
+    req: RespectAIModerationRequest,
+    result: Dict[str, Any],
+    *,
+    text_result: Optional[Dict[str, Any]] = None,
+    source: str = "post_moderation",
+) -> Dict[str, Any]:
+    """
+    يسجل قرار المراقبة في ذاكرة Respect AI بدون أن يعطل الحذف أو الرد.
+    مهم للمشكلة التي ظهرت عندك: الحذف المحلي المبكر كان يحذف التغريدة ويرسل إشعارًا،
+    لكنه لا يصل إلى مسار Qwen الذي كان يسجل الذاكرة، لذلك يبقى جدول respect_ai_moderation_memory = 0.
+    """
+    try:
+        learn_result = _learn_moderation_memory_from_result(
+            req,
+            result,
+            text_result=text_result or result,
+            source=source,
+        )
+        if learn_result.get("learned") is True:
+            logger.info(
+                "moderation_memory learned source=%s category=%s decision=%s count=%s",
+                source,
+                result.get("category"),
+                "delete" if (result.get("shouldDelete") is True or result.get("delete") is True or result.get("blocked") is True) else "allow",
+                learn_result.get("count"),
+            )
+        else:
+            logger.debug(
+                "moderation_memory not learned source=%s reason=%s",
+                source,
+                learn_result.get("reason"),
+            )
+        return learn_result
+    except Exception as learn_error:
+        logger.warning("moderation_memory learn failed source=%s error=%s", source, learn_error)
+        return {"learned": False, "reason": "exception", "error": str(learn_error)[:250]}
 
 def _local_obvious_violation(text: str) -> Optional[Dict[str, Any]]:
     """
@@ -4191,6 +5920,8 @@ def _respect_ai_moderation_system_prompt(pass_number: int = 1) -> str:
 - "شخصية في GTA اسمها كلب المدينة" إذا كانت ضمن سياق لعبة/RP وليست إهانة لشخص.
 - "ياعيال ليه عصابة الكفن ما يكون عندها مقر سري؟" سؤال/اقتراح RP آمن وليس إهانة.
 - "من رئيس عصابة كفن؟" سؤال عن سياق سيرفر/قصة آمن.
+- "أول ما تسأل عنه المرأة يوم القيامة" أو "أول ما تُسأل عنه المرأة يوم القيامة" نص ديني/تعليمي عام؛ لا تصنفه sexual ولا religion_abuse.
+- أي سؤال أو موعظة أو معلومة دينية عامة عن الصلاة أو القيامة أو المرأة أو الرجل أو الحجاب أو الأخلاق، ما دام لا يحتوي سبًا أو تحريضًا أو ازدراءً أو وصفًا جنسيًا صريحًا.
 - نقد محترم مثل: "تصرفك غلط" أو "ما أتفق مع كلامك".
 
 أمثلة يجب رفضها:
@@ -4236,6 +5967,8 @@ def _build_moderation_prompt(req: RespectAIModerationRequest, pass_number: int =
         "مهم: لا ترفض النص لمجرد وجود كلمة مثل حيوان أو كلب أو عصابة أو كفن. اسأل نفسك: هل الكلمة موجهة كإهانة لشخص؟ أم هي سؤال/معلومة/سياق لعبة/RP؟",
         "إذا كان النص سؤالًا عامًا مثل: وش اسم الحيوان الي ماينام؟ فالقرار الصحيح allowed=true و shouldDelete=false.",
         "إذا كان النص سؤالًا أو اقتراحًا عن كيان داخل سيرفر مثل: ياعيال ليه عصابة الكفن مايكون عندها مقر سري؟ فالقرار الصحيح allowed=true و shouldDelete=false.",
+        "إذا كان النص دينيًا/تعليميًا عامًا مثل: أول ما تسأل عنه المرأة يوم القيامة، فالقرار الصحيح allowed=true و shouldDelete=false.",
+        "لا تعتبر كلمة المرأة/النساء/القيامة/الدين مخالفة وحدها. المخالفة تكون فقط عند وجود سب أو تحريض أو ازدراء أو وصف جنسي صريح.",
         "إذا كان النص سبًا مباشرًا مثل: أنت حيوان، يا كلب، كل خرا ياكلب، فالقرار الصحيح allowed=false و shouldDelete=true.",
         "",
         f"نوع المحتوى: {req.contentType}",
@@ -4324,6 +6057,150 @@ def _normalize_moderation_result(data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+
+
+def _collect_moderation_ai_text(data: Dict[str, Any]) -> str:
+    """
+    يجمع النصوص التي قد يرجعها موديل الرؤية: السبب، OCR، النص المرئي، التلخيص...
+    هذا يساعدنا نمنع الحذف الخاطئ عندما يقرأ النموذج نصًا عاديًا ويصنفه sexual أو religion_abuse بالغلط.
+    """
+    if not isinstance(data, dict):
+        return ""
+    keys = (
+        "reason",
+        "ocrText",
+        "ocr_text",
+        "detectedText",
+        "detected_text",
+        "visibleText",
+        "visible_text",
+        "text",
+        "caption",
+        "summary",
+        "description",
+        "evidence",
+        "visualEvidence",
+        "visual_evidence",
+    )
+    values: list[str] = []
+    for key in keys:
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            values.append(value.strip())
+        elif isinstance(value, (list, tuple)):
+            values.extend(str(x).strip() for x in value if str(x or "").strip())
+    return "\n".join(values).strip()
+
+
+def _contains_any_term(value: str, terms: list[str]) -> bool:
+    if not value:
+        return False
+    return any(term and term in value for term in terms)
+
+
+def _looks_like_benign_religious_or_educational_text(value: str) -> bool:
+    """
+    أمثلة آمنة يجب عدم حذفها:
+    - أول ما تسأل عنه المرأة يوم القيامة
+    - موعظة/سؤال ديني عام عن الصلاة، الحجاب، الأخلاق، القيامة...
+    الشرط: لا يوجد سب/تحريض/عري/وصف جنسي صريح.
+    """
+    if not value:
+        return False
+
+    normalized = _normalize_obfuscated_text_for_moderation(value)
+    spaced = str(normalized.get("spaced_collapsed") or normalized.get("spaced") or "")
+    compact = str(normalized.get("compact") or "")
+
+    benign_terms = [
+        "المراه", "المرأه", "المرأة", "النساء", "البنت", "البنات", "الرجل", "الرجال",
+        "يوم القيامه", "القيامه", "الاخرة", "الاخره", "الجنه", "النار", "الحساب",
+        "تسال عنه", "تسأل عنه", "اول ما تسال", "اول ما تسأل", "اول ما يسال",
+        "الصلاه", "الصلاة", "الحجاب", "الستر", "الاخلاق", "الأخلاق",
+        "الدين", "الاسلام", "الإسلام", "موعظه", "موعظة", "حديث", "اية", "آية",
+        "اذكار", "أذكار", "دعاء", "استغفار", "التوبه", "التوبة",
+    ]
+    benign_compact_terms = [
+        "اولماتسال", "اولماتسالعنه", "اولماتسألعنه", "المراهيومالقيامه",
+        "المرأةيومالقيامة", "يومالقيامه", "يومالقيامة",
+    ]
+
+    has_benign_context = _contains_any_term(spaced, benign_terms) or _contains_any_term(compact, benign_compact_terms)
+    if not has_benign_context:
+        return False
+
+    # لا نخفف لو النص نفسه يحتوي مخالفة واضحة محليًا.
+    if _local_hard_violation_guard(value) is not None:
+        return False
+
+    explicit_bad_terms = [
+        # عربي جنسي/عري/تحرش
+        "عري", "عارية", "عاريه", "اباحي", "إباحي", "جنس", "جنسي", "ايحاء جنسي", "إيحاء جنسي",
+        "تحرش", "اغتصاب", "صدر", "ثدي", "مؤخرة", "مؤخره", "عضو", "اعضاء حساسه", "أعضاء حساسة",
+        "ملابس داخليه", "ملابس داخلية", "شفاف", "شفافة", "جسد عاري", "مفاتن",
+        # عنف/تحريض/كراهية
+        "اقتل", "اقتلو", "يموت", "تعذيب", "دموي", "دماء", "سلاح", "مسدس", "سكين",
+        "كفر", "كافر", "سب الدين", "سب الله", "اهانه الدين", "إهانة الدين", "لعن",
+        # English common vision labels
+        "nude", "nudity", "naked", "porn", "sexual", "explicit", "breast", "genitals",
+        "underwear", "lingerie", "weapon", "gun", "knife", "blood", "gore", "kill",
+        "hate symbol", "terrorist",
+    ]
+    return not _contains_any_term(spaced, explicit_bad_terms) and not _contains_any_term(compact, [t.replace(" ", "") for t in explicit_bad_terms])
+
+
+def _relax_contextual_text_false_positive(
+    parsed: Dict[str, Any],
+    result: Dict[str, Any],
+    *,
+    media_kind: str = "content",
+) -> Dict[str, Any]:
+    """
+    طبقة حماية ضد الحذف المبالغ فيه من OCR داخل الصور والفيديوهات.
+    لا تلغي الحذف إذا كانت الصورة/الفيديو فيه عري أو عنف أو تهديد واضح،
+    لكنها تلغي الحذف إذا كان السبب مجرد نص ديني/تعليمي عادي فهمه الموديل بشكل خاطئ.
+    """
+    if not RESPECT_VISION_TEXT_CONTEXT_RELAXATION:
+        return result
+    if not isinstance(result, dict) or result.get("shouldDelete") is not True:
+        return result
+
+    category = str(result.get("category") or "").strip().lower()
+    soft_false_positive_categories = {
+        "sexual", "sexual_content", "harassment", "religion_abuse", "other",
+        "image_violation", "unsafe_image", "video_violation", "vision_parse_error",
+        "profanity", "personal_attack", "needs_context",
+    }
+    if category not in soft_false_positive_categories:
+        # لا نلغي عري/إباحية/عنف/سلاح/كراهية مؤكدة.
+        return result
+
+    evidence = "\n".join([
+        _collect_moderation_ai_text(parsed),
+        str(result.get("reason") or ""),
+        str(result.get("category") or ""),
+    ]).strip()
+
+    if not _looks_like_benign_religious_or_educational_text(evidence):
+        return result
+
+    relaxed = dict(result)
+    relaxed.update({
+        "shouldDelete": False,
+        "deleteParentReply": False,
+        "category": "safe_context_text",
+        "reason": (
+            f"تم السماح لأن النص الظاهر في {media_kind} يبدو دينيًا/تعليميًا عامًا "
+            "ولا يحتوي سبًا أو تحريضًا أو عريًا أو وصفًا جنسيًا صريحًا."
+        ),
+        "confidence": min(float(result.get("confidence") or 0.0), 0.35),
+        "relaxedFalsePositive": True,
+        "originalCategory": str(result.get("category") or ""),
+        "originalReason": str(result.get("reason") or "")[:500],
+    })
+    return relaxed
+
+
 def _single_moderation_pass(req: RespectAIModerationRequest, pass_number: int) -> Dict[str, Any]:
     content = _chat_completion_request(
         model=QWEN_MODEL,
@@ -4342,7 +6219,9 @@ def _single_moderation_pass(req: RespectAIModerationRequest, pass_number: int) -
         log_label=f"QWEN MODERATION PASS {pass_number}",
     )
 
-    return _normalize_moderation_result(_safe_json_from_ai(str(content)))
+    parsed = _safe_json_from_ai(str(content))
+    result = _normalize_moderation_result(parsed)
+    return _relax_contextual_text_false_positive(parsed, result, media_kind="النص")
 
 
 def moderate_with_qwen(req: RespectAIModerationRequest) -> Dict[str, Any]:
@@ -4352,11 +6231,22 @@ def moderate_with_qwen(req: RespectAIModerationRequest) -> Dict[str, Any]:
     # هذا يمنع تمرير الكلمات الفاحشة/السب إذا ظهرت داخل جملة تبدو RP.
     hard_violation = _local_hard_violation_guard(text)
     if hard_violation is not None:
+        # _simple_safe_moderation لا يملك req؛ التعلم يتم في moderate_with_qwen قبل الوصول هنا.
         return hard_violation
 
     fast_safe = _simple_safe_moderation(text)
     if fast_safe is not None:
         return fast_safe
+
+    # قبل استدعاء Qwen: جرّب ذاكرة المراجعة العامة.
+    # السماح من الذاكرة يكون exact فقط، والحذف يحتاج ثقة عالية؛ لذلك لا يسبب قفزات خطيرة.
+    memory_result = _moderation_memory_guard(
+        text,
+        content_type=(req.contentType or 'post'),
+        has_media=bool((req.imageUrls or []) or (req.imageUrl or '').strip() or (req.videoUrls or []) or (req.videoUrl or '').strip()),
+    )
+    if memory_result is not None:
+        return memory_result
 
     if not QWEN_API_KEY:
         fallback_block = _local_obvious_violation(text)
@@ -4377,6 +6267,14 @@ def moderate_with_qwen(req: RespectAIModerationRequest) -> Dict[str, Any]:
     try:
         result = _single_moderation_pass(req, 1)
         result["checks"] = 1
+        result.setdefault("model", QWEN_TEXT_MODEL)
+        result["decisionSource"] = result.get("decisionSource") or "qwen_text_moderation"
+        result["memoryLearnResult"] = _learn_moderation_memory_safely(
+            req,
+            result,
+            text_result=result,
+            source="qwen_text_moderation",
+        )
         return result
     except Exception as e:
         logger.warning("Moderation pass failed: %s", e)
@@ -4394,6 +6292,1057 @@ def moderate_with_qwen(req: RespectAIModerationRequest) -> Dict[str, Any]:
             "fallback_safe": True,
             "errors": [str(e)[:300]],
         }
+
+
+
+# ================= Respect AI Recommendation Taxonomy =================
+# تصنيفات رسمية مغلقة نسبيًا: لا نترك Qwen أو الذاكرة يخترعون أسماء topics عشوائية.
+# أي مرادف أو كلمة عربية/إنجليزية يتم تحويلها إلى واحد من هذه التصنيفات فقط.
+RECOMMENDATION_ALLOWED_TOPICS = {
+    "football",
+    "sports",
+    "basketball",
+    "gaming",
+    "esports",
+    "programming",
+    "ai",
+    "technology",
+    "cybersecurity",
+    "cars",
+    "anime",
+    "movies",
+    "music",
+    "food",
+    "travel",
+    "fashion",
+    "education",
+    "business",
+    "finance",
+    "news",
+    "politics",
+    "religion",
+    "health",
+    "fitness",
+    "humor",
+    "memes",
+    "art",
+    "photography",
+    "animals",
+    "nature",
+    "local",
+    "live_streaming",
+    "video",
+    "shopping",
+    "beauty",
+    "family",
+    "personal",
+    "general",
+}
+
+# مرادفات أسماء التصنيفات. هذه تستخدم عندما AI يرجع topic باسم مختلف.
+RECOMMENDATION_TOPIC_ALIASES = {
+    # Football / sports
+    "football": "football", "footbal": "football", "soccer": "football", "كرة": "football", "كوره": "football",
+    "كورة": "football", "كره": "football", "كرة_قدم": "football", "كرة_القدم": "football", "كرةقدم": "football",
+    "مباريات": "football", "مباراه": "football", "مباراة": "football", "اهداف": "football", "أهداف": "football",
+    "goal": "football", "goals": "football", "messi": "football", "ronaldo": "football", "ميسي": "football", "رونالدو": "football",
+    "sports": "sports", "sport": "sports", "رياضه": "sports", "رياضة": "sports", "رياضي": "sports",
+    "basketball": "basketball", "nba": "basketball", "سلة": "basketball", "كره_السله": "basketball", "كرة_السلة": "basketball",
+
+    # Gaming / live
+    "gaming": "gaming", "game": "gaming", "games": "gaming", "gamer": "gaming", "العاب": "gaming", "ألعاب": "gaming",
+    "لعبه": "gaming", "لعبة": "gaming", "قيمنق": "gaming", "قيمز": "gaming", "pubg": "gaming", "ببجي": "gaming",
+    "fortnite": "gaming", "فورتنايت": "gaming", "minecraft": "gaming", "ماينكرافت": "gaming", "gta": "gaming",
+    "fivem": "gaming", "فايف_ام": "gaming", "valorant": "gaming", "فالورانت": "gaming",
+    "esport": "esports", "esports": "esports", "ايسبورت": "esports", "بطوله_العاب": "esports", "بطولة_العاب": "esports",
+    "stream": "live_streaming", "streaming": "live_streaming", "live": "live_streaming", "بث": "live_streaming", "بثوث": "live_streaming", "لايف": "live_streaming",
+
+    # Tech / code / AI / security
+    "tech": "technology", "technology": "technology", "تقنيه": "technology", "تقنية": "technology", "تكنولوجيا": "technology",
+    "phone": "technology", "mobile": "technology", "pc": "technology", "computer": "technology", "كمبيوتر": "technology", "جوال": "technology", "هاتف": "technology",
+    "programming": "programming", "coding": "programming", "code": "programming", "software": "programming", "developer": "programming",
+    "flutter": "programming", "dart": "programming", "python": "programming", "javascript": "programming", "typescript": "programming",
+    "supabase": "programming", "firebase": "programming", "برمجه": "programming", "برمجة": "programming", "كود": "programming", "مطور": "programming",
+    "ai": "ai", "artificial_intelligence": "ai", "ذكاء_اصطناعي": "ai", "الذكاء_الاصطناعي": "ai", "gpt": "ai", "chatgpt": "ai",
+    "openai": "ai", "qwen": "ai", "deepseek": "ai", "gemini": "ai", "llm": "ai", "model": "ai", "نموذج": "ai",
+    "security": "cybersecurity", "cyber": "cybersecurity", "cybersecurity": "cybersecurity", "امن_سيبراني": "cybersecurity",
+    "أمن_سيبراني": "cybersecurity", "حماية": "cybersecurity", "اختراق": "cybersecurity", "ثغرة": "cybersecurity",
+
+    # Lifestyle / media
+    "cars": "cars", "car": "cars", "سياره": "cars", "سيارة": "cars", "سيارات": "cars", "bmw": "cars", "mercedes": "cars", "مرسيدس": "cars",
+    "anime": "anime", "manga": "anime", "انمي": "anime", "أنمي": "anime", "مانجا": "anime",
+    "movie": "movies", "movies": "movies", "film": "movies", "cinema": "movies", "netflix": "movies", "فيلم": "movies", "افلام": "movies", "أفلام": "movies",
+    "music": "music", "song": "music", "songs": "music", "rap": "music", "اغنية": "music", "أغنية": "music", "موسيقى": "music", "راب": "music",
+    "food": "food", "restaurant": "food", "recipe": "food", "اكل": "food", "أكل": "food", "مطعم": "food", "طبخ": "food", "وصفة": "food",
+    "travel": "travel", "trip": "travel", "tourism": "travel", "سفر": "travel", "رحلة": "travel", "سياحة": "travel",
+    "fashion": "fashion", "style": "fashion", "ملابس": "fashion", "ستايل": "fashion", "موضة": "fashion",
+    "shopping": "shopping", "shop": "shopping", "buy": "shopping", "تسوق": "shopping", "شراء": "shopping", "منتج": "shopping",
+    "beauty": "beauty", "makeup": "beauty", "مكياج": "beauty", "جمال": "beauty",
+
+    # Knowledge / society
+    "education": "education", "study": "education", "school": "education", "تعليم": "education", "دراسة": "education", "مدرسة": "education", "جامعة": "education",
+    "business": "business", "startup": "business", "project": "business", "مشروع": "business", "تجارة": "business", "شركة": "business",
+    "finance": "finance", "money": "finance", "crypto": "finance", "bitcoin": "finance", "دولار": "finance", "مال": "finance", "استثمار": "finance", "عملة": "finance",
+    "news": "news", "breaking": "news", "اخبار": "news", "أخبار": "news", "خبر": "news", "عاجل": "news",
+    "politics": "politics", "political": "politics", "سياسة": "politics", "سياسي": "politics", "رئيس": "politics", "انتخابات": "politics",
+    "religion": "religion", "دين": "religion", "اسلام": "religion", "إسلام": "religion", "قران": "religion", "قرآن": "religion", "صلاة": "religion",
+    "health": "health", "medical": "health", "doctor": "health", "صحة": "health", "طبيب": "health", "مرض": "health",
+    "fitness": "fitness", "gym": "fitness", "workout": "fitness", "جيم": "fitness", "تمرين": "fitness", "رياضه_بدنيه": "fitness",
+    "family": "family", "عائلة": "family", "اهل": "family", "أهل": "family", "طفل": "family",
+
+    # Fun / creative / nature
+    "humor": "humor", "funny": "humor", "lol": "humor", "ضحك": "humor", "نكتة": "humor", "هههه": "humor",
+    "meme": "memes", "memes": "memes", "ميم": "memes", "ميمز": "memes",
+    "art": "art", "design": "art", "رسم": "art", "فن": "art", "تصميم": "art",
+    "photography": "photography", "photo": "photography", "camera": "photography", "تصوير": "photography", "صورة": "photography", "كاميرا": "photography",
+    "animals": "animals", "animal": "animals", "cat": "animals", "dog": "animals", "حيوان": "animals", "قط": "animals", "كلب": "animals",
+    "nature": "nature", "طبيعه": "nature", "طبيعة": "nature", "شجر": "nature", "بحر": "nature",
+    "local": "local", "لبنان": "local", "سوريا": "local", "السعوديه": "local", "السعودية": "local", "محلي": "local",
+    "video": "video", "فيديو": "video", "مقطع": "video",
+    "personal": "personal", "شخصي": "personal", "يوميات": "personal",
+    "general": "general", "عام": "general",
+}
+
+TOPIC_KEYWORD_RULES = {
+    "football": ["كورة", "كوره", "كره", "كرة", "هدف", "اهداف", "أهداف", "مباراة", "مباراه", "ريال", "مدريد", "برشلونة", "برشلونه", "ميسي", "رونالدو", "نيمار", "مبابي", "هالاند", "صلاح", "الارجنتين", "الأرجنتين", "البرازيل", "دوري", "كأس", "كاس", "football", "soccer", "goal", "messi", "ronaldo", "neymar", "mbappe", "haaland", "argentina", "barcelona", "match", "league", "champions"],
+    "basketball": ["basketball", "nba", "سلة", "كرة السلة", "كره السله", "باسكت"],
+    "sports": ["رياضة", "رياضه", "sport", "sports", "بطولة", "بطوله", "أولمبياد", "olympic", "tennis", "تنس", "سباق"],
+    "gaming": ["قيم", "قيمنق", "العاب", "ألعاب", "game", "gaming", "gta", "fivem", "فايف ام", "pubg", "ببجي", "fortnite", "minecraft", "valorant", "playstation", "بلايستيشن"],
+    "esports": ["esports", "ايسبورت", "بطولة فورتنايت", "بطولة ببجي", "بطولة ألعاب", "tournament"],
+    "programming": ["برمجة", "برمجه", "flutter", "dart", "python", "javascript", "typescript", "react", "node", "fastapi", "supabase", "firebase", "github", "sql", "api", "كود", "مطور"],
+    "ai": ["ذكاء اصطناعي", "الذكاء الاصطناعي", "ai", "gpt", "chatgpt", "qwen", "deepseek", "gemini", "openai", "llm", "model", "نموذج"],
+    "technology": ["تقنية", "تقنيه", "تكنولوجيا", "جوال", "هاتف", "كمبيوتر", "تطبيق", "android", "ios", "technology", "phone", "pc", "laptop"],
+    "cybersecurity": ["امن سيبراني", "أمن سيبراني", "cyber", "security", "اختراق", "حماية", "ثغرة", "malware", "virus", "hacker"],
+    "cars": ["سيارة", "سياره", "سيارات", "car", "cars", "bmw", "mercedes", "toyota", "محرك", "درفت"],
+    "anime": ["انمي", "أنمي", "anime", "manga", "مانجا", "ناروتو", "ون بيس"],
+    "movies": ["فيلم", "افلام", "أفلام", "movie", "movies", "cinema", "netflix", "مسلسل", "series"],
+    "music": ["اغنية", "أغنية", "موسيقى", "music", "song", "rap", "راب", "البوم", "ألبوم"],
+    "food": ["اكل", "أكل", "مطعم", "طبخ", "وصفة", "food", "restaurant", "recipe", "pizza", "burger"],
+    "travel": ["سفر", "رحلة", "سياحة", "travel", "trip", "airport", "مطار", "فندق"],
+    "fashion": ["موضة", "ملابس", "ستايل", "fashion", "style", "outfit"],
+    "education": ["تعليم", "دراسة", "مدرسة", "جامعة", "امتحان", "education", "study", "school", "university"],
+    "business": ["مشروع", "تجارة", "شركة", "business", "startup", "marketing"],
+    "finance": ["دولار", "عملة", "مال", "استثمار", "finance", "crypto", "bitcoin", "سعر", "سوق"],
+    "news": ["خبر", "اخبار", "أخبار", "عاجل", "news", "breaking"],
+    "politics": ["سياسة", "سياسي", "انتخابات", "رئيس", "حكومة", "politics", "election", "president"],
+    "religion": ["دين", "اسلام", "إسلام", "قرآن", "قران", "صلاة", "دعاء", "religion", "islam"],
+    "health": ["صحة", "طبيب", "مرض", "دواء", "health", "medical", "doctor", "medicine"],
+    "fitness": ["جيم", "تمرين", "عضلات", "fitness", "gym", "workout"],
+    "humor": ["ضحك", "نكتة", "هههه", "funny", "lol", "comedy"],
+    "memes": ["ميم", "ميمز", "meme", "memes"],
+    "art": ["رسم", "فن", "تصميم", "art", "design", "drawing"],
+    "photography": ["تصوير", "صورة", "كاميرا", "photo", "camera", "picture"],
+    "animals": ["قط", "كلب", "حيوان", "animals", "cat", "dog"],
+    "nature": ["طبيعة", "طبيعه", "بحر", "شجر", "nature", "sea", "mountain"],
+    "shopping": ["تسوق", "شراء", "منتج", "سعر", "عرض", "shopping", "buy", "deal"],
+    "beauty": ["مكياج", "جمال", "عناية", "beauty", "makeup", "skin"],
+    "family": ["عائلة", "اهل", "أهل", "طفل", "family", "kids"],
+    "local": ["لبنان", "سوريا", "السعودية", "السعوديه", "بيروت", "الرياض", "محلي"],
+    "live_streaming": ["بث", "بثوث", "لايف", "stream", "streaming", "live"],
+}
+
+ARABIC_DIACRITICS_RE = re.compile(r"[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]")
+
+
+def _normalize_topic_text(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    text = ARABIC_DIACRITICS_RE.sub("", text)
+    text = text.replace("ـ", "")
+    text = text.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
+    text = text.replace("ى", "ي").replace("ؤ", "و").replace("ئ", "ي")
+    text = text.replace("ة", "ه")
+    text = text.replace("#", " ")
+    text = re.sub(r"[^a-z0-9\u0600-\u06FF]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _normalize_recommendation_topic(value: Any) -> str:
+    # دالة تنظيف عامة للكلمات والمفاتيح والهاشتاقات. لا تعتبرها تصنيفًا رسميًا إلا بعد _canonical_topic_for_text.
+    text = _normalize_topic_text(value)
+    if not text:
+        return ""
+    key = text.replace(" ", "_")
+    key = re.sub(r"_+", "_", key).strip("_")
+    if len(key) > 80:
+        key = key[:80].strip("_")
+    return key
+
+
+def _alias_lookup_key(value: Any) -> str:
+    return _normalize_recommendation_topic(value)
+
+
+_NORMALIZED_TOPIC_ALIASES = {
+    _alias_lookup_key(k): v
+    for k, v in RECOMMENDATION_TOPIC_ALIASES.items()
+    if _alias_lookup_key(k) and v in RECOMMENDATION_ALLOWED_TOPICS
+}
+
+
+def _text_has_topic_signal(topic: str, text: str) -> bool:
+    canonical = RECOMMENDATION_TOPIC_ALIASES.get(topic, topic)
+    normalized_text = _normalize_topic_text(text)
+    if not normalized_text:
+        return False
+    compact = normalized_text.replace(" ", "_")
+    for raw_word in TOPIC_KEYWORD_RULES.get(canonical, []):
+        word_text = _normalize_topic_text(raw_word)
+        if not word_text:
+            continue
+        word_key = word_text.replace(" ", "_")
+        if word_text in normalized_text or word_key in compact:
+            return True
+    return False
+
+
+def _text_has_football_signal(text: str) -> bool:
+    return _text_has_topic_signal("football", text)
+
+
+def _topic_from_keyword_signal(value: Any) -> str:
+    key = _normalize_recommendation_topic(value)
+    if not key:
+        return ""
+    if key in _NORMALIZED_TOPIC_ALIASES:
+        return _NORMALIZED_TOPIC_ALIASES[key]
+    text = _normalize_topic_text(value)
+    compact = text.replace(" ", "_")
+    for topic, words in TOPIC_KEYWORD_RULES.items():
+        for raw_word in words:
+            word_text = _normalize_topic_text(raw_word)
+            if not word_text:
+                continue
+            word_key = word_text.replace(" ", "_")
+            if word_text == text or word_key == compact:
+                return topic
+    return ""
+
+
+def _canonical_topic_for_text(topic: str, text: str = "") -> str:
+    clean = _normalize_recommendation_topic(topic)
+    if not clean:
+        return ""
+
+    mapped = _NORMALIZED_TOPIC_ALIASES.get(clean, clean)
+
+    # sports يبقى sports للرياضات العامة، لكنه يتحول football إذا النص فيه إشارات كرة قدم واضحة.
+    if mapped in {"sports", "sport"} and _text_has_football_signal(text):
+        return "football"
+
+    # إذا رجع AI اسم موديل/أداة أو كلمة مفتاحية كتصنيف، نحولها للتصنيف الرسمي.
+    if mapped not in RECOMMENDATION_ALLOWED_TOPICS:
+        mapped = _topic_from_keyword_signal(clean)
+
+    if mapped in RECOMMENDATION_ALLOWED_TOPICS:
+        return mapped
+    return ""
+
+
+def _canonical_topics_for_text(topics: list[str], text: str = "") -> list[str]:
+    out: list[str] = []
+    for topic in topics or []:
+        clean = _canonical_topic_for_text(str(topic or ""), text)
+        if clean and clean not in out:
+            out.append(clean)
+
+    # تصحيح سياقي مهم: إذا وُجد football نحذف sports من نفس المنشور حتى لا تتكرر اهتمامات كرة القدم.
+    if _text_has_football_signal(text) and "football" in out:
+        out = ["football", *[t for t in out if t not in {"football", "sports"}]]
+
+    return out or ["general"]
+
+
+def _fallback_post_topics(text: str, media_type: str = "text") -> list[str]:
+    raw = text or ""
+    topics: list[str] = []
+
+    def add(topic: str) -> None:
+        clean = _canonical_topic_for_text(topic, raw)
+        if clean and clean not in topics:
+            topics.append(clean)
+
+    # الهاشتاق لا يتحول إلى topic عشوائي. فقط إذا كان الهاشتاق معروفًا ضمن التصنيفات الرسمية.
+    for m in re.finditer(r"#([\w\u0600-\u06FF_]+)", raw):
+        add(m.group(1))
+
+    for topic in TOPIC_KEYWORD_RULES.keys():
+        if _text_has_topic_signal(topic, raw):
+            add(topic)
+
+    mt = (media_type or "text").strip().lower()
+    if mt == "video":
+        add("video")
+    if mt in {"image", "gif"}:
+        add("photography")
+
+    if not topics:
+        add("general")
+    return topics[:10]
+
+
+def _extract_topics_from_ai_json(data: Dict[str, Any], fallback: list[str], text: str = "") -> tuple[list[str], str, float]:
+    raw_topics = data.get("topics") or data.get("categories") or data.get("tags") or []
+    if isinstance(raw_topics, str):
+        try:
+            raw_topics = json.loads(raw_topics)
+        except Exception:
+            raw_topics = [raw_topics]
+
+    topics: list[str] = []
+
+    def add(value: Any) -> None:
+        if isinstance(value, dict):
+            value = value.get("topic") or value.get("name") or value.get("tag") or value.get("id") or ""
+        clean = _canonical_topic_for_text(str(value or ""), text)
+        if clean and clean not in topics:
+            topics.append(clean)
+
+    if isinstance(raw_topics, list):
+        for item in raw_topics:
+            add(item)
+
+    primary = _canonical_topic_for_text(
+        data.get("primaryTopic") or data.get("primary_topic") or (topics[0] if topics else ""),
+        text,
+    )
+    if primary:
+        add(primary)
+
+    if not topics:
+        topics = _canonical_topics_for_text(list(fallback or ["general"]), text)
+    else:
+        topics = _canonical_topics_for_text(topics, text)
+
+    if not primary or primary not in topics:
+        primary = topics[0] if topics else "general"
+
+    try:
+        confidence = float(data.get("confidence") or 0.0)
+    except Exception:
+        confidence = 0.0
+    confidence = max(0.0, min(1.0, confidence))
+    return topics[:10], primary, confidence
+
+
+def _topic_memory_terms(text: str) -> Dict[str, Any]:
+    raw = _normalize_topic_text(text)
+    hashtags = [
+        _normalize_recommendation_topic(m.group(1) or "")
+        for m in re.finditer(r"#([\w\u0600-\u06FF_]+)", text or "")
+    ]
+    hashtags = [h for h in hashtags if h]
+
+    tokens = [
+        _normalize_recommendation_topic(m.group(0) or "")
+        for m in re.finditer(r"[a-z0-9_\u0600-\u06FF]{2,}", raw)
+    ]
+    stop = {
+        "هذا", "هذه", "هذي", "الي", "اللي", "على", "الى", "الي", "في", "من", "عن", "مع", "كان", "صار",
+        "انا", "انت", "انتي", "هو", "هي", "هم", "نحن", "اليوم", "امس", "بكرا", "جدا", "مره", "مرة", "عالميه", "عالمية",
+        "the", "and", "for", "with", "this", "that", "you", "are", "was", "were", "today",
+    }
+    tokens = [t for t in tokens if t and t not in stop and len(t) >= 2]
+    unique_tokens: list[str] = []
+    for t in tokens:
+        if t not in unique_tokens:
+            unique_tokens.append(t)
+
+    phrases: list[str] = []
+    for n in (2, 3):
+        for i in range(0, max(0, len(unique_tokens) - n + 1)):
+            phrase = "_".join(unique_tokens[i:i + n])
+            if len(phrase) >= 5 and phrase not in phrases:
+                phrases.append(phrase)
+
+    return {
+        "raw": raw,
+        "tokens": unique_tokens[:80],
+        "token_set": set(unique_tokens),
+        "hashtags": hashtags[:30],
+        "hashtag_set": set(hashtags),
+        "phrases": phrases[:80],
+        "phrase_set": set(phrases),
+    }
+
+
+def _get_ai_topic_memory_rows() -> list[Dict[str, Any]]:
+    if not SB_SERVICE:
+        return []
+    headers = _supabase_headers(use_service_role=True)
+    try:
+        r = requests.get(
+            f"{SB_URL}/rest/v1/ai_topic_memory",
+            headers=headers,
+            params={
+                "select": "topic,memory_type,memory_key,phrase,confidence,hits,weight,source",
+                "order": "hits.desc,updated_at.desc",
+                "limit": str(max(200, AI_TOPIC_MEMORY_MAX_ROWS)),
+            },
+            timeout=10,
+        )
+        if r.status_code // 100 != 2:
+            logger.warning("ai_topic_memory read failed status=%s body=%s", r.status_code, _safe_response_text(r.text, 300))
+            return []
+        data = r.json()
+        if isinstance(data, list):
+            return [x for x in data if isinstance(x, dict)]
+    except Exception as e:
+        logger.warning("ai_topic_memory read exception: %s", e)
+    return []
+
+
+def _memory_key_matches_text(key: str, memory_type: str, terms: Dict[str, Any]) -> bool:
+    clean_key = _normalize_recommendation_topic(key)
+    if not clean_key:
+        return False
+
+    raw = str(terms.get("raw") or "")
+    token_set = terms.get("token_set") or set()
+    hashtag_set = terms.get("hashtag_set") or set()
+    phrase_set = terms.get("phrase_set") or set()
+    parts = [p for p in clean_key.split("_") if p]
+
+    if memory_type == "hashtag":
+        return clean_key in hashtag_set or clean_key in token_set
+
+    if memory_type == "phrase":
+        if clean_key in phrase_set or clean_key.replace("_", " ") in raw or clean_key in raw:
+            return True
+        # عبارة قصيرة مثل ميسي_سجل_هدف: نعتبرها مطابقة إذا أغلب كلماتها موجودة.
+        if len(parts) >= 2:
+            matched_parts = sum(1 for p in parts if p in token_set)
+            return matched_parts >= max(2, int(len(parts) * 0.67))
+        return False
+
+    # keyword
+    if clean_key in token_set:
+        return True
+    if len(parts) >= 2:
+        matched_parts = sum(1 for p in parts if p in token_set)
+        return matched_parts >= max(2, int(len(parts) * 0.67))
+    return len(clean_key) >= 4 and clean_key.replace("_", " ") in raw
+
+
+def _record_topic_memory_hits(matches: list[Dict[str, Any]]) -> None:
+    # لا نمنع التصنيف لو فشل تحديث hits، هذه فقط لتحسين التعلم.
+    for item in matches[:12]:
+        try:
+            _upsert_ai_topic_memory(
+                topic=str(item.get("topic") or ""),
+                memory_type=str(item.get("memory_type") or "keyword"),
+                memory_key=str(item.get("memory_key") or ""),
+                phrase=str(item.get("phrase") or ""),
+                reason="استخدمت الذاكرة هذا المفتاح لتصنيف منشور مشابه.",
+                confidence=float(item.get("confidence") or 0.7),
+                source="memory",
+                model="respect_topic_memory_v2",
+            )
+        except Exception:
+            pass
+
+
+def _classify_post_with_topic_memory(req: RespectAIPostClassifyRequest) -> Optional[Dict[str, Any]]:
+    text = (req.text or "").strip()
+    image_urls = [u.strip() for u in [*req.imageUrls, req.imageUrl] if str(u or "").strip()]
+    # إذا المنشور صورة/فيديو بدون نص، الذاكرة النصية لا تكفي، نحتاج Vision/Text AI.
+    if len(text) < 3 and image_urls:
+        return None
+
+    terms = _topic_memory_terms(text)
+    if not terms["token_set"] and not terms["hashtag_set"] and not terms["phrase_set"]:
+        return None
+
+    rows = _get_ai_topic_memory_rows()
+    if not rows:
+        return None
+
+    topic_scores: Dict[str, float] = defaultdict(float)
+    topic_matches: Dict[str, list[str]] = defaultdict(list)
+    topic_match_rows: Dict[str, list[Dict[str, Any]]] = defaultdict(list)
+
+    for row in rows:
+        raw_topic = _normalize_recommendation_topic(row.get("topic") or "")
+        topic = _canonical_topic_for_text(raw_topic, text)
+        key = _normalize_recommendation_topic(row.get("memory_key") or row.get("keyword") or row.get("phrase") or row.get("hashtag") or "")
+        memory_type = str(row.get("memory_type") or "keyword").strip().lower()
+        if not topic or not key or topic == "general":
+            continue
+
+        if not _memory_key_matches_text(key, memory_type, terms):
+            continue
+
+        try:
+            confidence = float(row.get("confidence") or 0.55)
+        except Exception:
+            confidence = 0.55
+        try:
+            hits = int(float(row.get("hits") or 1))
+        except Exception:
+            hits = 1
+        try:
+            weight = float(row.get("weight") or 1.0)
+        except Exception:
+            weight = 1.0
+
+        type_bonus = 0.0
+        if memory_type == "hashtag":
+            type_bonus = 0.25
+        elif memory_type == "phrase":
+            type_bonus = 0.18
+        else:
+            type_bonus = 0.08
+
+        hit_bonus = min(0.35, math.log1p(max(1, hits)) * 0.12)
+        score = max(0.12, weight) * max(0.25, min(1.0, confidence)) + type_bonus + hit_bonus
+
+        # مفاتيح كرة القدم المشهورة مثل ميسي/رونالدو قوية جدًا للتصنيف.
+        if topic == "football" and _text_has_football_signal(key):
+            score += 0.18
+
+        topic_scores[topic] += score
+        if key not in topic_matches[topic]:
+            topic_matches[topic].append(key)
+        topic_match_rows[topic].append({
+            "topic": topic,
+            "memory_type": memory_type,
+            "memory_key": key,
+            "phrase": row.get("phrase") or text[:500],
+            "confidence": confidence,
+        })
+
+    if not topic_scores:
+        return None
+
+    ranked = sorted(topic_scores.items(), key=lambda kv: kv[1], reverse=True)
+    best_topic, best_score = ranked[0]
+    total_score = sum(max(0.0, score) for _, score in ranked)
+    match_count = len(topic_matches.get(best_topic, []))
+    dominance = best_score / max(0.001, total_score)
+
+    confidence = 0.42 + (best_score / (best_score + 1.15)) * 0.48
+    confidence += min(0.10, match_count * 0.035)
+    if dominance >= 0.72:
+        confidence += 0.05
+    confidence = max(0.0, min(0.96, confidence))
+
+    # حماية من التطابق الضعيف جدًا: كلمة واحدة ضعيفة وغير مكررة لا تكفي.
+    if match_count < 2 and best_score < 0.92:
+        return None
+
+    if confidence < AI_TOPIC_MEMORY_MIN_CONFIDENCE:
+        return None
+
+    topics = [topic for topic, _ in ranked[:5]]
+    topics = _canonical_topics_for_text(topics, text)
+    if _text_has_football_signal(text) and "football" in topics:
+        topics = ["football", *[t for t in topics if t not in {"football", "sports"}]]
+        best_topic = "football"
+
+    _record_topic_memory_hits(topic_match_rows.get(best_topic, []))
+
+    logger.info(
+        "Respect AI topic memory hit post_id=%s topic=%s confidence=%.3f matches=%s",
+        req.postId,
+        best_topic,
+        confidence,
+        topic_matches.get(best_topic, [])[:8],
+    )
+
+    return {
+        "topics": topics,
+        "primaryTopic": best_topic,
+        "confidence": confidence,
+        "fallback": False,
+        "memoryUsed": True,
+        "source": "memory",
+        "model": "respect_topic_memory_v2",
+        "keywords": topic_matches.get(best_topic, [])[:12],
+        "reason": "تم التصنيف من ذاكرة Respect AI الجانبية بناءً على تطابق كلمات/عبارات سابقة بثقة كافية، لذلك لم يتم استدعاء Qwen.",
+    }
+
+
+def _keywords_from_ai_json(data: Dict[str, Any], text: str) -> list[str]:
+    raw_keywords = data.get("keywords") or data.get("importantKeywords") or data.get("important_keywords") or data.get("terms") or []
+    if isinstance(raw_keywords, str):
+        try:
+            raw_keywords = json.loads(raw_keywords)
+        except Exception:
+            raw_keywords = re.split(r"[,،\n]+", raw_keywords)
+
+    keywords: list[str] = []
+    if isinstance(raw_keywords, list):
+        for item in raw_keywords:
+            if isinstance(item, dict):
+                item = item.get("keyword") or item.get("term") or item.get("word") or item.get("text") or ""
+            clean = _normalize_recommendation_topic(item)
+            if clean and clean not in keywords and len(clean) >= 2:
+                keywords.append(clean)
+
+    terms = _topic_memory_terms(text)
+    # الكلمات المفتاحية تحفظ ككلمات قصيرة فقط. العبارات تُضاف لاحقًا كـ phrase حتى لا تتكرر كـ keyword و phrase.
+    for key in [*terms["hashtags"], *terms["tokens"][:18]]:
+        clean = _normalize_recommendation_topic(key)
+        if clean and clean not in keywords and len(clean) >= 2:
+            keywords.append(clean)
+
+    return keywords[:AI_TOPIC_MEMORY_MAX_TERMS_PER_POST]
+
+
+def _reason_from_ai_json(data: Dict[str, Any]) -> str:
+    reason = data.get("reason") or data.get("why") or data.get("explanation") or data.get("analysis") or ""
+    if isinstance(reason, (dict, list)):
+        try:
+            reason = json.dumps(reason, ensure_ascii=False)
+        except Exception:
+            reason = str(reason)
+    return str(reason or "").strip()[:700]
+
+
+def _upsert_ai_topic_memory(
+    *,
+    topic: str,
+    memory_type: str,
+    memory_key: str,
+    phrase: str,
+    reason: str,
+    confidence: float,
+    source: str,
+    model: str,
+) -> None:
+    if not SB_SERVICE:
+        return
+    clean_topic = _canonical_topic_for_text(topic, phrase or memory_key)
+    clean_key = _normalize_recommendation_topic(memory_key)
+    if not clean_topic or clean_topic == "general" or clean_topic not in RECOMMENDATION_ALLOWED_TOPICS or not clean_key or len(clean_key) < 2:
+        return
+
+    payload = {
+        "p_topic": clean_topic,
+        "p_memory_type": memory_type,
+        "p_memory_key": clean_key,
+        "p_phrase": (phrase or "")[:500],
+        "p_reason": (reason or "")[:700],
+        "p_confidence": max(0.0, min(1.0, float(confidence or 0.0))),
+        "p_source": source or "respect_ai",
+        "p_model": model or "",
+    }
+    headers = {**_supabase_headers(use_service_role=True), "Prefer": "return=minimal"}
+    try:
+        r = requests.post(f"{SB_URL}/rest/v1/rpc/respect_ai_upsert_topic_memory", headers=headers, json=payload, timeout=8)
+        if r.status_code // 100 == 2:
+            return
+    except Exception:
+        pass
+
+    # احتياط لو لم تضف دالة RPC بعد: upsert مباشر بدون زيادة hits الذكية.
+    try:
+        row = {
+            "topic": clean_topic,
+            "memory_type": memory_type,
+            "memory_key": clean_key,
+            "phrase": (phrase or "")[:500],
+            "reason": (reason or "")[:700],
+            "confidence": max(0.0, min(1.0, float(confidence or 0.0))),
+            "source": source or "respect_ai",
+            "model": model or "",
+            "hits": 1,
+            "weight": 1.0,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        requests.post(
+            f"{SB_URL}/rest/v1/ai_topic_memory",
+            headers={**headers, "Prefer": "resolution=merge-duplicates,return=minimal"},
+            params={"on_conflict": "topic,memory_type,memory_key"},
+            json=row,
+            timeout=8,
+        )
+    except Exception as e:
+        logger.warning("ai_topic_memory upsert exception: %s", e)
+
+
+def _learn_topic_memory_from_analysis(
+    req: RespectAIPostClassifyRequest,
+    *,
+    topics: list[str],
+    confidence: float,
+    model: str,
+    source: str,
+    reason: str,
+    keywords: list[str],
+) -> None:
+    if not topics or confidence < AI_TOPIC_MEMORY_LEARN_MIN_CONFIDENCE:
+        return
+    if source in {"local_fallback", "topic_memory", "memory"}:
+        return
+
+    text = (req.text or "").strip()
+    terms = _topic_memory_terms(text)
+    primary_topics = _canonical_topics_for_text([str(t) for t in topics[:3]], text)
+    primary_topics = [t for t in primary_topics if t and t != "general"]
+    if _text_has_football_signal(text) and "football" in primary_topics:
+        primary_topics = ["football", *[t for t in primary_topics if t not in {"football", "sports"}]]
+    primary_topics = primary_topics[:2]
+
+    memory_items: list[tuple[str, str]] = []
+    for h in terms["hashtags"]:
+        memory_items.append(("hashtag", h))
+    for kw in keywords:
+        clean_kw = _normalize_recommendation_topic(kw)
+        if not clean_kw:
+            continue
+        # إذا رجع AI عبارة مركبة، خزّنها كـ phrase لا كـ keyword.
+        if "_" in clean_kw:
+            memory_items.append(("phrase", clean_kw))
+        else:
+            memory_items.append(("keyword", clean_kw))
+    for phrase in terms["phrases"][:5]:
+        memory_items.append(("phrase", phrase))
+
+    seen: set[tuple[str, str]] = set()
+    limited_items: list[tuple[str, str]] = []
+    for memory_type, key in memory_items:
+        clean_key = _normalize_recommendation_topic(key)
+        if not clean_key or len(clean_key) < 2:
+            continue
+        pair = (memory_type, clean_key)
+        if pair in seen:
+            continue
+        seen.add(pair)
+        limited_items.append(pair)
+        if len(limited_items) >= AI_TOPIC_MEMORY_MAX_TERMS_PER_POST:
+            break
+
+    phrase_preview = text[:500]
+    for topic in primary_topics:
+        for memory_type, key in limited_items:
+            _upsert_ai_topic_memory(
+                topic=topic,
+                memory_type=memory_type,
+                memory_key=key,
+                phrase=phrase_preview,
+                reason=reason,
+                confidence=confidence,
+                source=source,
+                model=model,
+            )
+
+
+def _post_topic_classification_prompt(req: RespectAIPostClassifyRequest) -> str:
+    allowed = ", ".join(sorted(RECOMMENDATION_ALLOWED_TOPICS))
+    return (
+        "حلل هذا المنشور لتوصيات تبويب For You في تطبيق Respect. "
+        "لا تراجع السلامة ولا تحذف المحتوى؛ فقط صنّف الاهتمامات. "
+        "أرجع JSON فقط بدون شرح بهذا الشكل: "
+        "{\"topics\":[\"football\",\"sports\"],\"primaryTopic\":\"football\",\"confidence\":0.92,\"keywords\":[\"هدف\",\"ريال\"],\"reason\":\"المنشور يتكلم عن مباراة وهدف\"}. "
+        "مهم جدًا: أضف keywords قصيرة من النص/الصورة و reason يشرح لماذا اخترت التصنيف حتى تتعلم ذاكرة التطبيق لاحقًا. "
+        "استخدم فقط تصنيفات إنجليزية snake_case من القائمة الرسمية، ولا تخترع أي topic جديد. "
+        f"القائمة الرسمية الوحيدة: {allowed}. "
+        "إذا لم تجد تصنيفًا مناسبًا اختر general فقط. "
+        f"نوع الوسائط: {req.mediaType}. "
+        f"الكاتب: {display_username(req.username)}. "
+        f"النص:\n{(req.text or '').strip()[:3000]}"
+    )
+
+
+def _store_post_topics(
+    post_id: str,
+    topics: list[str],
+    confidence: float,
+    model: str,
+    source: str = "respect_ai",
+    *,
+    primary_topic: str = "",
+    reason: str = "",
+    keywords: Optional[list[str]] = None,
+    memory_used: bool = False,
+) -> bool:
+    pid = (post_id or "").strip()
+    if not pid or not SB_SERVICE:
+        return False
+    # لا نخزن تصنيفات fallback الضعيفة حتى لا تدخل أسماء أو كلمات عشوائية في خوارزمية For You.
+    source_clean = str(source or "").strip().lower()
+    if confidence < POST_TOPIC_STORE_MIN_CONFIDENCE and ("fallback" in source_clean or source_clean in {"local", "interaction_fallback"}):
+        return False
+
+    cleaned = []
+    for topic in topics:
+        clean = _canonical_topic_for_text(str(topic or ""), "")
+        if clean and clean in RECOMMENDATION_ALLOWED_TOPICS and clean not in cleaned:
+            cleaned.append(clean)
+    cleaned = [t for t in cleaned if t != "general" or len(cleaned) == 1]
+    if not cleaned:
+        return False
+
+    primary_clean = _canonical_topic_for_text(primary_topic or cleaned[0], "")
+    if primary_clean not in cleaned:
+        primary_clean = cleaned[0]
+    # نخلي التصنيف الرئيسي دائمًا أول صف حتى تكون القراءة والاستعلامات واضحة.
+    cleaned = [primary_clean, *[t for t in cleaned if t != primary_clean]][:10]
+
+    clean_keywords: list[str] = []
+    for kw in (keywords or []):
+        clean_kw = _normalize_recommendation_topic(kw)
+        if clean_kw and clean_kw not in clean_keywords:
+            clean_keywords.append(clean_kw)
+
+    headers = {**_supabase_headers(use_service_role=True), "Prefer": "return=minimal"}
+    try:
+        requests.delete(
+            f"{SB_URL}/rest/v1/post_topics",
+            headers=headers,
+            params={"post_id": f"eq.{pid}"},
+            timeout=10,
+        )
+        rows = []
+        for i, topic in enumerate(cleaned[:10]):
+            rank = i + 1
+            is_primary = topic == primary_clean and rank == 1
+            rows.append({
+                "post_id": pid,
+                "topic": topic,
+                "weight": 1.0 if is_primary else max(0.35, 0.86 - (i * 0.06)),
+                "confidence": confidence,
+                "source": source,
+                # الأعمدة الجديدة التي توضّح primary/secondary داخل post_topics.
+                "topic_role": "primary" if is_primary else "secondary",
+                "is_primary": bool(is_primary),
+                "topic_rank": rank,
+                "model": model,
+            })
+
+        r = requests.post(f"{SB_URL}/rest/v1/post_topics", headers=headers, json=rows, timeout=10)
+        # توافق مع قاعدة البيانات القديمة إذا لم تشغل SQL إضافة الأعمدة بعد.
+        if r.status_code == 400 and any(word in _safe_response_text(r.text, 800).lower() for word in ["topic_role", "is_primary", "topic_rank", "model", "column"]):
+            legacy_rows = [
+                {
+                    "post_id": row["post_id"],
+                    "topic": row["topic"],
+                    "weight": row["weight"],
+                    "confidence": row["confidence"],
+                    "source": row["source"],
+                }
+                for row in rows
+            ]
+            r = requests.post(f"{SB_URL}/rest/v1/post_topics", headers=headers, json=legacy_rows, timeout=10)
+        ok = r.status_code // 100 == 2
+
+        classification_row = {
+            "post_id": pid,
+            "topics": cleaned[:10],
+            "primary_topic": primary_clean,
+            "confidence": confidence,
+            "model": model,
+            "source": source,
+            "reason": (reason or "")[:700],
+            "keywords": clean_keywords[:30],
+            "memory_used": bool(memory_used),
+        }
+
+        try:
+            cr = requests.post(
+                f"{SB_URL}/rest/v1/post_ai_classifications",
+                headers=headers,
+                json=classification_row,
+                timeout=8,
+            )
+            if cr.status_code >= 400:
+                # توافق مع الجدول القديم قبل إضافة reason/keywords/memory_used.
+                old_row = {
+                    "post_id": pid,
+                    "topics": cleaned[:10],
+                    "primary_topic": primary_clean,
+                    "confidence": confidence,
+                    "model": model,
+                    "source": source,
+                }
+                requests.post(
+                    f"{SB_URL}/rest/v1/post_ai_classifications",
+                    headers=headers,
+                    json=old_row,
+                    timeout=8,
+                )
+        except Exception:
+            pass
+
+        if not ok:
+            logger.warning("post_topics store failed status=%s body=%s", r.status_code, _safe_response_text(r.text, 500))
+        return ok
+    except Exception as e:
+        logger.warning("post_topics store exception: %s", e)
+        return False
+
+
+def _classify_post_with_qwen(req: RespectAIPostClassifyRequest) -> Dict[str, Any]:
+    fallback = _fallback_post_topics(req.text, req.mediaType)
+
+    # 1) نجرّب الذاكرة الجانبية أولًا.
+    # إذا كانت واثقة، لا نستدعي Qwen إطلاقًا.
+    memory_result = _classify_post_with_topic_memory(req)
+    if memory_result:
+        return memory_result
+
+    if not QWEN_API_KEY:
+        return {
+            "topics": fallback,
+            "primaryTopic": fallback[0],
+            "confidence": 0.20,
+            "fallback": True,
+            "memoryUsed": False,
+            "source": "local_fallback",
+            "model": "local_fallback",
+            "keywords": _keywords_from_ai_json({}, req.text),
+            "reason": "لم يتم ضبط QWEN_API_KEY، لذلك تم استخدام التصنيف الاحتياطي.",
+        }
+
+    image_urls = [u.strip() for u in [*req.imageUrls, req.imageUrl] if str(u or "").strip()]
+    prompt = _post_topic_classification_prompt(req)
+    system = "أنت مصنف اهتمامات دقيق لتطبيق اجتماعي. أعد JSON فقط. لا تكتب Markdown."
+
+    # صور المنشورات تُحلل بنموذج Vision حتى يتعرف AI على محتوى الصورة نفسها، وليس النص فقط.
+    if image_urls:
+        try:
+            content_parts: list[Dict[str, Any]] = [{"type": "text", "text": prompt}]
+            for url in image_urls[:3]:
+                content_parts.append({"type": "image_url", "image_url": {"url": url}})
+            content = _chat_completion_request(
+                model=QWEN_VISION_MODEL,
+                api_key=QWEN_API_KEY,
+                base_url=QWEN_BASE_URL,
+                messages=[{"role": "system", "content": system}, {"role": "user", "content": content_parts}],
+                temperature=0.05,
+                max_tokens=420,
+                timeout=55,
+                log_label="QWEN_POST_CLASSIFY_VISION",
+            )
+            data = _safe_json_from_ai(str(content))
+            topics, primary, confidence = _extract_topics_from_ai_json(data, fallback, req.text)
+            confidence = confidence or 0.75
+            return {
+                "topics": topics,
+                "primaryTopic": primary,
+                "confidence": confidence,
+                "fallback": False,
+                "memoryUsed": False,
+                "source": "respect_ai",
+                "model": QWEN_VISION_MODEL,
+                "keywords": _keywords_from_ai_json(data, req.text),
+                "reason": _reason_from_ai_json(data),
+            }
+        except Exception as e:
+            logger.warning("QWEN_POST_CLASSIFY_VISION failed: %s", e)
+
+    try:
+        content = _chat_completion_request(
+            model=QWEN_TEXT_MODEL,
+            api_key=QWEN_API_KEY,
+            base_url=QWEN_BASE_URL,
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+            temperature=0.05,
+            max_tokens=420,
+            timeout=35,
+            response_format={"type": "json_object"},
+            log_label="QWEN_POST_CLASSIFY_TEXT",
+        )
+        data = _safe_json_from_ai(str(content))
+        topics, primary, confidence = _extract_topics_from_ai_json(data, fallback, req.text)
+        confidence = confidence or 0.70
+        return {
+            "topics": topics,
+            "primaryTopic": primary,
+            "confidence": confidence,
+            "fallback": False,
+            "memoryUsed": False,
+            "source": "respect_ai",
+            "model": QWEN_TEXT_MODEL,
+            "keywords": _keywords_from_ai_json(data, req.text),
+            "reason": _reason_from_ai_json(data),
+        }
+    except Exception as e:
+        logger.warning("QWEN_POST_CLASSIFY_TEXT failed: %s", e)
+        return {
+            "topics": fallback,
+            "primaryTopic": fallback[0],
+            "confidence": 0.20,
+            "fallback": True,
+            "memoryUsed": False,
+            "source": "local_fallback",
+            "model": "local_fallback",
+            "keywords": _keywords_from_ai_json({}, req.text),
+            "reason": "فشل اتصال Respect AI، لذلك تم استخدام التصنيف الاحتياطي.",
+            "error": str(e)[:300],
+        }
+
+
+@app.post("/respect-ai/classify-post", response_model=RespectAIPostClassifyResponse)
+def respect_ai_classify_post(req: RespectAIPostClassifyRequest, request: FastAPIRequest, x_app_secret: Optional[str] = Header(default=None)):
+    _check_secret(x_app_secret)
+    _enforce_moderation_rate(_client_ip(request), limit=120)
+    result = _classify_post_with_qwen(req)
+    topics = _canonical_topics_for_text([
+        _normalize_recommendation_topic(t)
+        for t in (result.get("topics") or [])
+        if _normalize_recommendation_topic(t)
+    ], req.text)
+    if not topics:
+        topics = ["general"]
+    if _text_has_football_signal(req.text) and "football" in topics:
+        topics = ["football", *[t for t in topics if t not in {"football", "sports"}]]
+    confidence = max(0.0, min(1.0, float(result.get("confidence") or 0.0)))
+    model = str(result.get("model") or QWEN_TEXT_MODEL)
+    memory_used = bool(result.get("memoryUsed"))
+    source = str(result.get("source") or ("local_fallback" if result.get("fallback") else ("topic_memory" if memory_used else "respect_ai")))
+    keywords = [
+        _normalize_recommendation_topic(k)
+        for k in (result.get("keywords") or [])
+        if _normalize_recommendation_topic(k)
+    ][:30]
+    reason = str(result.get("reason") or "")
+
+    primary_topic = _canonical_topic_for_text(str(result.get("primaryTopic") or topics[0]), req.text) or topics[0]
+    if primary_topic not in topics:
+        topics = [primary_topic, *topics]
+    else:
+        topics = [primary_topic, *[t for t in topics if t != primary_topic]]
+
+    stored = _store_post_topics(
+        req.postId,
+        topics,
+        confidence,
+        model,
+        source,
+        primary_topic=primary_topic,
+        reason=reason,
+        keywords=keywords,
+        memory_used=memory_used,
+    )
+
+    # 2) إذا كان التصنيف من AI الحقيقي، نعلّم الذاكرة الجانبية حتى تقل الحاجة للـ AI لاحقًا.
+    _learn_topic_memory_from_analysis(
+        req,
+        topics=topics,
+        confidence=confidence,
+        model=model,
+        source=source,
+        reason=reason,
+        keywords=keywords,
+    )
+
+    return RespectAIPostClassifyResponse(
+        ok=True,
+        topics=topics[:10],
+        primaryTopic=primary_topic,
+        confidence=confidence,
+        model=model,
+        stored=stored,
+        fallback=bool(result.get("fallback")),
+        memoryUsed=memory_used,
+        source=source,
+        reason=reason,
+        keywords=keywords,
+    )
 
 
 @app.post("/respect-ai/moderate", response_model=RespectAIModerationResponse)
@@ -4454,10 +7403,32 @@ def _delete_supabase_post(post_id: str) -> Dict[str, Any]:
             },
         )
 
+    deleted_rows: list[Dict[str, Any]] = []
+    owner_username = ""
+    try:
+        parsed = r.json() if r.text else []
+        if isinstance(parsed, list):
+            deleted_rows = [dict(x) for x in parsed if isinstance(x, dict)]
+        elif isinstance(parsed, dict):
+            deleted_rows = [dict(parsed)]
+        if deleted_rows:
+            owner_username = display_username(str(
+                deleted_rows[0].get("username")
+                or deleted_rows[0].get("user")
+                or deleted_rows[0].get("author_username")
+                or ""
+            ))
+            if owner_username == "@user":
+                owner_username = ""
+    except Exception as exc:
+        logger.debug("Could not parse deleted post representation post_id=%s error=%s", pid, exc)
+
     return {
         "deleted": True,
         "deletedReplies": deleted_replies,
         "postId": pid,
+        "ownerUsername": owner_username,
+        "deletedRowsCount": len(deleted_rows),
         "serverDeleteMode": bool(SB_SERVICE),
     }
 
@@ -4840,8 +7811,11 @@ def _single_video_frame_moderation_pass(frame_data_url: str, video_index: int, f
                         "type": "text",
                         "text": (
                             "هذه لقطة مأخوذة من فيديو منشور في تطبيق Respect App. "
-                            "راجعها كجزء من مراجعة الفيديو. احذف الفيديو إذا ظهرت عري/محتوى جنسي/عنف/سلاح/كراهية. "
-                            "أرجع JSON فقط."
+                            "راجعها كجزء من مراجعة الفيديو واقرأ أي نص ظاهر OCR بدقة سياقية. "
+                            "مهم جدًا: النص الديني أو التعليمي أو الوعظي العام مثل: أول ما تسأل عنه المرأة يوم القيامة، "
+                            "أو أي كلام عام عن المرأة/النساء/القيامة/الصلاة/الحجاب/الأخلاق، لا يعتبر محتوى جنسيًا ولا إساءة دينية. "
+                            "احذف الفيديو فقط إذا ظهرت عري/محتوى جنسي صريح/عنف دموي/سلاح تهديد/كراهية/تحريض/سب مباشر واضح. "
+                            "إذا كان سبب الاشتباه مجرد OCR عادي فاسمح. أرجع JSON فقط مع ocrText إن وجد."
                         ),
                     },
                 ],
@@ -4865,6 +7839,7 @@ def _single_video_frame_moderation_pass(frame_data_url: str, video_index: int, f
         }
     else:
         result = _normalize_moderation_result(parsed)
+        result = _relax_contextual_text_false_positive(parsed, result, media_kind="الفيديو")
 
     result["videoIndex"] = video_index
     result["frameIndex"] = frame_index
@@ -4874,6 +7849,40 @@ def _single_video_frame_moderation_pass(frame_data_url: str, video_index: int, f
 
 
 def moderate_videos_with_qwen(req: RespectAIModerationRequest) -> Dict[str, Any]:
+    urls = _public_video_urls_from_req(req)
+    if not urls:
+        return {
+            "shouldDelete": False,
+            "category": "safe",
+            "reason": "",
+            "confidence": 0.0,
+            "checks": 0,
+            "videoChecks": [],
+        }
+
+    wait_seconds = float(os.getenv("RESPECT_VIDEO_MODERATION_SEMAPHORE_WAIT_SECONDS", "10") or "10")
+    acquired = _video_moderation_semaphore.acquire(timeout=max(0.0, wait_seconds))
+    if not acquired:
+        logger.warning("video moderation deferred because concurrency limit is full urls=%s", len(urls))
+        return {
+            "shouldDelete": False,
+            "category": "video_deferred",
+            "reason": "تم تأجيل فحص الفيديو مؤقتًا بسبب ضغط المراجعة. سيبقى المنشور تحت المراقبة الخلفية.",
+            "confidence": 0.0,
+            "checks": 0,
+            "videoChecks": [],
+            "deferred": True,
+        }
+    try:
+        return _moderate_videos_with_qwen_inner(req)
+    finally:
+        try:
+            _video_moderation_semaphore.release()
+        except Exception:
+            pass
+
+
+def _moderate_videos_with_qwen_inner(req: RespectAIModerationRequest) -> Dict[str, Any]:
     urls = _public_video_urls_from_req(req)
     if not urls:
         return {
@@ -4895,8 +7904,8 @@ def moderate_videos_with_qwen(req: RespectAIModerationRequest) -> Dict[str, Any]
             "videoChecks": [],
         }
 
-    max_frames = int(os.getenv("RESPECT_AI_VIDEO_FRAMES", "10"))
-    max_frames = max(4, min(max_frames, 24))
+    max_frames = int(os.getenv("RESPECT_AI_VIDEO_FRAMES", "6"))
+    max_frames = max(3, min(max_frames, 12))
 
     results: list[Dict[str, Any]] = []
     for video_index, url in enumerate(urls, start=1):
@@ -4983,20 +7992,28 @@ def moderate_videos_with_qwen(req: RespectAIModerationRequest) -> Dict[str, Any]
 
 def _respect_ai_image_moderation_prompt() -> str:
     return """
-أنت نظام مراجعة صور لتطبيق تواصل اجتماعي اسمه Respect App.
+أنت نظام مراجعة صور وفريمات فيديو لتطبيق تواصل اجتماعي اسمه Respect App.
 
 حلل الصورة وحدد هل يجب حذف المحتوى أم لا.
-مهم جدًا: اقرأ أي نص ظاهر داخل الصورة OCR، مثل الكتابة على الشاشة أو السكرين شوت أو الملصقات.
-احذف إذا كان النص الظاهر أو الصورة نفسها تحتوي بوضوح على:
+مهم جدًا: اقرأ أي نص ظاهر داخل الصورة OCR، مثل الكتابة على الشاشة أو السكرين شوت أو الملصقات، لكن افهمه بسياقه وليس كفلتر كلمات.
+
+قاعدة مهمة جدًا:
+لا تحذف بسبب كلمة مفردة أو نص ديني/تعليمي/وعظي عام. وجود كلمات مثل:
+"المرأة"، "النساء"، "الرجل"، "يوم القيامة"، "الصلاة"، "الحجاب"، "الدين"، "الأخلاق"
+لا يعني أن المحتوى جنسي أو إساءة دينية.
+مثال يجب السماح به: "أول ما تسأل عنه المرأة يوم القيامة" أو "أول ما تُسأل عنه المرأة يوم القيامة".
+هذا نص ديني/تعليمي عام، وليس sexual وليس religion_abuse.
+
+احذف فقط إذا كان النص الظاهر أو الصورة نفسها تحتوي بوضوح على:
 - عري كامل أو جزئي، ملابس داخلية/شفافة بشكل جنسي، أجزاء حساسة ظاهرة، أو محتوى جنسي/إيحائي صريح.
 - عنف دموي أو إصابات صادمة أو تعذيب.
 - كراهية أو رموز متطرفة أو تحريض.
 - سلاح أو تهديد واضح أو محتوى خطر.
 - تنمر بصري أو إهانة مباشرة لشخص.
-- كلام مخل بالأدب أو سب مباشر أو إيحاء جنسي أو تحرش مكتوب على الصورة.
-- محتوى غير مناسب للنشر العام.
+- كلام فاحش صريح أو سب مباشر أو تحرش مكتوب على الصورة.
+- محتوى غير مناسب للنشر العام بدليل بصري/نصي واضح.
 
-لا تحذف الصور العادية مثل: سيلفي، طعام، مناظر، ألعاب، ميمز غير مؤذية، واجهات تطبيق، لقطات شاشة عادية.
+لا تحذف الصور العادية مثل: سيلفي، طعام، مناظر، ألعاب، ميمز غير مؤذية، واجهات تطبيق، لقطات شاشة عادية، أو نصوص دينية/تعليمية عامة.
 
 أرجع JSON فقط بدون markdown:
 {
@@ -5004,6 +8021,7 @@ def _respect_ai_image_moderation_prompt() -> str:
   "shouldDelete": true أو false,
   "category": "safe" أو "nudity" أو "sexual" أو "violence" أو "hate" أو "weapon" أو "harassment" أو "dangerous" أو "other",
   "reason": "سبب مختصر بالعربية",
+  "ocrText": "النص المقروء إن وجد، وإلا اتركه فارغًا",
   "confidence": رقم من 0 إلى 1
 }
 """.strip()
@@ -5039,7 +8057,7 @@ def _single_image_moderation_pass(image_url: str, index: int = 1) -> Dict[str, A
                     },
                     {
                         "type": "text",
-                        "text": "راجع هذه الصورة/اللقطة من محتوى في تطبيق Respect App. اقرأ أي نص ظاهر على الشاشة، واحذف إذا كان النص أو الصورة مخالفًا. أرجع JSON فقط.",
+                        "text": "راجع هذه الصورة/اللقطة من محتوى في تطبيق Respect App. اقرأ أي نص ظاهر على الشاشة بسياقه. لا تحذف النصوص الدينية أو التعليمية العامة مثل: أول ما تسأل عنه المرأة يوم القيامة. احذف فقط عند وجود مخالفة واضحة صريحة. أرجع JSON فقط مع ocrText إن وجد.",
                     },
                 ],
             },
@@ -5063,6 +8081,7 @@ def _single_image_moderation_pass(image_url: str, index: int = 1) -> Dict[str, A
         }
     else:
         result = _normalize_moderation_result(parsed)
+        result = _relax_contextual_text_false_positive(parsed, result, media_kind="الصورة")
     result["imageUrl"] = image_url
     result["visionModel"] = QWEN_VISION_MODEL
     result["imageIndex"] = index
@@ -5646,12 +8665,19 @@ def _combine_text_image_video_moderation(
         }
 
     if text_delete:
+        text_memory_used = bool(text_result.get("memoryUsed") or text_result.get("moderationMemoryUsed"))
+        text_decision_source = str(
+            text_result.get("decisionSource")
+            or ("respect_ai_moderation_memory" if text_memory_used else "qwen-plus")
+        )
         return {
             **text_result,
             "shouldDelete": True,
             "category": str(text_result.get("category") or "text_violation"),
             "reason": str(text_result.get("reason") or "النص مخالف"),
-            "decisionSource": "qwen-plus",
+            "decisionSource": text_decision_source,
+            "memoryUsed": text_memory_used,
+            "moderationMemoryUsed": text_memory_used,
             "textModeration": text_result,
             "imageModeration": image_result,
             "videoModeration": video_result,
@@ -5800,11 +8826,44 @@ def respect_ai_review_report(req: RespectAIModerationRequest, x_app_secret: Opti
         "warning": warning_result,
     }
 
+def _run_story_moderation_job(req_data: Dict[str, Any]) -> None:
+    req = RespectAIModerationRequest(**req_data)
+    result = _respect_ai_moderate_story_sync(req)
+    logger.info(
+        "story moderation job finished story_id=%s should_delete=%s deleted=%s category=%s",
+        result.get("storyId"),
+        result.get("shouldDelete"),
+        result.get("deleted"),
+        result.get("category"),
+    )
+
+
 @app.post("/respect-ai/moderate-story")
 def respect_ai_moderate_story(req: RespectAIModerationRequest, request: FastAPIRequest, x_app_secret: Optional[str] = Header(default=None)):
     _check_secret(x_app_secret)
     _enforce_moderation_rate(_client_ip(request))
 
+    story_id = (req.postId or req.replyId or "").strip()
+    if RESPECT_MODERATION_ASYNC:
+        job_id = _submit_background_job("story_moderation", _run_story_moderation_job, _model_to_dict(req))
+        return {
+            "ok": True,
+            "storyId": story_id,
+            "queued": True,
+            "moderationQueued": True,
+            "jobId": job_id,
+            "shouldDelete": False,
+            "deleted": False,
+            "category": "queued",
+            "reason": "تم قبول الستوري، والمراجعة الثقيلة تعمل بالخلفية.",
+            "provider": "background-moderation",
+            "serverSideDelete": True,
+        }
+
+    return _respect_ai_moderate_story_sync(req)
+
+
+def _respect_ai_moderate_story_sync(req: RespectAIModerationRequest) -> Dict[str, Any]:
     # ستوري
     # ├── qwen-plus للنص إن وجد
     # ├── qwen-vl-plus للصورة وقراءة النص الظاهر على الشاشة OCR
@@ -5857,9 +8916,120 @@ def respect_ai_moderate_story(req: RespectAIModerationRequest, request: FastAPIR
         "model": QWEN_TEXT_MODEL,
         "textModel": QWEN_TEXT_MODEL,
         "visionModel": QWEN_VISION_MODEL,
-        "provider": "local-guard+qwen+safe-browsing+virustotal",
+        "provider": "local-guard+moderation-memory+qwen+safe-browsing+virustotal",
         "serverSideDelete": True,
+        "memoryUsed": bool(result.get("memoryUsed") or result.get("moderationMemoryUsed")),
+        "moderationMemoryUsed": bool(result.get("moderationMemoryUsed")),
+        "memoryDecision": str(result.get("memoryDecision") or ""),
+        "matchedTerm": str(result.get("matchedTerm") or ""),
     }
+
+
+@app.post("/respect-ai/precheck-post")
+def respect_ai_precheck_post(req: RespectAIModerationRequest, request: FastAPIRequest, x_app_secret: Optional[str] = Header(default=None)):
+    """
+    فحص قبل النشر: لا يحذف أي صف من Supabase.
+    إذا النص مخالف يرجع blocked=true مع السبب والعبارة المطابقة، ويتعلم الذاكرة فورًا.
+    """
+    _check_secret(x_app_secret)
+    _enforce_moderation_rate(_client_ip(request))
+
+    text = (req.text or req.postText or "").strip()
+    if not text:
+        return {
+            "ok": True,
+            "blocked": False,
+            "shouldDelete": False,
+            "prePublishBlocked": False,
+            "category": "safe",
+            "reason": "",
+            "confidence": 0.0,
+            "decisionSource": "empty_text",
+            "decisionSourceKind": "local",
+            "decisionSourceLabel": _moderation_delete_source_label("local", req.language),
+            "localMemoryRows": [],
+            "learnedTerms": [],
+        }
+
+    learned_result = _learned_abuse_violation_guard(text)
+    if learned_result is not None and learned_result.get("shouldDelete") is True:
+        result = dict(learned_result)
+        result.setdefault("decisionSource", "learned_report_dictionary")
+        result.setdefault("model", "learned_dictionary")
+    else:
+        result = moderate_with_qwen(req)
+
+    should_delete = bool(
+        result.get("shouldDelete") is True
+        or result.get("delete") is True
+        or result.get("blocked") is True
+    )
+    reason = str(result.get("reason") or ("محتوى مخالف لإرشادات المجتمع" if should_delete else ""))
+    category = str(result.get("category") or ("violation" if should_delete else "safe"))
+    confidence = float(result.get("confidence") or (0.99 if should_delete else 0.0))
+    memory_used = bool(result.get("memoryUsed") or result.get("moderationMemoryUsed"))
+    decision_source = str(
+        result.get("decisionSource")
+        or ("respect_ai_moderation_memory" if memory_used else "pre_publish_moderation")
+    )
+    source_kind = _moderation_delete_source_kind(decision_source, memory_used=memory_used)
+    source_label = _moderation_delete_source_label(source_kind, req.language)
+
+    memory_learn_result: Dict[str, Any] = dict(result.get("memoryLearnResult") or {})
+    if should_delete and memory_learn_result.get("learned") is not True:
+        result_for_memory = dict(result)
+        result_for_memory.setdefault("shouldDelete", True)
+        result_for_memory.setdefault("category", category)
+        result_for_memory.setdefault("reason", reason)
+        result_for_memory.setdefault("confidence", confidence)
+        result_for_memory.setdefault("decisionSource", decision_source)
+        result_for_memory.setdefault("model", str(result.get("model") or QWEN_TEXT_MODEL or "pre_publish_moderation"))
+        memory_learn_result = _learn_moderation_memory_safely(
+            req,
+            result_for_memory,
+            text_result=result_for_memory,
+            source=f"{decision_source}_pre_publish",
+        )
+    if not memory_learn_result:
+        memory_learn_result = {"learned": False, "reason": "not_eligible"}
+
+    return {
+        "ok": True,
+        "blocked": should_delete,
+        "shouldDelete": should_delete,
+        "prePublishBlocked": should_delete,
+        "deleted": False,
+        "serverSideDelete": False,
+        "memoryLearned": bool(memory_learn_result.get("learned")),
+        "memoryLearnResult": memory_learn_result,
+        "localMemoryRows": memory_learn_result.get("localMemoryRows") or memory_learn_result.get("learnedRows") or [],
+        "learnedTerms": memory_learn_result.get("learnedTerms") or [],
+        "reason": reason,
+        "category": category,
+        "confidence": confidence,
+        "decisionSource": decision_source,
+        "decisionSourceKind": source_kind,
+        "decisionSourceLabel": source_label,
+        "memoryUsed": memory_used,
+        "moderationMemoryUsed": bool(result.get("moderationMemoryUsed") or memory_used),
+        "memoryDecision": str(result.get("memoryDecision") or ""),
+        "matchedTerm": str(result.get("matchedTerm") or ""),
+        "matchedTerms": result.get("matchedTerms") or [],
+        "model": str(result.get("model") or QWEN_TEXT_MODEL),
+        "provider": "local-guard+moderation-memory+qwen-pre-publish",
+    }
+
+
+def _run_post_moderation_job(req_data: Dict[str, Any]) -> None:
+    req = RespectAIModerationRequest(**req_data)
+    result = _respect_ai_moderate_post_sync(req)
+    logger.info(
+        "post moderation job finished post_id=%s should_delete=%s deleted=%s category=%s",
+        result.get("postId"),
+        result.get("shouldDelete"),
+        result.get("deleted"),
+        result.get("category"),
+    )
 
 
 @app.post("/respect-ai/moderate-post")
@@ -5867,22 +9037,91 @@ def respect_ai_moderate_post(req: RespectAIModerationRequest, request: FastAPIRe
     _check_secret(x_app_secret)
     _enforce_moderation_rate(_client_ip(request))
 
+    # إذا الذاكرة/الفلتر المحلي وجد مخالفة مؤكدة، نحذف فوريًا حتى لا ينتظر المستخدم الوظيفة الخلفية.
+    learned_result = _learned_abuse_violation_guard(req.text or req.postText or "")
+    if learned_result is not None and learned_result.get("shouldDelete") is True:
+        return _respect_ai_moderate_post_sync(req)
+
+    if RESPECT_MODERATION_ASYNC:
+        job_id = _submit_background_job("post_moderation", _run_post_moderation_job, _model_to_dict(req))
+        return {
+            "ok": True,
+            "postId": req.postId,
+            "queued": True,
+            "moderationQueued": True,
+            "jobId": job_id,
+            "shouldDelete": False,
+            "deleted": False,
+            "category": "queued",
+            "reason": "تم قبول المنشور، والمراجعة الثقيلة تعمل بالخلفية.",
+            "provider": "background-moderation",
+            "serverSideDelete": True,
+        }
+
+    return _respect_ai_moderate_post_sync(req)
+
+
+def _respect_ai_moderate_post_sync(req: RespectAIModerationRequest) -> Dict[str, Any]:
     # طبقة تعلم البلاغات: تفحص القاموس المتعلم قبل Qwen، حتى يكون الحذف فوريًا ومتسقًا.
     learned_result = _learned_abuse_violation_guard(req.text or req.postText or "")
     if learned_result is not None and learned_result.get("shouldDelete") is True:
         delete_result: Dict[str, Any] = {"deleted": False}
         if (req.postId or "").strip():
             delete_result = _delete_supabase_post(req.postId)
+
+        reason = str(learned_result.get("reason") or "عبارة مخالفة متعلمة من بلاغ صحيح سابق")
+        category = str(learned_result.get("category") or "learned_abuse")
+        confidence = float(learned_result.get("confidence") or 0.99)
+        decision_source = "learned_report_dictionary"
+        owner_username = str(req.username or delete_result.get("ownerUsername") or "").strip()
+        notification_result: Dict[str, Any] = {"sent": False, "reason": "not_deleted"}
+        memory_learn_result: Dict[str, Any] = {"learned": False, "reason": "not_deleted"}
+        if bool(delete_result.get("deleted")):
+            notification_result = _send_post_moderation_deleted_push(
+                username=owner_username,
+                post_id=req.postId,
+                reason=reason,
+                category=category,
+                confidence=confidence,
+                decision_source=decision_source,
+                memory_used=True,
+                matched_term=str(learned_result.get("matchedTerm") or ""),
+                fallback_language=req.language,
+            )
+            learned_for_memory = dict(learned_result)
+            learned_for_memory.setdefault("shouldDelete", True)
+            learned_for_memory.setdefault("category", category)
+            learned_for_memory.setdefault("reason", reason)
+            learned_for_memory.setdefault("confidence", confidence)
+            learned_for_memory.setdefault("decisionSource", decision_source)
+            learned_for_memory.setdefault("model", "learned_dictionary")
+            memory_learn_result = _learn_moderation_memory_safely(
+                req,
+                learned_for_memory,
+                text_result=learned_for_memory,
+                source="learned_report_dictionary_delete",
+            )
+
         return {
             "ok": True,
             "postId": req.postId,
             "shouldDelete": True,
             "deleted": bool(delete_result.get("deleted")),
             "deleteResult": delete_result,
-            "reason": str(learned_result.get("reason") or "عبارة مخالفة متعلمة من بلاغ صحيح سابق"),
-            "category": str(learned_result.get("category") or "learned_abuse"),
-            "confidence": float(learned_result.get("confidence") or 0.99),
-            "decisionSource": "learned_report_dictionary",
+            "notificationSent": bool(notification_result.get("sent")),
+            "notificationResult": notification_result,
+            "memoryLearned": bool(memory_learn_result.get("learned")),
+            "memoryLearnResult": memory_learn_result,
+            "localMemoryRows": memory_learn_result.get("localMemoryRows") or memory_learn_result.get("learnedRows") or [],
+            "learnedTerms": memory_learn_result.get("learnedTerms") or [],
+            "reason": reason,
+            "category": category,
+            "confidence": confidence,
+            "decisionSource": decision_source,
+            "decisionSourceKind": "memory",
+            "decisionSourceLabel": "ذاكرة Respect AI",
+            "memoryUsed": True,
+            "moderationMemoryUsed": True,
             "textModeration": learned_result,
             "imageModeration": {"shouldDelete": False, "category": "skipped", "reason": "تم الحذف من طبقة التعلم النصية"},
             "videoModeration": {"shouldDelete": False, "category": "skipped", "reason": "تم الحذف من طبقة التعلم النصية"},
@@ -5930,16 +9169,74 @@ def respect_ai_moderate_post(req: RespectAIModerationRequest, request: FastAPIRe
     if should_delete:
         delete_result = _delete_supabase_post(req.postId)
 
+    reason = str(result.get("reason") or "")
+    category = str(result.get("category") or "safe")
+    confidence = float(result.get("confidence") or 0.0)
+    memory_used = bool(result.get("memoryUsed") or result.get("moderationMemoryUsed"))
+    decision_source = str(
+        result.get("decisionSource")
+        or ("respect_ai_moderation_memory" if memory_used else "combined")
+    )
+    source_kind = _moderation_delete_source_kind(decision_source, memory_used=memory_used)
+    source_label = _moderation_delete_source_label(source_kind, req.language)
+    notification_result: Dict[str, Any] = {"sent": False, "reason": "not_deleted"}
+
+    memory_learn_result: Dict[str, Any] = dict(result.get("memoryLearnResult") or {})
+    if not memory_learn_result:
+        memory_learn_result = dict((result.get("textModeration") or {}).get("memoryLearnResult") or {})
+    if not memory_learn_result:
+        memory_learn_result = {"learned": False, "reason": "not_eligible"}
+
+    if bool(delete_result.get("deleted")):
+        owner_username = str(req.username or delete_result.get("ownerUsername") or "").strip()
+        notification_result = _send_post_moderation_deleted_push(
+            username=owner_username,
+            post_id=req.postId,
+            reason=reason,
+            category=category,
+            confidence=confidence,
+            decision_source=decision_source,
+            memory_used=memory_used,
+            matched_term=str(result.get("matchedTerm") or ""),
+            fallback_language=req.language,
+        )
+
+        # ضمان أخير: أي حذف ناجح لازم يحاول تسجيل الذاكرة.
+        # إذا كان الحذف جاء من local_hard_filter، فغالبًا تم التعلم داخل moderate_with_qwen.
+        # إذا لم يحدث، نسجله هنا حتى لا يبقى العداد 0.
+        if memory_learn_result.get("learned") is not True:
+            result_for_memory = dict(result)
+            result_for_memory.setdefault("shouldDelete", should_delete)
+            result_for_memory.setdefault("category", category)
+            result_for_memory.setdefault("reason", reason)
+            result_for_memory.setdefault("confidence", confidence)
+            result_for_memory.setdefault("decisionSource", decision_source)
+            result_for_memory.setdefault("model", str(result.get("model") or QWEN_TEXT_MODEL or "post_moderation"))
+            memory_learn_result = _learn_moderation_memory_safely(
+                req,
+                result_for_memory,
+                text_result=result.get("textModeration") if isinstance(result.get("textModeration"), dict) else result_for_memory,
+                source=f"{decision_source}_delete",
+            )
+
     return {
         "ok": True,
         "postId": req.postId,
         "shouldDelete": should_delete,
         "deleted": bool(delete_result.get("deleted")),
         "deleteResult": delete_result,
-        "reason": str(result.get("reason") or ""),
-        "category": str(result.get("category") or "safe"),
-        "confidence": float(result.get("confidence") or 0.0),
-        "decisionSource": str(result.get("decisionSource") or "combined"),
+        "notificationSent": bool(notification_result.get("sent")),
+        "notificationResult": notification_result,
+        "memoryLearned": bool(memory_learn_result.get("learned")),
+        "memoryLearnResult": memory_learn_result,
+        "localMemoryRows": memory_learn_result.get("localMemoryRows") or memory_learn_result.get("learnedRows") or [],
+        "learnedTerms": memory_learn_result.get("learnedTerms") or [],
+        "reason": reason,
+        "category": category,
+        "confidence": confidence,
+        "decisionSource": decision_source,
+        "decisionSourceKind": source_kind,
+        "decisionSourceLabel": source_label,
         "textModeration": result.get("textModeration", text_result),
         "imageModeration": result.get("imageModeration", image_result),
         "videoModeration": result.get("videoModeration", video_result),
@@ -5948,8 +9245,12 @@ def respect_ai_moderate_post(req: RespectAIModerationRequest, request: FastAPIRe
         "model": QWEN_TEXT_MODEL,
         "textModel": QWEN_TEXT_MODEL,
         "visionModel": QWEN_VISION_MODEL,
-        "provider": "local-guard+qwen+safe-browsing+virustotal",
+        "provider": "local-guard+moderation-memory+qwen+safe-browsing+virustotal",
         "serverSideDelete": True,
+        "memoryUsed": memory_used,
+        "moderationMemoryUsed": memory_used,
+        "memoryDecision": str(result.get("memoryDecision") or ""),
+        "matchedTerm": str(result.get("matchedTerm") or ""),
     }
 
 
@@ -6479,6 +9780,7 @@ def _feedback_supabase_patch(report_id: str, payload: Dict[str, Any]) -> Dict[st
         return {"ok": False, "reason": str(e)}
 
 
+
 def _feedback_supabase_get(report_id: str) -> Optional[Dict[str, Any]]:
     if not SB_URL or not (SB_SERVICE or SB_ANON):
         return None
@@ -6497,6 +9799,235 @@ def _feedback_supabase_get(report_id: str) -> Optional[Dict[str, Any]]:
     except Exception:
         return None
     return None
+
+
+def _feedback_supabase_list(status: str = "all", limit: int = 120) -> Dict[str, Any]:
+    if not SB_URL or not (SB_SERVICE or SB_ANON):
+        return {"ok": False, "items": [], "reason": "Supabase env missing"}
+    safe_limit = max(1, min(int(limit or 120), 300))
+    params: Dict[str, str] = {
+        "select": "*",
+        "order": "created_at.desc",
+        "limit": str(safe_limit),
+    }
+    clean_status = str(status or "all").strip().lower()
+    if clean_status and clean_status != "all":
+        params["status"] = f"eq.{clean_status}"
+    try:
+        response = requests.get(
+            f"{SB_URL}/rest/v1/{APP_AI_FEEDBACK_TABLE}",
+            headers=_supabase_headers(use_service_role=True),
+            params=params,
+            timeout=18,
+        )
+        if response.status_code >= 400:
+            return {"ok": False, "items": [], "status": response.status_code, "body": _safe_response_text(response.text, 900)}
+        rows = response.json() if response.text.strip() else []
+        if not isinstance(rows, list):
+            rows = []
+        return {"ok": True, "items": rows, "count": len(rows)}
+    except Exception as e:
+        return {"ok": False, "items": [], "reason": str(e)}
+
+
+def _feedback_supabase_delete(report_id: str) -> Dict[str, Any]:
+    if not SB_URL or not (SB_SERVICE or SB_ANON):
+        return {"ok": False, "reason": "Supabase env missing"}
+    try:
+        response = requests.delete(
+            f"{SB_URL}/rest/v1/{APP_AI_FEEDBACK_TABLE}",
+            headers={**_supabase_headers(use_service_role=True), "Prefer": "return=representation"},
+            params={"id": f"eq.{report_id}"},
+            timeout=15,
+        )
+        if response.status_code >= 400:
+            return {"ok": False, "status": response.status_code, "body": _safe_response_text(response.text, 900)}
+        rows = response.json() if response.text.strip() else []
+        return {"ok": True, "rows": rows}
+    except Exception as e:
+        return {"ok": False, "reason": str(e)}
+
+
+def _notify_app_feedback_resolved(report: Dict[str, Any], admin_username: str, admin_note: str = "") -> Dict[str, Any]:
+    username = _display_username(str(report.get("username") or ""))
+    report_id = str(report.get("id") or "").strip()
+    title = "تم حل البلاغ"
+    body = "تم حل المشكلة في البلاغ الذي قدمته، شكرًا لتعاونكم."
+    report_title = str(report.get("title") or "").strip()
+    if report_title:
+        body = f"تم حل المشكلة في البلاغ: {report_title}. شكرًا لتعاونكم."
+    if admin_note.strip():
+        body = f"{body}\n{admin_note.strip()[:220]}"
+
+    result: Dict[str, Any] = {"sent": False, "username": username, "reason": ""}
+    if not username or username == "@user":
+        result["reason"] = "missing_username"
+        return result
+    try:
+        target = get_user_push_target(username, fallback_language="ar")
+        if not target:
+            result["reason"] = "receiver_has_no_fcm_token"
+            return result
+        language = target.get("language", "ar")
+        sent = send_fcm_v1(
+            target["token"],
+            "app_feedback_resolved",
+            title,
+            body,
+            _localized_data(
+                {
+                    "type": "app_feedback_resolved",
+                    "reportId": report_id,
+                    "report_id": report_id,
+                    "title": title,
+                    "body": body,
+                    "text": body,
+                    "adminUsername": _display_username(admin_username),
+                },
+                language,
+                title,
+                body,
+            ),
+        )
+        result.update(sent if isinstance(sent, dict) else {"raw": sent})
+        result["sent"] = True
+        return result
+    except Exception as e:
+        result["reason"] = str(e)
+        logger.warning("app feedback resolved push failed report_id=%s user=%s err=%s", report_id, username, e)
+        return result
+
+
+
+
+def _exception_detail_text(exc: Exception, limit: int = 1200) -> str:
+    """يرجع نص آمن وقصير للخطأ بدون كشف مفاتيح أو توكنات."""
+    try:
+        detail = getattr(exc, "detail", None)
+        if isinstance(detail, (dict, list)):
+            raw = json.dumps(detail, ensure_ascii=False)
+        elif detail is not None:
+            raw = str(detail)
+        else:
+            raw = str(exc)
+    except Exception:
+        raw = str(exc)
+    return _safe_response_text(raw, limit)
+
+
+def _ai_provider_status_from_exception(exc: Exception) -> int:
+    """يستخرج status الحقيقي من أخطاء مزودي الذكاء مثل OpenRouter/Qwen."""
+    if isinstance(exc, HTTPException):
+        try:
+            if int(exc.status_code) in {408, 409, 425, 429, 500, 502, 503, 504}:
+                return int(exc.status_code)
+        except Exception:
+            pass
+
+        detail = getattr(exc, "detail", None)
+        if isinstance(detail, dict):
+            for key, value in detail.items():
+                low_key = str(key).lower()
+                if low_key.endswith("_status") or low_key in {"status", "provider_status", "hf_status"}:
+                    try:
+                        status = int(value)
+                        if status > 0:
+                            return status
+                    except Exception:
+                        pass
+            try:
+                raw = json.dumps(detail, ensure_ascii=False).lower()
+            except Exception:
+                raw = str(detail).lower()
+        else:
+            raw = str(detail or exc).lower()
+    else:
+        raw = str(exc).lower()
+
+    # احتياطي للنصوص القادمة من OpenRouter أو مزودات OpenAI-compatible.
+    if "429" in raw or "rate limit" in raw or "too many requests" in raw or "quota" in raw:
+        return 429
+    if "timeout" in raw or "timed out" in raw:
+        return 504
+    if "temporarily unavailable" in raw or "overloaded" in raw or "service unavailable" in raw:
+        return 503
+    return 0
+
+
+def _is_retryable_ai_exception(exc: Exception) -> bool:
+    if isinstance(exc, (
+        requests.exceptions.Timeout,
+        requests.exceptions.ConnectionError,
+        requests.exceptions.ChunkedEncodingError,
+    )):
+        return True
+    return _ai_provider_status_from_exception(exc) in {408, 409, 425, 429, 500, 502, 503, 504}
+
+
+def _feedback_ai_busy_response(
+    *,
+    report_id: str,
+    phase: str,
+    exc: Exception,
+    db_insert: Dict[str, Any],
+    analysis: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    عند ضغط نماذج OpenRouter/Qwen لا نفشل البلاغ.
+    نحفظ البلاغ في Supabase بحالة قابلة لإعادة المحاولة ونرجع 200 للتطبيق.
+    """
+    provider_status = _ai_provider_status_from_exception(exc) or 503
+    now = datetime.now(timezone.utc).isoformat()
+    phase_ar = "تحليل البلاغ" if phase == "analysis" else "تجهيز التصحيح"
+    status = "queued_ai_busy" if phase == "analysis" else "analyzed_waiting_ai_retry"
+    summary = (
+        "تم حفظ البلاغ بنجاح، لكن نموذج الذكاء الاصطناعي مشغول الآن. "
+        "لن يضيع البلاغ، جرّب إعادة التحليل لاحقًا من لوحة الإدارة."
+    )
+    result = {
+        "summary": summary,
+        "retryable": True,
+        "phase": phase,
+        "phaseLabel": phase_ar,
+        "providerStatus": provider_status,
+        "error": _exception_detail_text(exc),
+        "models": {"patcher": AI_FIX_MODEL_1, "reviewer": AI_FIX_MODEL_2, "finalReviewer": AI_FIX_MODEL_3, "chain": AI_FIX_MODEL_CHAIN},
+        "hint": "إذا فشلت كل الموديلات المجانية بسبب 429/402/503 فزِد AI_FIX_EXTRA_MODELS أو اشحن OpenRouter credits.",
+    }
+    patch_payload: Dict[str, Any] = {
+        "status": status,
+        "result": result,
+        "updated_at": now,
+    }
+    if isinstance(analysis, dict):
+        patch_payload["analysis"] = analysis
+    database_patch = _feedback_supabase_patch(report_id, patch_payload)
+    logger.warning(
+        "AI feedback saved without failing request report_id=%s phase=%s provider_status=%s error=%s",
+        report_id,
+        phase,
+        provider_status,
+        _exception_detail_text(exc, 500),
+    )
+    return {
+        "ok": True,
+        "id": report_id,
+        "reportId": report_id,
+        "status": status,
+        "summary": summary,
+        "retryable": True,
+        "phase": phase,
+        "providerStatus": provider_status,
+        "analysis": analysis or {},
+        "result": result,
+        "changedFiles": [],
+        "review2": {},
+        "review3": {},
+        "databaseSaved": bool(db_insert.get("ok")),
+        "databasePatch": database_patch,
+        "models": result.get("models") or {},
+        "model": AI_FIX_MODEL_1,
+    }
 
 
 def _ai_fix_is_admin(username: str) -> bool:
@@ -6525,9 +10056,168 @@ def _extract_json_object(raw: str) -> Dict[str, Any]:
     raise HTTPException(status_code=500, detail=f"Qwen JSON parse failed: {_safe_response_text(text, 900)}")
 
 
-def _qwen_coder_json(messages: list[Dict[str, str]], *, max_tokens: int = 2500, temperature: float = 0.1) -> Dict[str, Any]:
+def _split_ai_model_env(value: str) -> list[str]:
+    """يقسم قائمة موديلات من Render مفصولة بفواصل أو أسطر، مع إزالة التكرار."""
+    models: list[str] = []
+    raw = str(value or "").replace("\n", ",").replace(";", ",")
+    for item in raw.split(","):
+        model = item.strip()
+        if not model or model.startswith("#"):
+            continue
+        if model not in models:
+            models.append(model)
+    return models
+
+
+def _ai_fix_base_model_chain() -> list[str]:
+    """
+    قائمة عامة يستخدمها AI Fixer عند فشل أي نموذج.
+    ابدأ بالأساسيات ثم أضف AI_FIX_EXTRA_MODELS من Render.
+    """
+    chain: list[str] = []
+    for item in [AI_FIX_MODEL_1, AI_FIX_MODEL_2, AI_FIX_MODEL_3, *_split_ai_model_env(AI_FIX_EXTRA_MODELS)]:
+        item = str(item or "").strip()
+        if item and item not in chain:
+            chain.append(item)
+    return chain
+
+
+AI_FIX_MODEL_CHAIN = _ai_fix_base_model_chain()
+
+
+def _ai_fix_chain_for(primary_model: str) -> list[str]:
+    """
+    يجعل النموذج المطلوب أول واحد، ثم يجرب بقية الموديلات بالترتيب.
+    AI_FIX_MAX_MODEL_ATTEMPTS يمنع الدوران الطويل جدًا داخل Render.
+    """
+    primary = str(primary_model or "").strip()
+    chain: list[str] = []
+    if primary:
+        chain.append(primary)
+    for model in AI_FIX_MODEL_CHAIN:
+        if model and model not in chain:
+            chain.append(model)
+    max_attempts = max(1, AI_FIX_MAX_MODEL_ATTEMPTS)
+    return chain[:max_attempts]
+
+
+def _model_label(log_label: str, model: str, index: int) -> str:
+    safe = re.sub(r"[^A-Za-z0-9]+", "_", str(model or "model")).strip("_").upper()[:60]
+    return f"{log_label}_TRY_{index}_{safe}"
+
+
+def _ai_json_failure_detail(errors: list[Dict[str, Any]]) -> Dict[str, Any]:
+    return {
+        "message": "كل موديلات AI Fixer فشلت أو كانت مشغولة.",
+        "errors": errors[-12:],
+        "modelsTried": [str(e.get("model") or "") for e in errors if e.get("model")],
+        "retryable": True,
+        "hint": "زِد AI_FIX_EXTRA_MODELS أو اشحن OpenRouter credits. الموديلات المجانية تتعرض للضغط وتملك حدودًا يومية/دقيقة.",
+    }
+
+
+def _ai_fixer_json(
+    messages: list[Dict[str, str]],
+    *,
+    model: str,
+    max_tokens: int = 2500,
+    temperature: float = 0.1,
+    log_label: str = "AI_FIXER",
+) -> Dict[str, Any]:
+    """
+    يستدعي OpenRouter بسلسلة موديلات fallback.
+    إذا فشل نموذج بسبب 429/402/503/timeout أو رجّع JSON غير صالح، ينتقل للنموذج التالي.
+    إذا لم تضبط OPENROUTER_API_KEY يستخدم Qwen كاحتياطي قديم.
+    """
+    if OPENROUTER_API_KEY:
+        errors: list[Dict[str, Any]] = []
+        chain = _ai_fix_chain_for(model)
+        logger.info("AI Fixer %s model chain=%s", log_label, chain)
+
+        for index, candidate_model in enumerate(chain, start=1):
+            candidate_model = str(candidate_model or "").strip()
+            if not candidate_model:
+                continue
+
+            # المحاولة الأولى: JSON mode. بعض الموديلات لا تدعمه، لذلك عند 400/422 نجرب بدونه.
+            try:
+                raw = _chat_completion_request(
+                    model=candidate_model,
+                    api_key=OPENROUTER_API_KEY,
+                    base_url=OPENROUTER_BASE_URL,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    timeout=QWEN_CODER_TIMEOUT_SECONDS,
+                    response_format={"type": "json_object"},
+                    log_label=_model_label(log_label, candidate_model, index),
+                )
+                data = _extract_json_object(raw)
+                data.setdefault("model", candidate_model)
+                data.setdefault("_modelUsed", candidate_model)
+                data.setdefault("_modelsTried", chain[:index])
+                return data
+            except Exception as exc:
+                status = _ai_provider_status_from_exception(exc)
+                errors.append({
+                    "model": candidate_model,
+                    "status": status or getattr(exc, "status_code", 0),
+                    "error": _exception_detail_text(exc, 700),
+                    "jsonMode": True,
+                })
+
+                # لو المشكلة ضغط/رصيد/مزود غير متاح لا نعيد نفس النموذج، ننتقل مباشرة.
+                if status in {402, 408, 409, 425, 429, 500, 502, 503, 504}:
+                    logger.warning(
+                        "AI Fixer model skipped log_label=%s model=%s status=%s error=%s",
+                        log_label,
+                        candidate_model,
+                        status,
+                        _exception_detail_text(exc, 350),
+                    )
+                    continue
+
+            # المحاولة الثانية لنفس النموذج بدون response_format.
+            # تفيد مع موديلات مجانية لا تدعم JSON mode لكنها تستطيع إرجاع JSON نصيًا.
+            try:
+                raw = _chat_completion_request(
+                    model=candidate_model,
+                    api_key=OPENROUTER_API_KEY,
+                    base_url=OPENROUTER_BASE_URL,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    timeout=QWEN_CODER_TIMEOUT_SECONDS,
+                    response_format=None,
+                    log_label=f"{_model_label(log_label, candidate_model, index)}_NO_JSON_MODE",
+                )
+                data = _extract_json_object(raw)
+                data.setdefault("model", candidate_model)
+                data.setdefault("_modelUsed", candidate_model)
+                data.setdefault("_modelsTried", chain[:index])
+                return data
+            except Exception as exc:
+                status = _ai_provider_status_from_exception(exc)
+                errors.append({
+                    "model": candidate_model,
+                    "status": status or getattr(exc, "status_code", 0),
+                    "error": _exception_detail_text(exc, 700),
+                    "jsonMode": False,
+                })
+                logger.warning(
+                    "AI Fixer model failed log_label=%s model=%s status=%s error=%s",
+                    log_label,
+                    candidate_model,
+                    status or getattr(exc, "status_code", 0),
+                    _exception_detail_text(exc, 350),
+                )
+                continue
+
+        raise HTTPException(status_code=503, detail=_ai_json_failure_detail(errors))
+
     if not QWEN_API_KEY:
-        raise HTTPException(status_code=500, detail="QWEN_API_KEY missing")
+        raise HTTPException(status_code=500, detail="OPENROUTER_API_KEY missing. ضع مفتاح OpenRouter في Render لتشغيل نماذج التصحيح المجانية.")
+
     try:
         raw = _chat_completion_request(
             model=QWEN_CODER_MODEL,
@@ -6538,7 +10228,7 @@ def _qwen_coder_json(messages: list[Dict[str, str]], *, max_tokens: int = 2500, 
             max_tokens=max_tokens,
             timeout=QWEN_CODER_TIMEOUT_SECONDS,
             response_format={"type": "json_object"},
-            log_label="QWEN_CODER",
+            log_label=log_label,
         )
     except HTTPException:
         raw = _chat_completion_request(
@@ -6549,10 +10239,24 @@ def _qwen_coder_json(messages: list[Dict[str, str]], *, max_tokens: int = 2500, 
             temperature=temperature,
             max_tokens=max_tokens,
             timeout=QWEN_CODER_TIMEOUT_SECONDS,
-            log_label="QWEN_CODER_FALLBACK",
+            log_label=f"{log_label}_FALLBACK",
         )
-    return _extract_json_object(raw)
+    data = _extract_json_object(raw)
+    data.setdefault("model", QWEN_CODER_MODEL)
+    data.setdefault("_modelUsed", QWEN_CODER_MODEL)
+    data.setdefault("_modelsTried", [QWEN_CODER_MODEL])
+    return data
 
+
+def _qwen_coder_json(messages: list[Dict[str, str]], *, max_tokens: int = 2500, temperature: float = 0.1) -> Dict[str, Any]:
+    # الاسم قديم للتوافق؛ الآن يستخدم سلسلة موديلات OpenRouter بدل موديل واحد.
+    return _ai_fixer_json(
+        messages,
+        model=AI_FIX_MODEL_1,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        log_label="AI_FIX_MODEL_1_ANALYZE",
+    )
 
 def _score_candidate_file(path: str, title: str, note: str, screen: str) -> int:
     low_path = path.lower()
@@ -6636,10 +10340,150 @@ def _analysis_suspected_paths(analysis: Dict[str, Any]) -> list[str]:
     return paths[:AI_FIX_MAX_FILES]
 
 
+
+def _feedback_media_payload(req: AppAIFeedbackSubmitRequest) -> Dict[str, Any]:
+    attachments: list[Dict[str, str]] = []
+
+    def add(url: Any, media_type: str = "", name: str = "") -> None:
+        clean_url = str(url or "").strip()
+        if not clean_url or not (clean_url.startswith("http://") or clean_url.startswith("https://")):
+            return
+        clean_type = str(media_type or "").strip().lower()
+        if clean_type not in {"image", "video"}:
+            low_url = clean_url.lower().split("?", 1)[0]
+            if low_url.endswith((".mp4", ".mov", ".m4v", ".webm", ".mkv")):
+                clean_type = "video"
+            elif low_url.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif")):
+                clean_type = "image"
+            else:
+                clean_type = "file"
+        item = {"url": clean_url, "type": clean_type, "name": str(name or "").strip()[:160]}
+        if not any(existing.get("url") == clean_url for existing in attachments):
+            attachments.append(item)
+
+    add(req.mediaUrl, req.mediaType, req.mediaName)
+    for raw in req.mediaAttachments or []:
+        if not isinstance(raw, dict):
+            continue
+        add(raw.get("url") or raw.get("mediaUrl"), raw.get("type") or raw.get("mediaType"), raw.get("name") or raw.get("mediaName"))
+    for url in req.imageUrls or []:
+        add(url, "image", "")
+    for url in req.videoUrls or []:
+        add(url, "video", "")
+    for url in req.mediaUrls or []:
+        add(url, "", "")
+
+    attachments = attachments[:4]
+    image_urls = [item["url"] for item in attachments if item.get("type") == "image"]
+    video_urls = [item["url"] for item in attachments if item.get("type") == "video"]
+    return {
+        "attachments": attachments,
+        "imageUrls": image_urls,
+        "videoUrls": video_urls,
+        "count": len(attachments),
+        "hasMedia": bool(attachments),
+    }
+
+
+def _visual_feedback_prompt() -> str:
+    return (
+        "أنت مساعد بصري لنظام صيانة تطبيق Flutter اسمه Respect App. "
+        "المستخدم أرفق صورة أو لقطات من فيديو لتوضيح مشكلة في التطبيق. "
+        "حلل ما يظهر في الشاشة: النصوص، الأزرار، الأخطاء، الصفحة، السلوك المتوقع، وأي مؤشر يساعد المبرمج. "
+        "لا تحكم على المحتوى كمنشور اجتماعي، بل ركز على تشخيص عطل واجهة/تطبيق. "
+        "أرجع JSON فقط بالمفاتيح: summary, observedScreen, visibleTexts, suspectedUiProblem, developerNotes, confidence."
+    )
+
+
+def _analyze_feedback_image_url(image_url: str, label: str) -> Dict[str, Any]:
+    if not QWEN_API_KEY:
+        return {"ok": False, "type": "image", "url": image_url, "error": "QWEN_API_KEY missing; vision skipped"}
+    content = _chat_completion_request(
+        model=QWEN_VISION_MODEL,
+        api_key=QWEN_API_KEY,
+        base_url=QWEN_BASE_URL,
+        messages=[
+            {"role": "system", "content": _visual_feedback_prompt()},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                    {"type": "text", "text": f"حلل هذا المرفق البصري الخاص ببلاغ مشكلة داخل التطبيق. الوصف: {label}. أرجع JSON فقط."},
+                ],
+            },
+        ],
+        temperature=0.0,
+        max_tokens=650,
+        timeout=45,
+        response_format=None,
+        log_label="AI_FEEDBACK_VISION_IMAGE",
+    )
+    parsed = _safe_json_from_ai(str(content))
+    return {"ok": True, "type": "image", "url": image_url, "model": QWEN_VISION_MODEL, "analysis": parsed or {"summary": str(content)[:1200]}}
+
+
+def _analyze_feedback_video_url(video_url: str, label: str) -> Dict[str, Any]:
+    if not QWEN_API_KEY:
+        return {"ok": False, "type": "video", "url": video_url, "error": "QWEN_API_KEY missing; vision skipped"}
+    frames = _extract_video_frame_data_urls(video_url, max_frames=4)
+    content_blocks: list[Dict[str, Any]] = []
+    for frame in frames[:4]:
+        data_url = str(frame.get("dataUrl") or "")
+        if data_url:
+            content_blocks.append({"type": "image_url", "image_url": {"url": data_url}})
+    content_blocks.append({"type": "text", "text": f"هذه لقطات من فيديو بلاغ مشكلة داخل التطبيق. الوصف: {label}. حلل ما يظهر في اللقطات واكتب JSON فقط."})
+    content = _chat_completion_request(
+        model=QWEN_VISION_MODEL,
+        api_key=QWEN_API_KEY,
+        base_url=QWEN_BASE_URL,
+        messages=[
+            {"role": "system", "content": _visual_feedback_prompt()},
+            {"role": "user", "content": content_blocks},
+        ],
+        temperature=0.0,
+        max_tokens=850,
+        timeout=75,
+        response_format=None,
+        log_label="AI_FEEDBACK_VISION_VIDEO",
+    )
+    parsed = _safe_json_from_ai(str(content))
+    return {
+        "ok": True,
+        "type": "video",
+        "url": video_url,
+        "model": QWEN_VISION_MODEL,
+        "framesAnalyzed": len(frames[:4]),
+        "analysis": parsed or {"summary": str(content)[:1400]},
+    }
+
+
+def _analyze_feedback_visual_evidence(req: AppAIFeedbackSubmitRequest) -> Dict[str, Any]:
+    media = _feedback_media_payload(req)
+    if not media.get("hasMedia"):
+        return {"ok": True, "hasMedia": False, "items": []}
+    items: list[Dict[str, Any]] = []
+    for item in media.get("attachments", [])[:3]:
+        url = str(item.get("url") or "")
+        media_type = str(item.get("type") or "")
+        label = str(item.get("name") or req.title or req.screen or "بلاغ مشكلة")
+        try:
+            if media_type == "image":
+                items.append(_analyze_feedback_image_url(url, label))
+            elif media_type == "video":
+                items.append(_analyze_feedback_video_url(url, label))
+            else:
+                items.append({"ok": False, "type": media_type or "file", "url": url, "error": "نوع المرفق غير مدعوم بصريًا"})
+        except Exception as e:
+            items.append({"ok": False, "type": media_type, "url": url, "error": _safe_response_text(str(e), 500)})
+    return {"ok": True, "hasMedia": True, "media": media, "items": items}
+
+
 def _analyze_feedback_with_qwen(req: AppAIFeedbackSubmitRequest, report_id: str) -> Dict[str, Any]:
     owner, repo = _repo_owner_name()
     branch = _github_default_branch(owner, repo)
     tree = _github_repo_tree(owner, repo, branch)
+    media_payload = _feedback_media_payload(req)
+    visual_evidence = _analyze_feedback_visual_evidence(req)
     candidate_paths = _select_candidate_files(tree, req.title, req.note, req.screen, AI_FIX_MAX_FILES)
     fetched: list[Dict[str, Any]] = []
     for path in candidate_paths:
@@ -6664,6 +10508,8 @@ def _analyze_feedback_with_qwen(req: AppAIFeedbackSubmitRequest, report_id: str)
                 f"REPORT_ID: {report_id}\n"
                 f"المستخدم: {req.username}\nالاسم: {req.name}\nالعنوان: {req.title}\nالصفحة: {req.screen}\nنسخة التطبيق: {req.appVersion}\n"
                 f"نص البلاغ:\n{req.note}\n\n"
+                f"مرفقات البلاغ من التطبيق:\n{json.dumps(media_payload, ensure_ascii=False)[:5000]}\n\n"
+                f"تحليل المرفقات البصرية إن وجد:\n{json.dumps(visual_evidence, ensure_ascii=False)[:7000]}\n\n"
                 f"قائمة ملفات المشروع المختصرة:\n{file_list[:18000]}\n\n"
                 f"محتوى ملفات مرشحة:\n{_file_context(fetched)}"
             ),
@@ -6672,11 +10518,245 @@ def _analyze_feedback_with_qwen(req: AppAIFeedbackSubmitRequest, report_id: str)
     analysis = _qwen_coder_json(messages, max_tokens=2600, temperature=0.05)
     analysis.setdefault("status", "analyzed")
     analysis.setdefault("candidateFiles", candidate_paths)
+    analysis.setdefault("media", media_payload)
+    analysis.setdefault("visualEvidence", visual_evidence)
     analysis.setdefault("repo", {"owner": owner, "name": repo, "branch": branch})
     return analysis
 
 
+
+def _safe_patch_path(path: str) -> str:
+    clean = str(path or "").strip().replace("\\", "/")
+    if clean.startswith("a/") or clean.startswith("b/"):
+        clean = clean[2:]
+    clean = clean.lstrip("/")
+    if not clean or clean == "/dev/null":
+        return ""
+    if clean.startswith("../") or "/../" in clean or clean.endswith("/.."):
+        return ""
+    if clean.startswith(".git/") or "/.git/" in clean:
+        return ""
+    return clean
+
+
+def _extract_unified_diff(value: Any) -> str:
+    if isinstance(value, dict):
+        for key in ("unifiedDiff", "diff", "patch", "candidatePatch"):
+            raw = value.get(key)
+            if isinstance(raw, str) and raw.strip():
+                return _extract_unified_diff(raw)
+        return ""
+    text = str(value or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:diff|patch|text)?\s*", "", text, flags=re.I).strip()
+        text = re.sub(r"\s*```$", "", text).strip()
+    pos = text.find("diff --git ")
+    if pos > 0:
+        text = text[pos:]
+    return text.strip()
+
+
+def _paths_from_unified_diff(diff_text: str) -> list[str]:
+    paths: list[str] = []
+    for line in str(diff_text or "").splitlines():
+        path = ""
+        match = re.match(r"^diff --git\s+a/(.*?)\s+b/(.*?)\s*$", line)
+        if match:
+            path = match.group(2)
+        elif line.startswith("+++ "):
+            raw = line[4:].strip().split("\t", 1)[0]
+            if raw.startswith("b/"):
+                path = raw[2:]
+            elif raw != "/dev/null":
+                path = raw
+        safe = _safe_patch_path(path)
+        if safe and safe not in paths:
+            paths.append(safe)
+    return paths[:AI_FIX_MAX_FILES]
+
+
+def _validate_patch_scope(diff_text: str, allowed_paths: set[str]) -> list[str]:
+    if not diff_text.strip():
+        raise HTTPException(status_code=500, detail="النموذج لم يرجع unified diff صالح")
+    if len(diff_text) > AI_FIX_MAX_PATCH_CHARS:
+        raise HTTPException(status_code=500, detail="التصحيح أكبر من الحد المسموح. قلل عدد الملفات أو حجم التعديل.")
+    if "diff --git" not in diff_text and "@@" not in diff_text:
+        raise HTTPException(status_code=500, detail="التصحيح ليس بصيغة unified diff")
+    paths = _paths_from_unified_diff(diff_text)
+    if not paths:
+        raise HTTPException(status_code=500, detail="لم نستطع معرفة الملفات المعدلة من diff")
+    blocked = [p for p in paths if p not in allowed_paths]
+    if blocked:
+        raise HTTPException(status_code=500, detail=f"التصحيح حاول تعديل ملفات خارج النطاق: {', '.join(blocked[:6])}")
+    return paths
+
+
+def _run_git_apply(workdir: str, patch_path: str, *, check_only: bool) -> Dict[str, Any]:
+    command = ["git", "apply"]
+    if check_only:
+        command.append("--check")
+    command.append(patch_path)
+    try:
+        proc = subprocess.run(command, cwd=workdir, capture_output=True, text=True, timeout=45)
+    except FileNotFoundError:
+        return {"ok": False, "error": "git غير موجود على السيرفر. ثبّت git أو استخدم Render runtime يحتوي git."}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "انتهى وقت فحص patch"}
+    output = (proc.stdout or "") + ("\n" if proc.stdout and proc.stderr else "") + (proc.stderr or "")
+    return {"ok": proc.returncode == 0, "returnCode": proc.returncode, "output": _safe_response_text(output, 2000)}
+
+
+def _apply_patch_to_fetched_files(diff_text: str, fetched: list[Dict[str, Any]]) -> Dict[str, Any]:
+    allowed_paths = {_safe_patch_path(str(f.get("path") or "")) for f in fetched if _safe_patch_path(str(f.get("path") or ""))}
+    changed_paths = _validate_patch_scope(diff_text, allowed_paths)
+
+    with tempfile.TemporaryDirectory(prefix="respect_ai_patch_") as tmp:
+        for f in fetched:
+            path = _safe_patch_path(str(f.get("path") or ""))
+            if not path:
+                continue
+            abs_path = os.path.join(tmp, path)
+            os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+            with open(abs_path, "w", encoding="utf-8", newline="") as out:
+                out.write(str(f.get("content") or ""))
+
+        patch_path = os.path.join(tmp, "respect_ai_fix.patch")
+        with open(patch_path, "w", encoding="utf-8", newline="") as out:
+            out.write(diff_text)
+            if not diff_text.endswith("\n"):
+                out.write("\n")
+
+        check = _run_git_apply(tmp, patch_path, check_only=True)
+        if not check.get("ok"):
+            return {"ok": False, "changedFiles": changed_paths, "error": check.get("output") or check.get("error") or "git apply --check failed"}
+
+        applied = _run_git_apply(tmp, patch_path, check_only=False)
+        if not applied.get("ok"):
+            return {"ok": False, "changedFiles": changed_paths, "error": applied.get("output") or applied.get("error") or "git apply failed"}
+
+        files: list[Dict[str, Any]] = []
+        for path in changed_paths:
+            abs_path = os.path.join(tmp, path)
+            if not os.path.exists(abs_path):
+                return {"ok": False, "changedFiles": changed_paths, "error": f"الملف الناتج غير موجود بعد تطبيق patch: {path}"}
+            with open(abs_path, "r", encoding="utf-8", errors="replace") as src:
+                content = src.read()
+            if len(content.strip()) < 5:
+                return {"ok": False, "changedFiles": changed_paths, "error": f"الملف الناتج فارغ أو غير صالح: {path}"}
+            files.append({"path": path, "content": content, "reason": "Respect AI unified diff patch"})
+
+    return {"ok": True, "changedFiles": changed_paths, "files": files, "error": ""}
+
+
+def _generate_patch_with_model_1(report: Dict[str, Any], analysis: Dict[str, Any], fetched: list[Dict[str, Any]], validation_error: str = "") -> Dict[str, Any]:
+    retry_note = ""
+    if validation_error:
+        retry_note = f"\n\nمحاولة سابقة فشلت عند git apply --check بسبب:\n{validation_error}\nأعد unifiedDiff مصحح فقط."
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "أنت Qwen3-Coder داخل نظام Respect App AI Fixer. مهمتك إنتاج تصحيح صغير بصيغة unified diff فقط. "
+                "لا ترجع محتوى الملف كاملًا أبدًا. لا تعدل ملفات غير موجودة في السياق. "
+                "أعد JSON فقط بالمفاتيح: status, summary, changedFiles, unifiedDiff, testPlan, risk. "
+                "status يجب أن يكون patch_ready. unifiedDiff يجب أن يبدأ غالبًا بـ diff --git وأن يحتوي @@. "
+                "غيّر أقل عدد ممكن من الأسطر حول مكان المشكلة فقط. حافظ على Dart syntax و Python syntax."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"البلاغ الأصلي:\nالعنوان: {report.get('title','')}\nالصفحة: {report.get('screen','')}\nالنص: {report.get('note','')}\n\n"
+                f"تحليل الملفات:\n{json.dumps(analysis, ensure_ascii=False)[:14000]}\n\n"
+                f"محتوى الملفات المرشحة للتعديل فقط:\n{_file_context(fetched, max_chars_per_file=max(AI_FIX_MAX_FILE_CHARS, 24000))}"
+                f"{retry_note}"
+            ),
+        },
+    ]
+    result = _ai_fixer_json(messages, model=AI_FIX_MODEL_1, max_tokens=14000, temperature=0.03, log_label="AI_FIX_MODEL_1_PATCH")
+    result["unifiedDiff"] = _extract_unified_diff(result)
+    result.setdefault("status", "patch_ready")
+    result["model"] = str(result.get("_modelUsed") or result.get("model") or AI_FIX_MODEL_1)
+    return result
+
+
+def _review_patch_with_model_2(report: Dict[str, Any], analysis: Dict[str, Any], patch_result: Dict[str, Any], validation: Dict[str, Any]) -> Dict[str, Any]:
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "أنت DeepSeek Reviewer. راجع patch لمشروع Flutter/FastAPI. لا تعدّل الكود. "
+                "افحص syntax والمنطق والتأثير الجانبي وهل patch محدود حول المشكلة. "
+                "أعد JSON فقط: {approved:boolean, decision, summary, syntaxIssues:list, logicIssues:list, securityIssues:list, suggestions:list, status}. "
+                "approved لا يكون true إلا إذا كان patch آمنًا وصحيحًا ولا يحتوي أخطاء syntax واضحة."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"البلاغ:\n{report.get('title','')}\n{report.get('note','')}\n\n"
+                f"التحليل:\n{json.dumps(analysis, ensure_ascii=False)[:9000]}\n\n"
+                f"نتيجة فحص git apply:\n{json.dumps(validation, ensure_ascii=False)[:3000]}\n\n"
+                f"PATCH:\n{str(patch_result.get('unifiedDiff') or '')[:AI_FIX_MAX_PATCH_CHARS]}"
+            ),
+        },
+    ]
+    review = _ai_fixer_json(messages, model=AI_FIX_MODEL_2, max_tokens=3200, temperature=0.02, log_label="AI_FIX_MODEL_2_REVIEW")
+    approved = bool(review.get("approved")) and str(review.get("decision", "approved")).lower() not in {"reject", "rejected", "needs_fix", "failed"}
+    review["approved"] = approved
+    review.setdefault("status", "reviewed")
+    review["model"] = str(review.get("_modelUsed") or review.get("model") or AI_FIX_MODEL_2)
+    return review
+
+
+def _review_reviewer_with_model_3(report: Dict[str, Any], analysis: Dict[str, Any], patch_result: Dict[str, Any], validation: Dict[str, Any], review_2: Dict[str, Any]) -> Dict[str, Any]:
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "أنت Kimi Final Reviewer. راجع patch وراجع قرار DeepSeek. "
+                "أعطِ قرارًا نهائيًا قبل وصوله للأدمن. لا تعدل الكود ولا ترجع ملف كامل. "
+                "أعد JSON فقط: {approved:boolean, finalDecision, summary, reviewer2Correct:boolean, remainingRisks:list, adminNote, status}. "
+                "approved true يعني يمكن عرض زر موافقة الأدمن. approved false يعني يحتاج إصلاح AI قبل الأدمن."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"البلاغ:\n{report.get('title','')}\n{report.get('note','')}\n\n"
+                f"التحليل:\n{json.dumps(analysis, ensure_ascii=False)[:8000]}\n\n"
+                f"فحص patch المحلي:\n{json.dumps(validation, ensure_ascii=False)[:3000]}\n\n"
+                f"مراجعة DeepSeek:\n{json.dumps(review_2, ensure_ascii=False)[:6000]}\n\n"
+                f"PATCH:\n{str(patch_result.get('unifiedDiff') or '')[:AI_FIX_MAX_PATCH_CHARS]}"
+            ),
+        },
+    ]
+    review = _ai_fixer_json(messages, model=AI_FIX_MODEL_3, max_tokens=3200, temperature=0.02, log_label="AI_FIX_MODEL_3_FINAL_REVIEW")
+    approved = bool(review.get("approved")) and str(review.get("finalDecision", "approved")).lower() not in {"reject", "rejected", "needs_fix", "failed"}
+    review["approved"] = approved
+    review.setdefault("status", "final_reviewed")
+    review["model"] = str(review.get("_modelUsed") or review.get("model") or AI_FIX_MODEL_3)
+    return review
+
+
+def _build_report_payload_for_fix(report: Dict[str, Any], analysis: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": str(report.get("id") or report.get("reportId") or ""),
+        "title": str(report.get("title") or "بلاغ مشكلة في Respect App"),
+        "screen": str(report.get("screen") or ""),
+        "note": str(report.get("note") or ""),
+        "username": str(report.get("username") or ""),
+        "analysis": analysis,
+    }
+
 def _generate_fix_with_qwen(report: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    الاسم بقي للتوافق، لكن التنفيذ صار Triple AI Patch Review:
+    Qwen3-Coder Free -> DeepSeek Free -> Kimi Free -> موافقة الأدمن.
+    النموذج الأول يرجع unified diff فقط، ثم السيرفر يفحصه محليًا بـ git apply --check،
+    وبعد موافقة النموذجين الثاني والثالث فقط يظهر للأدمن.
+    """
     owner, repo = _repo_owner_name()
     branch = _github_default_branch(owner, repo)
     analysis = report.get("analysis") if isinstance(report.get("analysis"), dict) else {}
@@ -6685,51 +10765,59 @@ def _generate_fix_with_qwen(report: Dict[str, Any]) -> Dict[str, Any]:
         paths = list(analysis.get("candidateFiles") or [])[:AI_FIX_MAX_FILES] if isinstance(analysis.get("candidateFiles"), list) else []
     if not paths:
         raise HTTPException(status_code=400, detail="لا توجد ملفات محددة للتصحيح في التحليل")
+
     fetched: list[Dict[str, Any]] = []
     for path in paths[:AI_FIX_MAX_FILES]:
         fetched.append(_github_file_content(owner, repo, path, branch))
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "أنت Qwen3-Coder. مطلوب منك تصحيح بلاغ في مشروع Flutter/FastAPI/Supabase. "
-                "أعد JSON فقط. لا تستخدم markdown. يجب أن يكون الشكل: "
-                "{summary, files:[{path, content, reason}], testPlan}. "
-                "content يجب أن يكون المحتوى الكامل الجديد للملف بعد التصحيح، وليس diff. "
-                "عدّل أقل عدد ممكن من الملفات ولا تغير ميزات غير مرتبطة بالبلاغ."
-            ),
-        },
-        {
-            "role": "user",
-            "content": (
-                f"البلاغ الأصلي:\nالعنوان: {report.get('title','')}\nالصفحة: {report.get('screen','')}\nالنص: {report.get('note','')}\n\n"
-                f"تحليل سابق:\n{json.dumps(analysis, ensure_ascii=False)[:12000]}\n\n"
-                f"محتوى الملفات المطلوب تصحيحها:\n{_file_context(fetched, max_chars_per_file=max(AI_FIX_MAX_FILE_CHARS, 22000))}"
-            ),
-        },
-    ]
-    fix = _qwen_coder_json(messages, max_tokens=12000, temperature=0.05)
-    files = fix.get("files")
-    if not isinstance(files, list) or not files:
-        raise HTTPException(status_code=500, detail="Qwen لم يرجع ملفات مصححة")
-    safe_files = []
-    allowed_paths = {str(f.get("path")) for f in fetched}
-    for item in files:
-        if not isinstance(item, dict):
-            continue
-        path = str(item.get("path") or "").strip()
-        content = item.get("content")
-        if path not in allowed_paths:
-            continue
-        if not isinstance(content, str) or len(content.strip()) < 20:
-            continue
-        safe_files.append({"path": path, "content": content, "reason": str(item.get("reason") or "")})
-    if not safe_files:
-        raise HTTPException(status_code=500, detail="Qwen رجع نتيجة بدون ملفات صالحة للتحديث")
-    fix["files"] = safe_files
-    fix["repo"] = {"owner": owner, "name": repo, "branch": branch}
-    return fix
 
+    report_payload = _build_report_payload_for_fix(report, analysis)
+
+    patch_result = _generate_patch_with_model_1(report_payload, analysis, fetched)
+    diff_text = _extract_unified_diff(patch_result)
+    validation = _apply_patch_to_fetched_files(diff_text, fetched)
+
+    # محاولة إصلاح واحدة فقط لو فشل patch محليًا. هذا يحافظ على السيرفر خفيف ويمنع loop طويل.
+    if not validation.get("ok"):
+        patch_result = _generate_patch_with_model_1(report_payload, analysis, fetched, validation_error=str(validation.get("error") or ""))
+        diff_text = _extract_unified_diff(patch_result)
+        validation = _apply_patch_to_fetched_files(diff_text, fetched)
+
+    if not validation.get("ok"):
+        return {
+            "status": "patch_failed_validation",
+            "summary": patch_result.get("summary") or "فشل فحص التصحيح المحلي",
+            "testPlan": patch_result.get("testPlan") or "",
+            "patch": diff_text,
+            "changedFiles": validation.get("changedFiles") or _paths_from_unified_diff(diff_text),
+            "validation": validation,
+            "files": [],
+            "review2": {"approved": False, "summary": "لم يتم إرسال patch للمراجع الثاني لأنه فشل محليًا."},
+            "review3": {"approved": False, "summary": "لم يتم إرسال patch للمراجع النهائي لأنه فشل محليًا."},
+            "models": {"patcher": str(patch_result.get("model") or AI_FIX_MODEL_1), "reviewer": AI_FIX_MODEL_2, "finalReviewer": AI_FIX_MODEL_3, "chain": AI_FIX_MODEL_CHAIN},
+            "repo": {"owner": owner, "name": repo, "branch": branch},
+        }
+
+    review_2 = _review_patch_with_model_2(report_payload, analysis, patch_result, validation)
+    review_3 = _review_reviewer_with_model_3(report_payload, analysis, patch_result, validation, review_2)
+
+    final_approved = bool(validation.get("ok")) and bool(review_2.get("approved")) and bool(review_3.get("approved"))
+    status = "awaiting_admin_approval" if final_approved else "needs_ai_revision"
+    summary = str(patch_result.get("summary") or review_3.get("summary") or review_2.get("summary") or "تم تجهيز التصحيح")
+
+    return {
+        "status": status,
+        "summary": summary,
+        "testPlan": patch_result.get("testPlan") or "شغّل flutter analyze ثم جرّب الصفحة المرتبطة بالبلاغ.",
+        "patch": diff_text,
+        "unifiedDiff": diff_text,
+        "changedFiles": validation.get("changedFiles") or _paths_from_unified_diff(diff_text),
+        "files": validation.get("files") or [],
+        "validation": validation,
+        "review2": review_2,
+        "review3": review_3,
+        "models": {"patcher": str(patch_result.get("model") or AI_FIX_MODEL_1), "reviewer": str(review_2.get("model") or AI_FIX_MODEL_2), "finalReviewer": str(review_3.get("model") or AI_FIX_MODEL_3), "chain": AI_FIX_MODEL_CHAIN},
+        "repo": {"owner": owner, "name": repo, "branch": branch},
+    }
 
 def _create_github_pr_for_fix(report_id: str, title: str, fix: Dict[str, Any], approved_by: str) -> Dict[str, Any]:
     owner, repo = _repo_owner_name()
@@ -6768,7 +10856,10 @@ def _create_github_pr_for_fix(report_id: str, title: str, fix: Dict[str, Any], a
     pr_body = (
         f"تم إنشاء هذا التصحيح بواسطة Respect AI Fixer بعد موافقة: {approved_by}\n\n"
         f"Report ID: {report_id}\n\n"
-        f"ملخص Qwen3-Coder:\n{str(fix.get('summary') or '')}\n\n"
+        f"ملخص التصحيح:\n{str(fix.get('summary') or '')}\n\n"
+        f"النماذج المستخدمة:\n{json.dumps(fix.get('models') or {}, ensure_ascii=False)}\n\n"
+        f"مراجعة النموذج الثاني:\n{json.dumps(fix.get('review2') or {}, ensure_ascii=False)[:4000]}\n\n"
+        f"مراجعة النموذج النهائي:\n{json.dumps(fix.get('review3') or {}, ensure_ascii=False)[:4000]}\n\n"
         f"خطة الاختبار:\n{str(fix.get('testPlan') or '')}"
     )
     pr = _github_request(
@@ -7246,9 +11337,12 @@ def respect_ai_cyber_admin_unhide_post(req: CyberAdminPostActionRequest, x_app_s
 @app.post("/respect-ai/app-feedback/submit")
 def respect_ai_app_feedback_submit(req: AppAIFeedbackSubmitRequest, x_app_secret: Optional[str] = Header(default=None)):
     _check_secret(x_app_secret)
-    report_id = f"aifix_{int(time.time() * 1000000)}_{secrets.token_hex(4)}"
+    report_id = f"feedback_{int(time.time() * 1000000)}_{secrets.token_hex(4)}"
     now = datetime.now(timezone.utc).isoformat()
-    base_row = {
+    media_payload = _feedback_media_payload(req)
+    device_info = dict(req.deviceInfo or {})
+    device_info["feedbackMedia"] = media_payload
+    row = {
         "id": report_id,
         "username": _display_username(req.username),
         "name": (req.name or "")[:120],
@@ -7256,32 +11350,96 @@ def respect_ai_app_feedback_submit(req: AppAIFeedbackSubmitRequest, x_app_secret
         "note": (req.note or "")[:8000],
         "screen": (req.screen or "")[:160],
         "app_version": (req.appVersion or "")[:80],
-        "device_info": req.deviceInfo or {},
-        "status": "analyzing",
+        "device_info": device_info,
+        "status": "pending",
+        "analysis": {},
+        "result": {
+            "summary": "تم حفظ البلاغ بانتظار مراجعة الإدارة اليدوية.",
+            "source": "manual_admin_review",
+            "aiUsed": False,
+        },
         "created_at": now,
         "updated_at": now,
     }
-    db_insert = _feedback_supabase_insert(base_row)
-    try:
-        analysis = _analyze_feedback_with_qwen(req, report_id)
-        status = "analyzed"
-        patch = _feedback_supabase_patch(report_id, {"status": status, "analysis": analysis, "updated_at": datetime.now(timezone.utc).isoformat()})
-        return {
-            "ok": True,
-            "id": report_id,
-            "reportId": report_id,
-            "status": status,
-            "analysis": analysis,
-            "databaseSaved": bool(db_insert.get("ok")),
-            "databasePatch": patch,
-            "model": QWEN_CODER_MODEL,
-        }
-    except Exception as e:
-        detail = str(getattr(e, "detail", e))
-        _feedback_supabase_patch(report_id, {"status": "failed", "result": {"error": detail}, "updated_at": datetime.now(timezone.utc).isoformat()})
-        if isinstance(e, HTTPException):
-            raise e
-        raise HTTPException(status_code=500, detail=detail)
+    db_insert = _feedback_supabase_insert(row)
+    saved_row = row
+    rows = db_insert.get("rows") if isinstance(db_insert, dict) else None
+    if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+        saved_row = dict(rows[0])
+    return {
+        "ok": True,
+        "id": report_id,
+        "reportId": report_id,
+        "status": "pending",
+        "item": saved_row,
+        "summary": "تم إرسال الملاحظة للإدارة بدون ذكاء اصطناعي.",
+        "databaseSaved": bool(db_insert.get("ok")) if isinstance(db_insert, dict) else False,
+        "databaseInsert": db_insert,
+        "aiUsed": False,
+    }
+
+
+@app.post("/respect-ai/app-feedback/list")
+def respect_ai_app_feedback_list(req: AppFeedbackListRequest, x_app_secret: Optional[str] = Header(default=None)):
+    _check_secret(x_app_secret)
+    admin = _display_username(req.adminUsername)
+    if admin and not _ai_fix_is_admin(admin):
+        raise HTTPException(status_code=403, detail="هذا الإجراء مسموح للأدمن فقط")
+    result = _feedback_supabase_list(status=req.status, limit=req.limit)
+    return result
+
+
+@app.post("/respect-ai/app-feedback/delete")
+def respect_ai_app_feedback_delete(req: AppFeedbackActionRequest, x_app_secret: Optional[str] = Header(default=None)):
+    _check_secret(x_app_secret)
+    admin = _display_username(req.adminUsername)
+    if admin and not _ai_fix_is_admin(admin):
+        raise HTTPException(status_code=403, detail="هذا الإجراء مسموح للأدمن فقط")
+    report_id = str(req.reportId or "").strip()
+    report = _feedback_supabase_get(report_id)
+    result = _feedback_supabase_delete(report_id)
+    return {"ok": bool(result.get("ok")), "id": report_id, "reportId": report_id, "deleted": bool(result.get("ok")), "item": report, "databaseDelete": result}
+
+
+@app.post("/respect-ai/app-feedback/resolve")
+def respect_ai_app_feedback_resolve(req: AppFeedbackActionRequest, x_app_secret: Optional[str] = Header(default=None)):
+    _check_secret(x_app_secret)
+    admin = _display_username(req.adminUsername)
+    if admin and not _ai_fix_is_admin(admin):
+        raise HTTPException(status_code=403, detail="هذا الإجراء مسموح للأدمن فقط")
+    report_id = str(req.reportId or "").strip()
+    report = _feedback_supabase_get(report_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="البلاغ غير موجود")
+    now = datetime.now(timezone.utc).isoformat()
+    result_payload = report.get("result") if isinstance(report.get("result"), dict) else {}
+    result_payload = {
+        **result_payload,
+        "resolved": True,
+        "resolvedBy": admin,
+        "resolvedAt": now,
+        "adminNote": (req.adminNote or "")[:1000],
+        "aiUsed": False,
+    }
+    patch = _feedback_supabase_patch(report_id, {
+        "status": "resolved",
+        "approved_by": admin,
+        "approved_at": now,
+        "result": result_payload,
+        "updated_at": now,
+    })
+    updated = _feedback_supabase_get(report_id) or {**report, "status": "resolved", "updated_at": now, "result": result_payload}
+    push_result = _notify_app_feedback_resolved(updated, admin, req.adminNote or "")
+    return {
+        "ok": True,
+        "id": report_id,
+        "reportId": report_id,
+        "status": "resolved",
+        "item": updated,
+        "databasePatch": patch,
+        "push": push_result,
+        "aiUsed": False,
+    }
 
 
 @app.post("/respect-ai/app-feedback/approve")
@@ -7296,10 +11454,19 @@ def respect_ai_app_feedback_approve(req: AppAIFeedbackApproveRequest, x_app_secr
         raise HTTPException(status_code=404, detail="البلاغ غير موجود في جدول app_ai_feedback. تأكد من تشغيل SQL migration.")
     if not isinstance(report.get("analysis"), dict):
         raise HTTPException(status_code=400, detail="البلاغ لم يكتمل تحليله بعد")
+
+    stored_result = report.get("result") if isinstance(report.get("result"), dict) else {}
+    fix = stored_result.get("fix") if isinstance(stored_result.get("fix"), dict) else None
+    if not fix or not isinstance(fix.get("files"), list) or not fix.get("files"):
+        # احتياطي قديم: لو البلاغ قديم قبل نظام triple review، جهز التصحيح الآن.
+        fix = _generate_fix_with_qwen(report)
+
+    if fix.get("status") not in {"awaiting_admin_approval", "approved_by_ai"}:
+        raise HTTPException(status_code=400, detail="التصحيح لم يحصل على موافقة النماذج الثلاثة بعد، لذلك لا يظهر للأدمن للاعتماد.")
+
     now = datetime.now(timezone.utc).isoformat()
     _feedback_supabase_patch(report_id, {"status": "approved", "approved_by": approved_by, "approved_at": now, "updated_at": now})
     try:
-        fix = _generate_fix_with_qwen(report)
         github_result: Dict[str, Any] = {"pullRequestUrl": "", "updatedFiles": []}
         if GITHUB_TOKEN:
             github_result = _create_github_pr_for_fix(report_id, str(report.get("title") or "بلاغ مشكلة"), fix, approved_by)
@@ -7311,7 +11478,7 @@ def respect_ai_app_feedback_approve(req: AppAIFeedbackApproveRequest, x_app_secr
                 "updatedFiles": [{"path": f.get("path"), "reason": f.get("reason", "")} for f in fix.get("files", [])],
                 "warning": "GITHUB_TOKEN غير موجود؛ تم توليد الملفات المصححة فقط بدون إنشاء Pull Request.",
             }
-        result = {"fix": fix, **github_result, "model": QWEN_CODER_MODEL}
+        result = {"fix": fix, **github_result, "models": fix.get("models") or {}, "model": AI_FIX_MODEL_1}
         patch = _feedback_supabase_patch(report_id, {"status": status, "result": result, "updated_at": datetime.now(timezone.utc).isoformat()})
         return {
             "ok": True,
@@ -7321,10 +11488,14 @@ def respect_ai_app_feedback_approve(req: AppAIFeedbackApproveRequest, x_app_secr
             "summary": fix.get("summary") or "تم تجهيز التصحيح",
             "testPlan": fix.get("testPlan") or "",
             "updatedFiles": github_result.get("updatedFiles", []),
+            "changedFiles": fix.get("changedFiles", []),
             "pullRequestUrl": github_result.get("pullRequestUrl", ""),
             "warning": github_result.get("warning", ""),
+            "review2": fix.get("review2") or {},
+            "review3": fix.get("review3") or {},
             "databasePatch": patch,
-            "model": QWEN_CODER_MODEL,
+            "models": fix.get("models") or {},
+            "model": AI_FIX_MODEL_1,
         }
     except Exception as e:
         detail = str(getattr(e, "detail", e))
@@ -7351,22 +11522,636 @@ def respect_ai_cyber(req: RespectAICyberRequest, x_app_secret: Optional[str] = H
         model=HF_CYBER_MODEL,
     )
 
+
+_ARABIC_CHAT_KEYBOARD_MAP = str.maketrans({
+    "`": "ذ", "q": "ض", "w": "ص", "e": "ث", "r": "ق", "t": "ف", "y": "غ", "u": "ع", "i": "ه", "o": "خ", "p": "ح", "[": "ج", "]": "د",
+    "a": "ش", "s": "س", "d": "ي", "f": "ب", "g": "ل", "h": "ا", "j": "ت", "k": "ن", "l": "م", ";": "ك", "'": "ط",
+    "z": "ئ", "x": "ء", "c": "ؤ", "v": "ر", "b": "لا", "n": "ى", "m": "ة", ",": "و", ".": "ز", "/": "ظ",
+    "~": "ّ", "Q": "َ", "W": "ً", "E": "ُ", "R": "ٌ", "T": "لإ", "Y": "إ", "U": "‘", "I": "÷", "O": "×", "P": "؛", "{": "<", "}": ">",
+    "A": "ِ", "S": "ٍ", "D": "]", "F": "[", "G": "لأ", "H": "أ", "J": "ـ", "K": "،", "L": "/", ":": ":", '"': '"',
+    "Z": "~", "X": "ْ", "C": "}", "V": "{", "B": "لآ", "N": "آ", "M": "’", "<": ",", ">": ".", "?": "؟",
+})
+
+
+def _arabic_chars_count(value: str) -> int:
+    return len(re.findall(r"[\u0600-\u06FF]", value or ""))
+
+
+def _looks_like_arabic_keyboard_mistake(value: str) -> bool:
+    raw = value or ""
+    if _arabic_chars_count(raw) > 0:
+        return False
+    if len(raw.strip()) < 3:
+        return False
+    letters = re.findall(r"[A-Za-z;,\.\[\]/'`]+", raw)
+    if not letters:
+        return False
+    latin_chars = sum(len(x) for x in letters)
+    return latin_chars >= 3 and latin_chars / max(1, len(raw.replace(" ", ""))) >= 0.45
+
+
+def _arabic_keyboard_layout_hint(value: str) -> str:
+    raw = value or ""
+    if not _looks_like_arabic_keyboard_mistake(raw):
+        return ""
+    decoded = raw.translate(_ARABIC_CHAT_KEYBOARD_MAP).strip()
+    if _arabic_chars_count(decoded) < 2:
+        return ""
+    return decoded
+
+
+def _normalize_chat_phrase(value: str) -> str:
+    v = (value or "").strip().lower()
+    v = v.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا").replace("ى", "ي").replace("ة", "ه")
+    v = re.sub(r"[\u064B-\u065F\u0670]", "", v)
+    v = re.sub(r"[^\w\u0600-\u06FF]+", " ", v, flags=re.UNICODE)
+    v = re.sub(r"\s+", " ", v).strip()
+    return v
+
+
+
+def normalize_arabic_dialect(value: str) -> str:
+    clean = (value or "").strip().lower().replace("_", "-")
+    if not clean:
+        return "auto"
+    aliases = {
+        "msa": "fusha",
+        "formal": "fusha",
+        "standard": "fusha",
+        "sa": "saudi",
+        "ksa": "saudi",
+        "saudi-arabia": "saudi",
+        "gulf-saudi": "saudi",
+        "riyadh": "najdi",
+        "qassim": "najdi",
+        "jeddah": "hijazi",
+        "makkah": "hijazi",
+        "mecca": "hijazi",
+        "madinah": "hijazi",
+        "medina": "hijazi",
+        "levant": "levantine",
+        "levantine-arabic": "levantine",
+        "shami": "levantine",
+        "lebanon": "lebanese",
+        "syria": "syrian",
+        "palestine": "palestinian",
+        "jordan": "jordanian",
+        "egypt": "egyptian",
+        "iraq": "iraqi",
+        "yemen": "yemeni",
+        "sudan": "sudanese",
+        "morocco": "moroccan",
+        "algeria": "algerian",
+        "tunisia": "tunisian",
+        "libya": "libyan",
+    }
+    clean = aliases.get(clean, clean)
+    supported = {
+        "auto", "fusha", "saudi", "najdi", "hijazi", "gulf", "kuwaiti", "emirati",
+        "qatari", "bahraini", "omani", "levantine", "lebanese", "syrian", "palestinian",
+        "jordanian", "egyptian", "iraqi", "yemeni", "sudanese", "moroccan", "algerian",
+        "tunisian", "libyan",
+    }
+    return clean if clean in supported else "auto"
+
+
+def _arabic_dialect_display_name(code: str) -> str:
+    names = {
+        "auto": "natural Arabic",
+        "fusha": "simple Modern Standard Arabic",
+        "saudi": "Saudi Arabic",
+        "najdi": "Najdi Saudi Arabic",
+        "hijazi": "Hijazi Saudi Arabic",
+        "gulf": "Gulf Arabic",
+        "kuwaiti": "Kuwaiti Arabic",
+        "emirati": "Emirati Arabic",
+        "qatari": "Qatari Arabic",
+        "bahraini": "Bahraini Arabic",
+        "omani": "Omani Arabic",
+        "levantine": "Levantine Arabic",
+        "lebanese": "Lebanese Arabic",
+        "syrian": "Syrian Arabic",
+        "palestinian": "Palestinian Arabic",
+        "jordanian": "Jordanian Arabic",
+        "egyptian": "Egyptian Arabic",
+        "iraqi": "Iraqi Arabic",
+        "yemeni": "Yemeni Arabic",
+        "sudanese": "Sudanese Arabic",
+        "moroccan": "Moroccan Darija",
+        "algerian": "Algerian Darija",
+        "tunisian": "Tunisian Derja",
+        "libyan": "Libyan Arabic",
+    }
+    return names.get(normalize_arabic_dialect(code), "natural Arabic")
+
+
+def _arabic_dialect_instruction(target_code: str, target_dialect: str) -> str:
+    if normalize_language(target_code) != "ar":
+        return ""
+    dialect = normalize_arabic_dialect(target_dialect)
+    if dialect == "auto":
+        return (
+            "Output Arabic naturally for chat. Use the most natural Arabic equivalent from context "
+            "without forcing a specific country dialect."
+        )
+    dialect_name = _arabic_dialect_display_name(dialect)
+    if dialect == "fusha":
+        return (
+            "Output in simple Modern Standard Arabic. Keep it clear, conversational, and easy to read. "
+            "Avoid overly formal textbook phrasing."
+        )
+    return (
+        f"Output in {dialect_name}. Make it sound like a real native chat message from that dialect. "
+        "Use natural local wording, particles, and phrasing. Do not overdo stereotypes or force rare words. "
+        "If the source is already Arabic but not in the requested dialect, rewrite it into the requested dialect "
+        "while preserving the exact meaning, tone, intensity, emojis, mentions, hashtags, URLs, numbers, and line breaks."
+    )
+
+
+def _arabic_dialect_examples(target_code: str, target_dialect: str) -> str:
+    if normalize_language(target_code) != "ar":
+        return ""
+    dialect = normalize_arabic_dialect(target_dialect)
+    examples = {
+        "saudi": [
+            ('What are you doing?', 'وش تسوي؟'),
+            ('Where are you?', 'وينك؟'),
+            ('I am coming now', 'جايك الحين'),
+            ('Stop making stuff up', 'لا تهبد'),
+        ],
+        "najdi": [
+            ('What are you doing?', 'وش تسوي؟'),
+            ('Where are you?', 'وينك؟'),
+            ('I am coming now', 'جايك الحين'),
+            ('Do not exaggerate', 'لا تبالغ'),
+        ],
+        "hijazi": [
+            ('What are you doing?', 'إيش تسوي؟'),
+            ('Where are you?', 'فينك؟'),
+            ('I am coming now', 'جايك دحين'),
+            ('What do you want?', 'إيش تبغى؟'),
+        ],
+        "gulf": [
+            ('What are you doing?', 'شنو تسوي؟'),
+            ('Where are you?', 'وينك؟'),
+            ('I am coming now', 'يايك الحين'),
+            ('What do you want?', 'شنو تبي؟'),
+        ],
+        "levantine": [
+            ('What are you doing?', 'شو عم تعمل؟'),
+            ('Where are you?', 'وينك؟'),
+            ('I am coming now', 'جايي هلق'),
+            ('What do you want?', 'شو بدك؟'),
+        ],
+        "lebanese": [
+            ('What are you doing?', 'شو عم تعمل؟'),
+            ('Where are you?', 'وينك؟'),
+            ('I am coming now', 'جايي هلّق'),
+            ('What do you want?', 'شو بدك؟'),
+        ],
+        "syrian": [
+            ('What are you doing?', 'شو عم تعمل؟'),
+            ('Where are you?', 'وينك؟'),
+            ('I am coming now', 'جاي هلأ'),
+            ('What do you want?', 'شو بدك؟'),
+        ],
+        "egyptian": [
+            ('What are you doing?', 'بتعمل إيه؟'),
+            ('Where are you?', 'إنت فين؟'),
+            ('I am coming now', 'جاي حالًا'),
+            ('What do you want?', 'عايز إيه؟'),
+        ],
+        "iraqi": [
+            ('What are you doing?', 'شنو دا تسوي؟'),
+            ('Where are you?', 'وينك؟'),
+            ('I am coming now', 'جاي هسه'),
+            ('What do you want?', 'شنو تريد؟'),
+        ],
+        "fusha": [
+            ('What are you doing?', 'ماذا تفعل؟'),
+            ('Where are you?', 'أين أنت؟'),
+            ('I am coming now', 'أنا قادم الآن'),
+            ('What do you want?', 'ماذا تريد؟'),
+        ],
+    }
+    selected = examples.get(dialect)
+    if not selected:
+        return ""
+    rows = ["Dialect examples. Follow the style, not the exact words:"]
+    for src, dst in selected:
+        rows.append(f'- "{src}" => "{dst}"')
+    return "\n".join(rows)
+
+
+def _quick_chat_translation(clean: str, target: str, keyboard_hint: str = "", target_dialect: str = "auto") -> str:
+    """
+    قاموس صغير فقط للحالات القصيرة والواضحة التي يترجمها النموذج حرفيًا غالبًا.
+    لا نستخدمه للجمل الطويلة حتى لا يضيع السياق.
+    """
+    candidate = keyboard_hint.strip() if keyboard_hint.strip() else clean
+    normalized = _normalize_chat_phrase(candidate)
+    if not normalized or len(normalized) > 32:
+        return ""
+
+    if target == "en":
+        ar_to_en = {
+            "كل خرا": "Eat shit",
+            "كل زق": "Eat shit",
+            "كل تبن": "Eat shit",
+            "اخرس": "Shut up",
+            "اسكت": "Shut up",
+            "انقلع": "Get lost",
+            "روح انقلع": "Get lost",
+            "يا كلب": "You dog",
+            "يا حمار": "You idiot",
+            "غبي": "Idiot",
+            "انت غبي": "You're an idiot",
+            "وينك": "Where are you?",
+            "انت وينك": "Where are you?",
+            "شو بدك": "What do you want?",
+            "وش تبي": "What do you want?",
+            "شلونك": "How are you?",
+            "كيفك": "How are you?",
+            "تمام": "All good",
+        }
+        return ar_to_en.get(normalized, "")
+
+    if target == "ar":
+        dialect = normalize_arabic_dialect(target_dialect)
+        phrase = normalized.replace(" ?", "").replace("?", "")
+        if dialect in {"saudi", "najdi", "hijazi", "gulf", "kuwaiti", "emirati", "qatari", "bahraini", "omani"}:
+            en_to_ar = {
+                "eat shit": "كل خرا",
+                "shut up": "اسكت",
+                "get lost": "انقلع",
+                "where are you": "وينك؟",
+                "what do you want": "وش تبي؟",
+                "how are you": "وشلونك؟",
+            }
+            return en_to_ar.get(phrase, "")
+        if dialect in {"egyptian"}:
+            en_to_ar = {
+                "eat shit": "كل خرا",
+                "shut up": "اخرس",
+                "get lost": "امشي من هنا",
+                "where are you": "إنت فين؟",
+                "what do you want": "عايز إيه؟",
+                "how are you": "عامل إيه؟",
+            }
+            return en_to_ar.get(phrase, "")
+        if dialect in {"fusha"}:
+            en_to_ar = {
+                "eat shit": "كل القذارة",
+                "shut up": "اصمت",
+                "get lost": "ابتعد",
+                "where are you": "أين أنت؟",
+                "what do you want": "ماذا تريد؟",
+                "how are you": "كيف حالك؟",
+            }
+            return en_to_ar.get(phrase, "")
+        en_to_ar = {
+            "eat shit": "كل خرا",
+            "shut up": "اخرس",
+            "get lost": "انقلع",
+            "where are you": "وينك؟",
+            "what do you want": "شو بدك؟",
+            "how are you": "كيفك؟",
+        }
+        return en_to_ar.get(phrase, "")
+
+    return ""
+
+
+def _is_qwen_mt_model(model: str) -> bool:
+    """
+    Qwen-MT models are specialized translation models.
+    They may reject OpenAI structured JSON response_format, so chat translation
+    should call them in plain text mode first.
+    """
+    clean = (model or "").strip().lower().replace("_", "-")
+    return clean.startswith("qwen-mt") or "qwen-mt" in clean or clean.startswith("qwenmt") or "qwenmt" in clean
+
+
+def _chat_translation_system_prompt(
+    target_name: str,
+    target_code: str,
+    target_dialect: str = "auto",
+    *,
+    json_mode: bool = True,
+) -> str:
+    dialect = normalize_arabic_dialect(target_dialect) if normalize_language(target_code) == "ar" else "auto"
+    dialect_instruction = _arabic_dialect_instruction(target_code, dialect)
+    dialect_line = f"Arabic dialect target: {dialect_instruction}" if dialect_instruction else ""
+    dialect_examples = _arabic_dialect_examples(target_code, dialect)
+    dialect_specific = normalize_language(target_code) == "ar" and dialect not in {"auto", "fusha"}
+
+    already_target_rule = (
+        "- If the message is already Arabic but the requested dialect is specific, rewrite it naturally into that dialect. Do not return it unchanged unless it is already natural in the requested dialect."
+        if dialect_specific
+        else "- If the message is already fully in the target language and no specific rewrite is requested, return it unchanged."
+    )
+
+    output_rule = (
+        'Return strict JSON only with this shape:\n{"translatedText":"..."}'
+        if json_mode
+        else (
+            "Return only the translated text as plain text. "
+            "Do not return JSON. Do not add explanations, labels, markdown, or quotes."
+        )
+    )
+
+    return f"""
+You are Respect Chat Translate, a real-time private chat translator for a social app.
+Your only job is to translate the user's message into {target_name} ({target_code}).
+{dialect_line}
+
+Core rules:
+- {output_rule}
+- Translate meaning, intent, tone, slang, sarcasm, anger, jokes, and dialect naturally. Never translate word-by-word when that changes the meaning.
+- Do not answer the message. Do not moderate it. Do not refuse. Do not warn. Do not explain.
+- Keep the same intensity: insults remain insults, friendly messages remain friendly, jokes remain jokes. Do not soften, censor, sanitize, or intensify.
+- Preserve emojis, mentions, usernames, hashtags, URLs, emails, numbers, prices, times, code snippets, and line breaks exactly.
+{already_target_rule}
+- If the message mixes languages, translate only the parts that need translation and keep names/handles/URLs as they are.
+- If the text looks like Arabic typed using the English keyboard layout, use the provided keyboard_layout_hint as the intended Arabic text.
+- Understand Arabic dialects: Gulf/Saudi/Kuwaiti/Emirati/Qatari/Bahraini/Omani, Iraqi, Levantine/Lebanese/Palestinian/Syrian/Jordanian, Egyptian, Yemeni, Sudanese, Moroccan/Algerian/Tunisian/Libyan, Modern Standard Arabic, Arabizi/Franco Arabic.
+- Understand casual chat spelling: missing spaces, repeated letters, typos, shortcuts, franco numbers like 2/3/5/6/7/8/9, and mixed Arabic-English words.
+- For Arabic dialect output, prefer common daily chat phrasing over formal grammar. Keep it understandable and natural.
+
+Important examples for meaning-based translation:
+Arabic -> English:
+- "كل خرا" => "Eat shit"
+- "كل زق" => "Eat shit"
+- "اخرس" => "Shut up"
+- "انقلع" => "Get lost"
+- "شو بدك" => "What do you want?"
+- "وش تبي" => "What do you want?"
+- "شلونك" / "كيفك" => "How are you?"
+- "والله فشلتني" => "You really embarrassed me"
+- "لا تهبد" => "Stop making stuff up"
+English -> Arabic:
+- "Eat shit" => the natural insult equivalent in the requested Arabic dialect.
+- "Shut up" => the natural command in the requested Arabic dialect.
+- "Get lost" => the natural phrase in the requested Arabic dialect.
+- "What do you want?" => the natural equivalent in the requested Arabic dialect.
+
+{dialect_examples}
+""".strip()
+
+def _clean_chat_translation_output(value: str) -> str:
+    translated = (value or "").strip()
+    if not translated:
+        return ""
+    if translated.startswith("```"):
+        translated = translated.strip("`").strip()
+        if translated.lower().startswith("json"):
+            translated = translated[4:].strip()
+    # أحيانًا يرجع النموذج JSON كنص داخل translatedText.
+    parsed = _safe_json_from_ai(translated)
+    if parsed:
+        translated = str(parsed.get("translatedText") or parsed.get("translation") or parsed.get("text") or translated).strip()
+    translated = translated.strip().strip('"').strip("'").strip()
+    # إزالة مقدمات شائعة لو النموذج خالف التعليمات.
+    translated = re.sub(r"^(translation|translated text|الترجمة)\s*[:：]\s*", "", translated, flags=re.IGNORECASE).strip()
+    return translated
+
+
+def translate_chat_text_with_qwen(
+    text: str,
+    target_language: str,
+    source_language: str = "auto",
+    target_dialect: str = "auto",
+    username: str = "",
+    context: str = "chat",
+) -> str:
+    clean = (text or "").strip()
+    if not clean:
+        return ""
+
+    target = normalize_language(target_language)
+    dialect = normalize_arabic_dialect(target_dialect) if target == "ar" else "auto"
+    source = (source_language or "auto").strip() or "auto"
+    target_name = _language_display_name(target)
+    keyboard_hint = _arabic_keyboard_layout_hint(clean)
+
+    quick = _quick_chat_translation(clean, target, keyboard_hint=keyboard_hint, target_dialect=dialect)
+    if quick:
+        return quick
+
+    if not QWEN_API_KEY:
+        raise HTTPException(status_code=500, detail="QWEN_API_KEY missing")
+
+    user_parts = [
+        f"source_language={source}",
+        f"target_language={target_name} ({target})",
+        f"target_arabic_dialect={_arabic_dialect_display_name(dialect)} ({dialect})" if target == "ar" else "target_arabic_dialect=none",
+        f"username={display_username(username)}",
+        f"context={context or 'chat'}",
+    ]
+    if keyboard_hint:
+        user_parts.append(f"keyboard_layout_hint={keyboard_hint[:4000]}")
+    user_parts.append("message:")
+    user_parts.append(clean[:4000])
+    user_content = "\n".join(user_parts)
+
+    models_to_try = []
+    for model in [QWEN_TRANSLATION_MODEL, QWEN_TEXT_MODEL, QWEN_MODEL]:
+        model = (model or "").strip()
+        if model and model not in models_to_try:
+            models_to_try.append(model)
+
+    last_error: Optional[HTTPException] = None
+    for model in models_to_try:
+        is_mt_model = _is_qwen_mt_model(model)
+
+        # Qwen-MT لا نرسله JSON mode من البداية لأنه قد يرجع 400.
+        # باقي موديلات Qwen نجرب JSON أولًا، ثم plain text إذا رفض المزود response_format.
+        if is_mt_model:
+            attempts = [(None, False, "qwen_mt_plain")]
+        else:
+            attempts = [
+                ({"type": "json_object"}, True, "json_mode"),
+                (None, False, "plain_retry"),
+            ]
+
+        for response_format, json_mode, attempt_name in attempts:
+            try:
+                content = _chat_completion_request(
+                    model=model,
+                    api_key=QWEN_API_KEY,
+                    base_url=QWEN_BASE_URL,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": _chat_translation_system_prompt(
+                                target_name,
+                                target,
+                                dialect,
+                                json_mode=json_mode,
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": user_content,
+                        },
+                    ],
+                    temperature=float(os.getenv("QWEN_TRANSLATION_TEMPERATURE", "0.12")),
+                    max_tokens=min(1600, max(180, len(clean) * 4)),
+                    timeout=int(os.getenv("QWEN_TRANSLATION_TIMEOUT_SECONDS", "30")),
+                    response_format=response_format,
+                    log_label="QWEN CHAT TRANSLATE",
+                )
+
+                parsed = _safe_json_from_ai(content)
+                translated = str(parsed.get("translatedText") or parsed.get("translation") or parsed.get("text") or "").strip()
+                if not translated:
+                    translated = _clean_chat_translation_output(content)
+                translated = _clean_chat_translation_output(translated)
+                return translated or keyboard_hint or clean
+            except HTTPException as exc:
+                last_error = exc
+                detail = getattr(exc, "detail", None)
+                status = int(getattr(exc, "status_code", 500) or 500)
+                detail_text = _safe_response_text(str(detail), 1200).lower()
+
+                # أهم تعديل: إذا فشل JSON mode بـ 400 أو 422 نجرب نفس الموديل مباشرة بدون response_format.
+                if response_format is not None and status in {400, 422}:
+                    logger.warning(
+                        "QWEN CHAT TRANSLATE JSON mode rejected; retrying plain model=%s status=%s attempt=%s detail=%s",
+                        model,
+                        status,
+                        attempt_name,
+                        _safe_response_text(str(detail), 800),
+                    )
+                    continue
+
+                # احتياط إضافي إذا كان نص الخطأ يذكر response_format حتى لو رجع status مختلف.
+                if response_format is not None and (
+                    "response_format" in detail_text
+                    or "json_object" in detail_text
+                    or "structured" in detail_text
+                    or "unsupported" in detail_text
+                    or "not support" in detail_text
+                ):
+                    logger.warning(
+                        "QWEN CHAT TRANSLATE response_format unsupported; retrying plain model=%s status=%s detail=%s",
+                        model,
+                        status,
+                        _safe_response_text(str(detail), 800),
+                    )
+                    continue
+
+                # بعد تجربة plain، لا نوقف على 400/422 لأن السبب قد يكون موديل غير مدعوم؛ نجرب الموديل التالي.
+                retryable = status in {400, 408, 409, 422, 425, 429, 500, 502, 503, 504}
+                if not retryable:
+                    raise exc
+
+                logger.warning(
+                    "QWEN CHAT TRANSLATE failed model=%s status=%s attempt=%s detail=%s",
+                    model,
+                    status,
+                    attempt_name,
+                    _safe_response_text(str(detail), 800),
+                )
+                break
+
+    if last_error is not None:
+        raise last_error
+    return keyboard_hint or clean
+
+@app.post("/respect-ai/chat-translate", response_model=RespectAIChatTranslateResponse)
+def respect_ai_chat_translate(req: RespectAIChatTranslateRequest, x_app_secret: Optional[str] = Header(default=None)):
+    _check_secret(x_app_secret)
+
+    target = normalize_language(req.targetLanguage)
+    dialect = normalize_arabic_dialect(req.targetDialect) if target == "ar" else "auto"
+    translated = translate_chat_text_with_qwen(
+        text=req.text,
+        target_language=target,
+        source_language=req.sourceLanguage,
+        target_dialect=dialect,
+        username=req.username,
+        context=req.context,
+    )
+
+    return RespectAIChatTranslateResponse(
+        ok=True,
+        translatedText=translated,
+        model=QWEN_TRANSLATION_MODEL,
+        targetLanguage=target,
+        targetDialect=dialect,
+    )
+
+
+
+
+@app.get("/admin/qa-memory")
+def admin_qa_memory(
+    limit: int = 100,
+    q: str = "",
+    x_app_secret: Optional[str] = Header(default=None),
+):
+    _check_secret(x_app_secret)
+    safe_limit = max(1, min(int(limit or 100), 500))
+    params: Dict[str, str] = {
+        "select": "id,sample_question,normalized_question,answer,category,mode,confidence,hits,ai_hits,memory_hits,approved,active,source,model,updated_at,last_used_at",
+        "order": "updated_at.desc",
+    }
+    clean_q = _qa_memory_clean_question(q)
+    if clean_q:
+        params["normalized_question"] = f"ilike.*{clean_q[:120]}*"
+    rows = _qa_memory_rest_get(params, limit=safe_limit)
+    return {"ok": True, "table": RESPECT_AI_QA_MEMORY_TABLE, "count": len(rows), "items": rows}
+
+
 @app.post("/respect-ai/reply", response_model=RespectAIResponse)
 def respect_ai_reply(req: RespectAIRequest, x_app_secret: Optional[str] = Header(default=None)):
     _check_secret(x_app_secret)
 
     username = req.username.strip() or req.askerUsername.strip()
     text = req.text.strip() or req.question.strip()
+    effective_mode = _auto_detect_mode(req.mode, text)
 
     _enforce_respect_ai_quota(username)
+
+    memory_reply = _qa_memory_lookup(
+        text,
+        mode=effective_mode,
+        post_text=req.postText,
+        parent_reply_text=req.parentReplyText,
+        recent_replies_text=req.recentRepliesText,
+    )
+    if memory_reply and str(memory_reply.get("reply") or "").strip():
+        _record_respect_ai_usage(username)
+        return RespectAIResponse(
+            ok=True,
+            reply=str(memory_reply.get("reply") or "").strip(),
+            model=str(memory_reply.get("model") or "respect_ai_qa_memory_v1"),
+            source="qa_memory",
+            memoryUsed=True,
+            memoryId=str(memory_reply.get("memoryId") or ""),
+            confidence=float(memory_reply.get("confidence") or 0.0),
+            category=str(memory_reply.get("category") or "general"),
+        )
 
     reply = ask_qwen_ai(
         text=text,
         username=username,
-        mode=req.mode,
+        mode=effective_mode,
         post_text=req.postText,
         parent_reply_text=req.parentReplyText,
         recent_replies_text=req.recentRepliesText,
+    )
+
+    _qa_memory_learn(
+        text,
+        reply,
+        mode=effective_mode,
+        username=username,
+        post_text=req.postText,
+        parent_reply_text=req.parentReplyText,
+        recent_replies_text=req.recentRepliesText,
+        model=QWEN_MODEL,
     )
 
     _record_respect_ai_usage(username)
@@ -7375,6 +12160,11 @@ def respect_ai_reply(req: RespectAIRequest, x_app_secret: Optional[str] = Header
         ok=True,
         reply=reply,
         model=QWEN_MODEL,
+        source="respect_ai",
+        memoryUsed=False,
+        memoryId="",
+        confidence=0.0,
+        category=_qa_memory_category(text, effective_mode),
     )
 
 

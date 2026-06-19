@@ -14,6 +14,16 @@ void _secureSafeLog(Object error, [StackTrace? stackTrace]) {
   }
 }
 
+
+class _LocalKeyPairState {
+  final SimpleKeyPair keyPair;
+  final SimplePublicKey publicKey;
+  const _LocalKeyPairState({
+    required this.keyPair,
+    required this.publicKey,
+  });
+}
+
 class SecureCryptoService {
   SecureCryptoService._();
 
@@ -28,6 +38,7 @@ class SecureCryptoService {
 
   static const String encryptionVersion = 'respect_e2ee_x25519_aesgcm_v1';
   static const String encryptedTextPlaceholder = '🔒 رسالة مشفرة';
+  static const String e2eeKeyLostPlaceholder = '🔒 تعذر فتح الرسالة لأن مفتاح التشفير تغير أو فُقد من هذا الجهاز';
   static const String encryptedCallPlaceholder = '🔒 سجل مكالمة مشفر';
   static const String encryptedMediaPlaceholder = '🔒 ملف مشفر';
 
@@ -163,7 +174,39 @@ class SecureCryptoService {
   static String _privateKeyKey(String username) => 'respect_e2ee_${normalizeUsername(username)}_private_v1';
   static String _publicKeyKey(String username) => 'respect_e2ee_${normalizeUsername(username)}_public_v1';
 
-  static Future<SimpleKeyPair> _loadOrCreateLocalKeyPair(String username) async {
+  static bool _samePublicKeyBytes(SimplePublicKey key, String encoded) {
+    try {
+      final serverBytes = base64Decode(encoded.trim());
+      if (serverBytes.length != key.bytes.length) return false;
+      for (var i = 0; i < serverBytes.length; i++) {
+        if (serverBytes[i] != key.bytes[i]) return false;
+      }
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<String?> _serverPublicKeyForUsername(String username) async {
+    final user = displayUsername(username);
+    if (user == '@user') return '';
+    try {
+      final clean = normalizeUsername(user);
+      final row = await Supabase.instance.client
+          .from('users')
+          .select('e2ee_public_key,username')
+          .or('username.eq.$user,username.eq.$clean')
+          .limit(1)
+          .maybeSingle()
+          .timeout(const Duration(seconds: 8));
+      return row == null ? '' : (row['e2ee_public_key'] ?? '').toString().trim();
+    } catch (e, st) {
+      _secureSafeLog(e, st);
+      return null;
+    }
+  }
+
+  static Future<_LocalKeyPairState> _loadOrCreateLocalKeyPairState(String username) async {
     final user = displayUsername(username);
     final privateKeyName = _privateKeyKey(user);
     final publicKeyName = _publicKeyKey(user);
@@ -172,13 +215,21 @@ class SecureCryptoService {
     final publicRaw = await _storage.read(key: publicKeyName);
 
     if (privateRaw != null && privateRaw.trim().isNotEmpty && publicRaw != null && publicRaw.trim().isNotEmpty) {
-      final privateBytes = base64Decode(privateRaw);
-      final publicBytes = base64Decode(publicRaw);
-      return SimpleKeyPairData(
-        privateBytes,
-        publicKey: SimplePublicKey(publicBytes, type: KeyPairType.x25519),
-        type: KeyPairType.x25519,
-      );
+      try {
+        final privateBytes = base64Decode(privateRaw);
+        final publicBytes = base64Decode(publicRaw);
+        final publicKey = SimplePublicKey(publicBytes, type: KeyPairType.x25519);
+        return _LocalKeyPairState(
+          keyPair: SimpleKeyPairData(
+            privateBytes,
+            publicKey: publicKey,
+            type: KeyPairType.x25519,
+          ),
+          publicKey: publicKey,
+        );
+      } catch (e, st) {
+        _secureSafeLog(e, st);
+      }
     }
 
     final pair = await _x25519.newKeyPair();
@@ -187,31 +238,52 @@ class SecureCryptoService {
 
     await _storage.write(key: privateKeyName, value: base64Encode(privateBytes));
     await _storage.write(key: publicKeyName, value: base64Encode(publicKey.bytes));
-    return pair;
+    return _LocalKeyPairState(keyPair: pair, publicKey: publicKey);
+  }
+
+  static Future<SimpleKeyPair> _loadOrCreateLocalKeyPair(String username) async {
+    return (await _loadOrCreateLocalKeyPairState(username)).keyPair;
   }
 
   static Future<String> ensureCurrentUserPublicKey(String username) async {
     final user = displayUsername(username);
     if (user == '@user') return '';
 
-    final pair = await _loadOrCreateLocalKeyPair(user);
-    final publicKey = await pair.extractPublicKey();
+    final state = await _loadOrCreateLocalKeyPairState(user);
+    final publicKey = state.publicKey;
     final publicKeyB64 = base64Encode(publicKey.bytes);
 
-    try {
-      final clean = normalizeUsername(user);
-      await Supabase.instance.client
-          .from('users')
-          .update({
-        'e2ee_public_key': publicKeyB64,
-        'e2ee_key_type': 'x25519',
-        'e2ee_key_version': 1,
-        'e2ee_updated_at': DateTime.now().toUtc().toIso8601String(),
-      })
-          .or('username.eq.$user,username.eq.$clean')
-          .timeout(const Duration(seconds: 8));
-    } catch (e, st) {
-      _secureSafeLog(e, st);
+    final serverPublicKey = await _serverPublicKeyForUsername(user);
+    if (serverPublicKey == null) {
+      throw StateError('E2EE_PUBLIC_KEY_CHECK_FAILED: تعذر التحقق من مفتاح التشفير العام قبل المتابعة.');
+    }
+    if (serverPublicKey.isNotEmpty && !_samePublicKeyBytes(publicKey, serverPublicKey)) {
+      // لا نستبدل مفتاح المستخدم العام بصمت. هذا كان سبب ظهور الرسائل القديمة كمشفرة بعد الريليس
+      // عند فقدان مفتاح الجهاز المحلي أو تغيير توقيع/حزمة التطبيق.
+      _publicKeyCache.remove(user);
+      throw StateError(
+        'E2EE_LOCAL_KEY_MISMATCH: مفتاح التشفير المحلي لا يطابق المفتاح المحفوظ للحساب. '
+        'لا تحذف التطبيق عند التحديث، وثبت الريليس بنفس applicationId والتوقيع. '
+        'الرسائل القديمة تحتاج الجهاز الذي يملك المفتاح القديم أو نظام استرجاع مفاتيح.',
+      );
+    }
+
+    if (serverPublicKey.isEmpty) {
+      try {
+        final clean = normalizeUsername(user);
+        await Supabase.instance.client
+            .from('users')
+            .update({
+          'e2ee_public_key': publicKeyB64,
+          'e2ee_key_type': 'x25519',
+          'e2ee_key_version': 1,
+          'e2ee_updated_at': DateTime.now().toUtc().toIso8601String(),
+        })
+            .or('username.eq.$user,username.eq.$clean')
+            .timeout(const Duration(seconds: 8));
+      } catch (e, st) {
+        _secureSafeLog(e, st);
+      }
     }
 
     _publicKeyCache[user] = publicKey;
@@ -223,8 +295,8 @@ class SecureCryptoService {
     final user = displayUsername(username);
     if (user == '@user') return <String, dynamic>{};
 
-    final pair = await _loadOrCreateLocalKeyPair(user);
-    final publicKey = await pair.extractPublicKey();
+    final state = await _loadOrCreateLocalKeyPairState(user);
+    final publicKey = state.publicKey;
     final publicKeyB64 = base64Encode(publicKey.bytes);
     _publicKeyCache[user] = publicKey;
 
@@ -443,9 +515,11 @@ static Future<SimplePublicKey?> publicKeyForUsername(String username) async {
       await _decryptDirectMediaInRow(row, me, peer);
     } catch (e, st) {
       _secureSafeLog(e, st);
-      row['text'] = encryptedTextPlaceholder;
+      row['text'] = e2eeKeyLostPlaceholder;
+      row['e2ee_decrypt_failed'] = true;
+      row['e2ee_error'] = e.toString();
       final reply = (row['reply_text'] ?? '').toString();
-      if (reply.isNotEmpty) row['reply_text'] = encryptedTextPlaceholder;
+      if (reply.isNotEmpty) row['reply_text'] = e2eeKeyLostPlaceholder;
     }
     return row;
   }
@@ -969,9 +1043,11 @@ static Future<SimplePublicKey?> publicKeyForUsername(String username) async {
     } catch (e, st) {
       _secureSafeLog(e, st);
       final rawText = (row['text'] ?? '').toString();
-      if (isEncryptedGroupTextPayload(rawText)) row['text'] = encryptedTextPlaceholder;
+      if (isEncryptedGroupTextPayload(rawText)) row['text'] = e2eeKeyLostPlaceholder;
+      row['e2ee_decrypt_failed'] = true;
+      row['e2ee_error'] = e.toString();
       final rawReply = (row['reply_text'] ?? '').toString();
-      if (isEncryptedGroupTextPayload(rawReply)) row['reply_text'] = encryptedTextPlaceholder;
+      if (isEncryptedGroupTextPayload(rawReply)) row['reply_text'] = e2eeKeyLostPlaceholder;
     }
     return row;
   }

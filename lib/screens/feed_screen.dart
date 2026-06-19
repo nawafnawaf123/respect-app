@@ -2,8 +2,10 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
@@ -13,13 +15,15 @@ import 'package:record/record.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:video_player/video_player.dart';
-import 'package:cached_video_player_plus/cached_video_player_plus.dart';
+import 'package:cached_video_player_plus/cached_video_player_plus.dart'
+    hide VideoProgressColors, VideoProgressIndicator;
 import 'package:video_compress/video_compress.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../theme/app_theme.dart';
 import '../widgets/glass_card.dart';
+import '../widgets/app_dialog.dart';
 import '../services/supabase_service.dart';
 import '../services/notification_service.dart';
 import 'chat_screen.dart';
@@ -56,12 +60,14 @@ class _PreloadedFeedData {
 
 class FeedScreen extends StatefulWidget {
   final VoidCallback? onMenuTap;
+  final ValueChanged<bool>? onBottomBarVisibleChanged;
   final String? openPostId;
   final String? openReplyId;
 
   const FeedScreen({
     super.key,
     this.onMenuTap,
+    this.onBottomBarVisibleChanged,
     this.openPostId,
     this.openReplyId,
   });
@@ -287,9 +293,19 @@ class _FeedScreenState extends State<FeedScreen> {
 
   final ScrollController _forYouScrollController = ScrollController();
   final ScrollController _followingScrollController = ScrollController();
+  bool _requestedBottomBarVisible = true;
   RealtimeChannel? _replyNotificationChannel;
   StreamSubscription<String>? _respectAiDeletedPostSub;
   bool _openedInitialTarget = false;
+
+  Map<String, double> _forYouTopicScores = <String, double>{};
+  Map<String, List<Map<String, dynamic>>> _forYouPostTopics = <String, List<Map<String, dynamic>>>{};
+
+  // ترتيب "لك" لا يتحرك مباشرة عند اللايك/الحفظ/الرد.
+  // التفاعل يعلّم الاهتمامات للتحميلات والتحديثات القادمة فقط، حتى لا يقفز نفس المنشور فوق فجأة.
+  final Map<String, double> _forYouStableRankScores = <String, double>{};
+  final Map<String, int> _forYouStableOrders = <String, int>{};
+  int _forYouStableOrderCounter = 0;
 
   static const int _feedPageSize = 12;
   int _postsLoadedLimit = _feedPageSize;
@@ -689,6 +705,163 @@ class _FeedScreenState extends State<FeedScreen> {
     return _timelineSortValue(b).compareTo(_timelineSortValue(a));
   }
 
+  String _forYouStableKey(CityPost post) {
+    final repostActor = SupabaseService.displayUsername(post.repostedByUsername ?? '');
+    final actorPart = repostActor == '@user' ? '' : repostActor;
+    return '$actorPart|${post.id}|${post.timelineSortMillis ?? _timelineSortValue(post)}';
+  }
+
+  double _smoothTopicScore(double rawScore) {
+    if (rawScore.abs() < 0.001) return 0.0;
+    final sign = rawScore < 0 ? -1.0 : 1.0;
+    final limited = rawScore.abs().clamp(0.0, 220.0).toDouble();
+    // تحويل لوغاريتمي: لايك واحد يعلّم النظام، لكن لا يجعل التصنيف يسيطر على الفيد.
+    final shaped = math.log(1.0 + limited) / math.log(1.0 + 220.0);
+    return sign * (shaped * 6.0).clamp(0.0, 6.0).toDouble();
+  }
+
+  String _primaryTopicForPost(CityPost post) {
+    final topicRows = _forYouPostTopics[post.id] ?? const <Map<String, dynamic>>[];
+    if (topicRows.isEmpty) return '';
+
+    Map<String, dynamic>? best;
+    for (final row in topicRows) {
+      final topic = SupabaseService.normalizeRecommendationTopic((row['topic'] ?? '').toString());
+      if (topic.isEmpty || topic == 'general') continue;
+      final rank = int.tryParse((row['topic_rank'] ?? '').toString()) ?? 999;
+      final isPrimary = row['is_primary'] == true ||
+          (row['topic_role'] ?? '').toString().toLowerCase() == 'primary' ||
+          rank == 1;
+      if (isPrimary) return topic;
+      best ??= row;
+    }
+
+    return SupabaseService.normalizeRecommendationTopic((best?['topic'] ?? '').toString());
+  }
+
+  double _topicAffinityForPost(CityPost post) {
+    if (_forYouTopicScores.isEmpty) return 0.0;
+    final topicRows = _forYouPostTopics[post.id] ?? const <Map<String, dynamic>>[];
+    if (topicRows.isEmpty) return 0.0;
+
+    var score = 0.0;
+    for (final row in topicRows.take(6)) {
+      final topic = SupabaseService.normalizeRecommendationTopic((row['topic'] ?? '').toString());
+      if (topic.isEmpty || topic == 'general') continue;
+      final userScore = _smoothTopicScore(_forYouTopicScores[topic] ?? 0.0);
+      if (userScore == 0) continue;
+      final weight = double.tryParse((row['weight'] ?? 1.0).toString()) ?? 1.0;
+      final confidence = double.tryParse((row['confidence'] ?? 0.65).toString()) ?? 0.65;
+      final rank = int.tryParse((row['topic_rank'] ?? '').toString()) ?? 999;
+      final isPrimary = row['is_primary'] == true ||
+          (row['topic_role'] ?? '').toString().toLowerCase() == 'primary' ||
+          rank == 1;
+      final weightFactor = weight.clamp(0.25, 1.25).toDouble();
+      final confidenceFactor = confidence.clamp(0.35, 1.0).toDouble();
+      final roleFactor = isPrimary ? 1.0 : 0.42;
+      final rankFactor = rank <= 1 ? 1.0 : (1.0 / (1.0 + ((rank - 1) * 0.28))).clamp(0.35, 1.0).toDouble();
+      score += userScore * weightFactor * confidenceFactor * roleFactor * rankFactor;
+    }
+    return score.clamp(-7.0, 8.5).toDouble();
+  }
+
+  double _forYouRankScore(CityPost post) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final ageHours = math.max(0.0, (now - _timelineSortValue(post)) / 3600000.0);
+    final recencyScore = 190.0 / (1.0 + (ageHours / 4.5));
+    final topicScore = (_topicAffinityForPost(post) * 8.0).clamp(-34.0, 58.0).toDouble();
+    final engagementRaw = (post.likes * 1.2) +
+        (post.reposts * 2.2) +
+        (post.shares * 1.8) +
+        (post.replyCount * 2.4) +
+        (post.views * 0.08);
+    final engagementScore = (math.log(math.max(1.0, engagementRaw + 1.0)) * 9.0).clamp(0.0, 42.0).toDouble();
+    final subscriptionScore = (_subscriptionPriorityForPost(post) / 18.0).clamp(0.0, 42.0).toDouble();
+    final ownPenalty = SupabaseService.displayUsername(post.username) == SupabaseService.displayUsername(_profileUsername) ? -10.0 : 0.0;
+    return recencyScore + topicScore + engagementScore + subscriptionScore + ownPenalty;
+  }
+
+  void _refreshForYouRankingSnapshot(List<CityPost> posts, {required bool reset}) {
+    if (reset) {
+      _forYouStableRankScores.clear();
+      _forYouStableOrders.clear();
+      _forYouStableOrderCounter = 0;
+    }
+
+    final activeKeys = <String>{};
+    final ranked = posts.toList()..sort(_compareTimelinePosts);
+    for (final post in ranked) {
+      final key = _forYouStableKey(post);
+      activeKeys.add(key);
+      // نحسب ترتيب المنشور مرة واحدة عند تحميله فقط. بعد اللايك يتغير العداد ولا يتغير مكان الكرت.
+      _forYouStableRankScores.putIfAbsent(key, () => _forYouRankScore(post));
+      _forYouStableOrders.putIfAbsent(key, () => _forYouStableOrderCounter++);
+    }
+
+    _forYouStableRankScores.removeWhere((key, _) => !activeKeys.contains(key));
+    _forYouStableOrders.removeWhere((key, _) => !activeKeys.contains(key));
+  }
+
+  int _compareForYouPosts(CityPost a, CityPost b) {
+    final aKey = _forYouStableKey(a);
+    final bKey = _forYouStableKey(b);
+    final aScore = _forYouStableRankScores[aKey] ?? _forYouRankScore(a);
+    final bScore = _forYouStableRankScores[bKey] ?? _forYouRankScore(b);
+    final personalized = bScore.compareTo(aScore);
+    if (personalized != 0) return personalized;
+
+    final aOrder = _forYouStableOrders[aKey] ?? (1 << 30);
+    final bOrder = _forYouStableOrders[bKey] ?? (1 << 30);
+    final stable = aOrder.compareTo(bOrder);
+    if (stable != 0) return stable;
+    return _compareTimelinePosts(a, b);
+  }
+
+  List<CityPost> _diversifyForYouPosts(List<CityPost> ranked) {
+    if (ranked.length < 4) return ranked;
+
+    final remaining = ranked.toList();
+    final output = <CityPost>[];
+    final topicCounts = <String, int>{};
+    final recentTopics = <String>[];
+
+    while (remaining.isNotEmpty) {
+      var chosenIndex = 0;
+      final scanLimit = math.min(remaining.length, 14);
+
+      for (var i = 0; i < scanLimit; i++) {
+        final candidate = remaining[i];
+        final topic = _primaryTopicForPost(candidate);
+        if (topic.isEmpty || topic == 'general') {
+          chosenIndex = i;
+          break;
+        }
+
+        final sameStreak = recentTopics.length >= 2 &&
+            recentTopics[recentTopics.length - 1] == topic &&
+            recentTopics[recentTopics.length - 2] == topic;
+        final topLimit = output.length < 12 ? 5 : (output.length < 24 ? 10 : 1 << 20);
+        final alreadyShown = topicCounts[topic] ?? 0;
+
+        if (!sameStreak && alreadyShown < topLimit) {
+          chosenIndex = i;
+          break;
+        }
+      }
+
+      final selected = remaining.removeAt(chosenIndex);
+      output.add(selected);
+      final topic = _primaryTopicForPost(selected);
+      if (topic.isNotEmpty && topic != 'general') {
+        topicCounts[topic] = (topicCounts[topic] ?? 0) + 1;
+        recentTopics.add(topic);
+        if (recentTopics.length > 3) recentTopics.removeAt(0);
+      }
+    }
+
+    return output;
+  }
+
   bool _postHasActiveSubscriptionBoost(CityPost post) => _subscriptionPriorityForPost(post) > 0;
 
   bool _shouldShowSubscriptionBoostBadge(CityPost post) {
@@ -717,9 +890,33 @@ class _FeedScreenState extends State<FeedScreen> {
     });
   }
 
+  void _setBottomBarVisible(bool visible) {
+    if (_requestedBottomBarVisible == visible) return;
+    if (!mounted) return;
+    setState(() => _requestedBottomBarVisible = visible);
+    widget.onBottomBarVisibleChanged?.call(visible);
+  }
+
+  bool _handleFeedUserScroll(UserScrollNotification notification) {
+    if (notification.metrics.axis != Axis.vertical) return false;
+    final pixels = notification.metrics.pixels;
+    if (pixels <= 12) {
+      _setBottomBarVisible(true);
+      return false;
+    }
+
+    if (notification.direction == ScrollDirection.reverse && pixels > 28) {
+      _setBottomBarVisible(false);
+    } else if (notification.direction == ScrollDirection.forward) {
+      _setBottomBarVisible(true);
+    }
+    return false;
+  }
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => widget.onBottomBarVisibleChanged?.call(true));
     _paintPreloadedFeedBeforeFirstFrame();
     _forYouScrollController.addListener(_onFeedScroll);
     _followingScrollController.addListener(_onFeedScroll);
@@ -831,6 +1028,7 @@ class _FeedScreenState extends State<FeedScreen> {
 
   @override
   void dispose() {
+    widget.onBottomBarVisibleChanged?.call(true);
     _replyNotificationChannel?.unsubscribe();
     _respectAiDeletedPostSub?.cancel();
     _hideRefreshAvatarsTimer?.cancel();
@@ -1324,6 +1522,9 @@ class _FeedScreenState extends State<FeedScreen> {
         ...loaded,
       ]..sort(_compareTimelinePosts);
 
+      await _loadForYouPersonalization(allPosts);
+      _refreshForYouRankingSnapshot(allPosts, reset: reset);
+
       final storyUsers = allPosts.map((p) => SupabaseService.displayUsername(p.username)).toSet().toList();
       final storyRows = await SupabaseService.getActiveStories(usernames: storyUsers);
       final seenStoryIds = await SupabaseService.getSeenStoryIds();
@@ -1355,6 +1556,49 @@ class _FeedScreenState extends State<FeedScreen> {
     } finally {
       _loadingPosts = false;
       if (mounted) setState(() => _loadingMorePosts = false);
+    }
+  }
+
+
+  Future<void> _loadForYouPersonalization(List<CityPost> posts) async {
+    final ids = posts
+        .map((p) => p.id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList();
+    if (ids.isEmpty) {
+      _forYouPostTopics = <String, List<Map<String, dynamic>>>{};
+      return;
+    }
+
+    try {
+      final results = await Future.wait<dynamic>([
+        SupabaseService.getUserTopicScores(_profileUsername),
+        SupabaseService.getPostTopicsForIds(ids),
+      ]).timeout(const Duration(seconds: 10));
+
+      final rawScores = Map<dynamic, dynamic>.from(results[0] as Map);
+      _forYouTopicScores = <String, double>{
+        for (final entry in rawScores.entries)
+          SupabaseService.normalizeRecommendationTopic(entry.key.toString()):
+              double.tryParse((entry.value ?? 0).toString()) ?? 0.0,
+      }..removeWhere((key, value) => key.isEmpty || value.abs() < 0.001);
+
+      final rawTopicMap = Map<dynamic, dynamic>.from(results[1] as Map);
+      _forYouPostTopics = <String, List<Map<String, dynamic>>>{};
+      for (final entry in rawTopicMap.entries) {
+        final postId = entry.key.toString();
+        final value = entry.value;
+        if (postId.isEmpty || value is! List) continue;
+        _forYouPostTopics[postId] = value
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e.map((k, v) => MapEntry(k.toString(), v))))
+            .toList();
+      }
+    } catch (e, st) {
+      _logIgnoredError(e, st);
+      _forYouTopicScores = <String, double>{};
+      _forYouPostTopics = <String, List<Map<String, dynamic>>>{};
     }
   }
 
@@ -1394,6 +1638,10 @@ class _FeedScreenState extends State<FeedScreen> {
           .map((e) => _postFromServerRow(e, avatarMap))
           .where((p) => !existingKeys.contains('_${p.id}'))
           .toList();
+
+      final mergedPosts = <CityPost>[..._posts, ...newPosts];
+      await _loadForYouPersonalization(mergedPosts);
+      _refreshForYouRankingSnapshot(mergedPosts, reset: false);
 
       if (!mounted) return;
       setState(() {
@@ -1784,6 +2032,7 @@ class _FeedScreenState extends State<FeedScreen> {
         });
       }
     } catch (e, st) { _logIgnoredError(e, st); }
+    unawaited(SupabaseService.trackTopicInteraction(postId: post.id, username: _profileUsername, interactionType: 'share'));
     await Clipboard.setData(ClipboardData(text: _postShareText(post)));
     await _savePosts();
     if (!mounted) return;
@@ -1794,6 +2043,11 @@ class _FeedScreenState extends State<FeedScreen> {
     final mediaPath = post.mediaPath?.trim();
     final mediaType = post.mediaType;
     if (mediaPath == null || mediaPath.isEmpty || mediaType == null) return;
+    unawaited(SupabaseService.trackTopicInteraction(
+      postId: post.id,
+      username: _profileUsername,
+      interactionType: mediaType == CityMediaType.video ? 'video_open' : 'media_open',
+    ));
     Navigator.of(context).push(MaterialPageRoute(builder: (_) => FullscreenMediaViewer(
       path: mediaPath,
       type: mediaType,
@@ -1825,6 +2079,7 @@ class _FeedScreenState extends State<FeedScreen> {
       _mutedUsers = readSet(_mutedUsersKey);
       _localBlockedUsers = readSet(_localBlockedUsersKey);
     });
+    unawaited(_enforceCommunityModeratorBlocksSilently());
   }
 
   Future<void> _saveLocalModeration() async {
@@ -1838,53 +2093,101 @@ class _FeedScreenState extends State<FeedScreen> {
     return _mutedUsers.contains(clean) || _localBlockedUsers.contains(clean);
   }
 
+  bool _communityHasBlockedModerator(CityCommunity community) {
+    if (_localBlockedUsers.isEmpty) return false;
+    final moderators = community.moderators
+        .map(SupabaseService.displayUsername)
+        .where((u) => u != '@user')
+        .toSet();
+    return moderators.any(_localBlockedUsers.contains);
+  }
+
+  Future<void> _enforceCommunityModeratorBlocksSilently({bool showNotice = false}) async {
+    if (!mounted || _localBlockedUsers.isEmpty) return;
+    final me = SupabaseService.displayUsername(_profileUsername);
+    if (me == '@user') return;
+
+    final affected = <CityCommunity>[];
+    setState(() {
+      for (final community in _communities) {
+        final isOwner = SupabaseService.displayUsername(community.ownerUsername) == me;
+        final isMember = community.members.map(SupabaseService.displayUsername).contains(me);
+        if (!isOwner && isMember && _communityHasBlockedModerator(community)) {
+          community.members.removeWhere((u) => SupabaseService.displayUsername(u) == me);
+          community.moderators.removeWhere((u) => SupabaseService.displayUsername(u) == me);
+          affected.add(community);
+        }
+      }
+    });
+
+    if (affected.isEmpty) return;
+    for (final community in affected) {
+      try {
+        await SupabaseService.leaveCommunity(communityId: community.id, username: me);
+      } catch (e, st) { _logIgnoredError(e, st); }
+    }
+    await _saveCommunities();
+    if (showNotice && mounted) {
+      NotificationService.showTopNotification(
+        context.tr('تم إخراجك من المجتمع لأنك حظرت أحد مشرفيه. بعد إلغاء الحظر تستطيع متابعة المجتمع مرة أخرى.'),
+        title: 'تنبيه المجتمع',
+        icon: Icons.admin_panel_settings_rounded,
+        accentColor: AppColors.danger,
+      );
+    }
+  }
+
   List<CityPost> get _visiblePosts => _posts.where((p) => !_isAuthorHidden(p.username)).toList();
+
+  List<CityPost> get _forYouPosts {
+    final posts = _visiblePosts.toList();
+    posts.sort(_compareForYouPosts);
+    return _diversifyForYouPosts(posts);
+  }
 
   Future<Map<String, String>?> _askCommunityReportDetails(CityPost post, {String title = 'بلاغ للمشرفين'}) async {
     String reason = 'محتوى مخالف';
     String details = '';
-    final submitted = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: AppText(title, style: const TextStyle(fontWeight: FontWeight.w900)),
-        content: StatefulBuilder(
-          builder: (context, setLocal) => SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                DropdownButtonFormField<String>(
-                  value: reason,
-                  decoration: InputDecoration(labelText: context.tr('نوع البلاغ')),
-                  items: const [
-                    DropdownMenuItem(value: 'محتوى مخالف', child: AppText('محتوى مخالف')),
-                    DropdownMenuItem(value: 'سرقة محتوى', child: AppText('سرقة محتوى')),
-                    DropdownMenuItem(value: 'سبام أو إزعاج', child: AppText('سبام أو إزعاج')),
-                    DropdownMenuItem(value: 'تحرش أو إساءة', child: AppText('تحرش أو إساءة')),
-                    DropdownMenuItem(value: 'معلومات مضللة', child: AppText('معلومات مضللة')),
-                    DropdownMenuItem(value: 'بلاغ مخصص', child: AppText('بلاغ مخصص')),
-                  ],
-                  onChanged: (v) => setLocal(() => reason = v ?? reason),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  minLines: 3,
-                  maxLines: 6,
-                  onChanged: (value) => details = value,
-                  decoration: InputDecoration(
-                    labelText: reason == 'بلاغ مخصص' ? context.tr('اكتب البلاغ الذي تريده') : context.tr('اشرح البلاغ بالتفصيل'),
-                    hintText: reason == 'بلاغ مخصص' ? context.tr('مثال: اشرح للمشرفين المشكلة كاملة...') : context.tr('اختياري، لكن يساعد المشرفين والذكاء الاصطناعي'),
-                    border: const OutlineInputBorder(),
-                  ),
-                ),
+    final submitted = await AppDialog.custom<bool>(
+      context,
+      title: title,
+      type: AppDialogType.warning,
+      icon: Icons.report_rounded,
+      content: StatefulBuilder(
+        builder: (context, setLocal) => Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            DropdownButtonFormField<String>(
+              value: reason,
+              decoration: InputDecoration(labelText: context.tr('نوع البلاغ')),
+              items: const [
+                DropdownMenuItem(value: 'محتوى مخالف', child: AppText('محتوى مخالف')),
+                DropdownMenuItem(value: 'سرقة محتوى', child: AppText('سرقة محتوى')),
+                DropdownMenuItem(value: 'سبام أو إزعاج', child: AppText('سبام أو إزعاج')),
+                DropdownMenuItem(value: 'تحرش أو إساءة', child: AppText('تحرش أو إساءة')),
+                DropdownMenuItem(value: 'معلومات مضللة', child: AppText('معلومات مضللة')),
+                DropdownMenuItem(value: 'بلاغ مخصص', child: AppText('بلاغ مخصص')),
               ],
+              onChanged: (v) => setLocal(() => reason = v ?? reason),
             ),
-          ),
+            const SizedBox(height: 12),
+            TextField(
+              minLines: 3,
+              maxLines: 6,
+              onChanged: (value) => details = value,
+              decoration: InputDecoration(
+                labelText: reason == 'بلاغ مخصص' ? context.tr('اكتب البلاغ الذي تريده') : context.tr('اشرح البلاغ بالتفصيل'),
+                hintText: reason == 'بلاغ مخصص' ? context.tr('مثال: اشرح للمشرفين المشكلة كاملة...') : context.tr('اختياري، لكن يساعد المشرفين والذكاء الاصطناعي'),
+                border: const OutlineInputBorder(),
+              ),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const AppText('إلغاء')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const AppText('إرسال')),
-        ],
       ),
+      actions: const <AppDialogAction<bool>>[
+        AppDialogAction<bool>.secondary(text: 'إلغاء', value: false),
+        AppDialogAction<bool>.primary(text: 'إرسال', value: true),
+      ],
     );
     details = details.trim();
     if (submitted != true) return null;
@@ -2042,6 +2345,133 @@ class _FeedScreenState extends State<FeedScreen> {
     NotificationService.showTopSuccess(post.pinnedInCommunity ? 'تم تثبيت التغريدة' : 'تم إلغاء تثبيت التغريدة');
   }
 
+  Future<String?> _chooseCommunityRuleForHide(CityCommunity community) async {
+    final rules = community.rules.where((r) => r.trim().isNotEmpty).toList();
+    String selectedRule = rules.isNotEmpty ? rules.first : 'مخالفة قوانين المجتمع';
+    String customReason = '';
+    final confirmed = await AppDialog.custom<bool>(
+      context,
+      title: 'اختر القانون المخالف',
+      type: AppDialogType.warning,
+      icon: Icons.rule_rounded,
+      content: StatefulBuilder(
+        builder: (context, setLocal) => Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (rules.isNotEmpty)
+              DropdownButtonFormField<String>(
+                value: selectedRule,
+                decoration: InputDecoration(labelText: context.tr('القانون الذي خالفه المستخدم')),
+                items: [
+                  ...rules.map((rule) => DropdownMenuItem(value: rule, child: AppText(rule, maxLines: 2, overflow: TextOverflow.ellipsis))),
+                  const DropdownMenuItem(value: 'سبب مخصص', child: AppText('سبب مخصص')),
+                ],
+                onChanged: (v) => setLocal(() => selectedRule = v ?? selectedRule),
+              )
+            else
+              TextField(
+                minLines: 2,
+                maxLines: 4,
+                onChanged: (v) => customReason = v,
+                decoration: InputDecoration(
+                  labelText: context.tr('سبب الإخفاء'),
+                  hintText: context.tr('اكتب القانون أو السبب الذي خالفه المستخدم'),
+                  border: const OutlineInputBorder(),
+                ),
+              ),
+            if (rules.isNotEmpty && selectedRule == 'سبب مخصص') ...[
+              const SizedBox(height: 12),
+              TextField(
+                minLines: 2,
+                maxLines: 4,
+                onChanged: (v) => customReason = v,
+                decoration: InputDecoration(
+                  labelText: context.tr('السبب المخصص'),
+                  border: const OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: const <AppDialogAction<bool>>[
+        AppDialogAction<bool>.secondary(text: 'إلغاء', value: false),
+        AppDialogAction<bool>.primary(text: 'إخفاء', value: true),
+      ],
+    );
+    if (confirmed != true) return null;
+    final reason = selectedRule == 'سبب مخصص' || rules.isEmpty ? customReason.trim() : selectedRule.trim();
+    if (reason.isEmpty) {
+      NotificationService.showTopError(context.tr('اختر أو اكتب سبب الإخفاء أولاً'));
+      return null;
+    }
+    return reason;
+  }
+
+  Future<void> _saveCommunityHiddenNotification({
+    required CityCommunity community,
+    required CityPost post,
+    required String rule,
+  }) async {
+    final target = SupabaseService.displayUsername(post.username);
+    final actor = SupabaseService.displayUsername(_profileUsername);
+    if (target == actor || target == '@user') return;
+    final body = 'تم إخفاء تغريدتك في مجتمع ${community.name} بسبب مخالفة القانون: $rule\n\nالتغريدة: ${post.text}';
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('respect_post_events_v1');
+    final items = <Map<String, dynamic>>[];
+    if (raw != null && raw.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is List) items.addAll(decoded.whereType<Map>().map((e) => e.map((k, v) => MapEntry(k.toString(), v))));
+      } catch (e, st) { _logIgnoredError(e, st); }
+    }
+    items.insert(0, {
+      'id': 'community_post_hidden_${post.id}_${DateTime.now().microsecondsSinceEpoch}',
+      'type': 'community_post_hidden',
+      'targetUsername': target,
+      'authorUsername': actor,
+      'authorName': _profileName,
+      'postId': post.id,
+      'text': body,
+      'communityName': community.name,
+      'rule': rule,
+      'createdAt': DateTime.now().toIso8601String(),
+    });
+    await prefs.setString('respect_post_events_v1', jsonEncode(items.take(300).toList()));
+  }
+
+  Future<void> _hideCommunityPostFromFeed(CityCommunity community, CityPost post) async {
+    final isMod = community.ownerUsername == _profileUsername || community.moderators.contains(_profileUsername);
+    if (!isMod) {
+      NotificationService.showTopError(context.tr('هذا الخيار للمشرفين فقط'));
+      return;
+    }
+    final rule = await _chooseCommunityRuleForHide(community);
+    if (rule == null) return;
+    setState(() {
+      final target = community.posts.where((p) => p.id == post.id).toList();
+      if (target.isNotEmpty) target.first.hiddenFromCommunity = true;
+      post.hiddenFromCommunity = true;
+    });
+    await _saveCommunities();
+    await _saveCommunityHiddenNotification(community: community, post: post, rule: rule);
+    try {
+      await SupabaseService.hideCommunityPostByModerator(
+        postId: post.id,
+        communityId: community.id,
+        communityName: community.name,
+        postUsername: post.username,
+        postText: post.text,
+        moderatorUsername: _profileUsername,
+        moderatorName: _profileName,
+        rule: rule,
+      );
+    } catch (e, st) { _logIgnoredError(e, st); }
+    if (!mounted) return;
+    NotificationService.showTopSuccess(context.tr('تم إخفاء التغريدة وإرسال إشعار لصاحبها'));
+  }
+
   Future<void> _showCommunityQuickPostActions(CityCommunity community, CityPost post) async {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final choice = await showModalBottomSheet<String>(
@@ -2070,7 +2500,7 @@ class _FeedScreenState extends State<FeedScreen> {
                   subtitle: AppText('سيظهر البلاغ مباشرة داخل تبويب البلاغات في المجتمع', style: TextStyle(color: muted, fontSize: 12)),
                   onTap: () => Navigator.pop(sheetContext, 'report'),
                 ),
-                if (community.ownerUsername == _profileUsername || community.moderators.contains(_profileUsername))
+                if (community.ownerUsername == _profileUsername || community.moderators.contains(_profileUsername)) ...[
                   ListTile(
                     leading: const Icon(Icons.push_pin_rounded, color: AppColors.purple),
                     title: AppText(
@@ -2080,6 +2510,13 @@ class _FeedScreenState extends State<FeedScreen> {
                     subtitle: AppText('تظهر التغريدة أعلى تبويب المجتمع', style: TextStyle(color: muted, fontSize: 12)),
                     onTap: () => Navigator.pop(sheetContext, 'pin'),
                   ),
+                  ListTile(
+                    leading: const Icon(Icons.visibility_off_rounded, color: AppColors.danger),
+                    title: const AppText('هايد بسبب قانون', style: TextStyle(fontWeight: FontWeight.w900)),
+                    subtitle: AppText('اختر القانون المخالف وسيصل إشعار لصاحب التغريدة', style: TextStyle(color: muted, fontSize: 12)),
+                    onTap: () => Navigator.pop(sheetContext, 'hide'),
+                  ),
+                ],
                 ListTile(
                   leading: const Icon(Icons.open_in_new_rounded, color: AppColors.purple),
                   title: const AppText('فتح المجتمع', style: TextStyle(fontWeight: FontWeight.w900)),
@@ -2099,6 +2536,7 @@ class _FeedScreenState extends State<FeedScreen> {
     );
     if (choice == 'report') await _reportCommunityPostFromFeed(community, post);
     if (choice == 'pin') await _toggleCommunityPostPinFromFeed(community, post);
+    if (choice == 'hide') await _hideCommunityPostFromFeed(community, post);
     if (choice == 'open') await _openCommunity(community);
     if (choice == 'general') await _showPostActions(post);
   }
@@ -2230,21 +2668,21 @@ class _FeedScreenState extends State<FeedScreen> {
     var reportReason = type.trim();
     var reportDetails = '';
     if (reportReason == 'بلاغ مخصص') {
-      final ok = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const AppText('بلاغ مخصص', style: TextStyle(fontWeight: FontWeight.w900)),
-          content: TextField(
-            minLines: 3,
-            maxLines: 6,
-            onChanged: (value) => reportDetails = value,
-            decoration: InputDecoration(labelText: context.tr('اكتب البلاغ الذي تريده'), border: OutlineInputBorder()),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context, false), child: const AppText('إلغاء')),
-            FilledButton(onPressed: () => Navigator.pop(context, true), child: const AppText('إرسال')),
-          ],
+      final ok = await AppDialog.custom<bool>(
+        context,
+        title: 'بلاغ مخصص',
+        type: AppDialogType.warning,
+        icon: Icons.report_rounded,
+        content: TextField(
+          minLines: 3,
+          maxLines: 6,
+          onChanged: (value) => reportDetails = value,
+          decoration: InputDecoration(labelText: context.tr('اكتب البلاغ الذي تريده'), border: OutlineInputBorder()),
         ),
+        actions: const <AppDialogAction<bool>>[
+          AppDialogAction<bool>.secondary(text: 'إلغاء', value: false),
+          AppDialogAction<bool>.primary(text: 'إرسال', value: true),
+        ],
       );
       reportDetails = reportDetails.trim();
       if (ok != true || reportDetails.isEmpty) {
@@ -2427,6 +2865,7 @@ class _FeedScreenState extends State<FeedScreen> {
                       await showSelfMessage('حظر');
                       return;
                     }
+                    final nextBlocked = !isBlocked;
                     setState(() {
                       if (isBlocked) {
                         _localBlockedUsers.remove(authorUsername);
@@ -2435,6 +2874,9 @@ class _FeedScreenState extends State<FeedScreen> {
                       }
                     });
                     await _saveLocalModeration();
+                    if (nextBlocked) {
+                      await _enforceCommunityModeratorBlocksSilently(showNotice: true);
+                    }
                     if (!mounted) return;
                     NotificationService.showTopNotification(isBlocked ? 'تم إلغاء حظر ${post.user}' : 'تم حظر ${post.user}');
                   },
@@ -2617,6 +3059,7 @@ class _FeedScreenState extends State<FeedScreen> {
         ..clear()
         ..addAll(loaded);
     });
+    unawaited(_enforceCommunityModeratorBlocksSilently());
   }
 
   Future<void> _saveCommunities() async {
@@ -2627,7 +3070,7 @@ class _FeedScreenState extends State<FeedScreen> {
     await prefs.setString(_communitiesKey, jsonEncode(list));
 
     try {
-      await SupabaseService.upsertCommunities(list, ownerUsername: _profileUsername);
+      await SupabaseService.upsertCommunities(list);
     } catch (e, st) {
       _logIgnoredError(e, st);
     }
@@ -2666,6 +3109,7 @@ class _FeedScreenState extends State<FeedScreen> {
       currentUsername: _profileUsername,
       currentName: _profileName,
       currentAvatarPath: _profileImagePath,
+      blockedUsernames: _localBlockedUsers,
       avatarProviderForPath: _profileImageProvider,
       onChanged: () async {
         setState(() {});
@@ -3155,14 +3599,22 @@ class _FeedScreenState extends State<FeedScreen> {
         }());
       }
 
-      _setPublishProgress(1.0, 'تم نشر التغريدة');
+      _setPublishProgress(1.0, 'تم نشر التغريدة، والمراجعة تعمل بالخلفية');
       unawaited(_loadPosts());
       await Future<void>.delayed(const Duration(milliseconds: 250));
       _hidePublishProgress();
     } catch (e) {
       _hidePublishProgress();
       if (!mounted) return;
-      NotificationService.showTopNotification(context.tr('تعذر نشر التغريدة على الخادم: $e'));
+      final errorText = e.toString().replaceFirst('Exception: ', '');
+      if (errorText.contains('تم رفض المحتوى') || errorText.contains('مخالفة واضحة')) {
+        await NotificationService.showPrePublishBlockedNotification(
+          reason: errorText,
+          decisionSource: 'local_obvious_violation',
+        );
+      } else {
+        NotificationService.showTopNotification(context.tr('تعذر نشر التغريدة على الخادم: $e'));
+      }
     }
   }
 
@@ -3196,6 +3648,7 @@ class _FeedScreenState extends State<FeedScreen> {
   Future<void> _openReplies(CityPost post) async {
     // لا ننتظر الشبكة قبل فتح الشاشة؛ هذا كان سبب التأخير والتعليق عند الضغط على التغريدة.
     unawaited(_markPostViewed(post));
+    unawaited(SupabaseService.trackTopicInteraction(postId: post.id, username: _profileUsername, interactionType: 'reply_open'));
     await Navigator.of(context).push<void>(
       MaterialPageRoute(
         builder: (_) => RepliesScreen(
@@ -3384,17 +3837,12 @@ class _FeedScreenState extends State<FeedScreen> {
   }
 
   Future<void> _deleteOwnPostFromFeed(CityPost post) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: Theme.of(context).brightness == Brightness.dark ? AppColors.darkCard : AppColors.lightCard,
-        title: const AppText('حذف التغريدة', style: TextStyle(fontWeight: FontWeight.w900)),
-        content: const AppText('هل تريد حذف هذه التغريدة نهائيًا؟'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const AppText('إلغاء')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const AppText('حذف')),
-        ],
-      ),
+    final ok = await AppDialog.delete(
+      context,
+      title: 'حذف التغريدة',
+      message: 'هل تريد حذف هذه التغريدة نهائيًا؟',
+      confirmText: 'حذف',
+      cancelText: 'إلغاء',
     );
     if (ok != true) return;
     await _deletePostFromProfile(post);
@@ -3411,6 +3859,145 @@ class _FeedScreenState extends State<FeedScreen> {
     );
   }
 
+  String _communitySortLabel(String mode) {
+    switch (mode) {
+      case 'likes':
+        return 'الأكثر إعجابًا';
+      case 'replies':
+        return 'الأكثر ردودًا';
+      case 'views':
+        return 'الأكثر مشاهدة';
+      case 'latest':
+      default:
+        return 'الأحدث';
+    }
+  }
+
+  int _compareCommunityPosts(CityPost a, CityPost b, String mode) {
+    if (a.pinnedInCommunity != b.pinnedInCommunity) {
+      return a.pinnedInCommunity ? -1 : 1;
+    }
+
+    switch (mode) {
+      case 'likes':
+        final byLikes = b.likes.compareTo(a.likes);
+        if (byLikes != 0) return byLikes;
+        break;
+      case 'replies':
+        final byReplies = b.replyCount.compareTo(a.replyCount);
+        if (byReplies != 0) return byReplies;
+        break;
+      case 'views':
+        final byViews = b.views.compareTo(a.views);
+        if (byViews != 0) return byViews;
+        break;
+    }
+
+    return _timelineSortValue(b).compareTo(_timelineSortValue(a));
+  }
+
+  Future<void> _showCommunitySortSheet(CityCommunity community) async {
+    final currentMode = _communitySortModes[community.id] ?? 'latest';
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        final muted = isDark ? AppColors.darkMuted : AppColors.lightMuted;
+
+        Widget item({
+          required String value,
+          required String title,
+          required IconData icon,
+          required String subtitle,
+        }) {
+          final active = currentMode == value;
+          return ListTile(
+            leading: Icon(icon, color: active ? AppColors.purple : muted),
+            title: AppText(
+              title,
+              style: TextStyle(
+                fontWeight: FontWeight.w900,
+                color: active ? AppColors.purple : null,
+              ),
+            ),
+            subtitle: AppText(subtitle, style: TextStyle(color: muted, fontSize: 12)),
+            trailing: active ? const Icon(Icons.check_circle_rounded, color: AppColors.purple) : null,
+            onTap: () => Navigator.pop(context, value),
+          );
+        }
+
+        return Container(
+          decoration: BoxDecoration(
+            color: isDark ? AppColors.darkBg : AppColors.lightBg,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+            border: Border.all(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
+          ),
+          child: SafeArea(
+            top: false,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(height: 10),
+                Container(
+                  width: 46,
+                  height: 5,
+                  decoration: BoxDecoration(
+                    color: isDark ? AppColors.darkBorder : AppColors.lightBorder,
+                    borderRadius: BorderRadius.circular(99),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                AppText(
+                  'ترتيب التغريدات',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 4),
+                AppText(
+                  community.name,
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: muted, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 8),
+                item(
+                  value: 'latest',
+                  title: 'الأحدث',
+                  icon: Icons.schedule_rounded,
+                  subtitle: 'اعرض أحدث تغريدات المجتمع أولًا',
+                ),
+                item(
+                  value: 'likes',
+                  title: 'الأكثر إعجابًا',
+                  icon: Icons.favorite_rounded,
+                  subtitle: 'رتب التغريدات حسب عدد الإعجابات',
+                ),
+                item(
+                  value: 'replies',
+                  title: 'الأكثر ردودًا',
+                  icon: Icons.mode_comment_rounded,
+                  subtitle: 'رتب التغريدات حسب التفاعل والردود',
+                ),
+                item(
+                  value: 'views',
+                  title: 'الأكثر مشاهدة',
+                  icon: Icons.visibility_rounded,
+                  subtitle: 'رتب التغريدات حسب المشاهدات',
+                ),
+                const SizedBox(height: 10),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    if (selected == null || selected == currentMode || !mounted) return;
+    setState(() => _communitySortModes[community.id] = selected);
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -3422,14 +4009,23 @@ class _FeedScreenState extends State<FeedScreen> {
     final tabs = <Widget>[
       const Tab(child: AppText('لك')),
       const Tab(child: AppText('المتابَعين')),
-      ...followedCommunities.map((c) => Tab(text: c.name)),
+      ...followedCommunities.map((c) {
+        final mode = _communitySortModes[c.id] ?? 'latest';
+        return Tab(
+          child: _CommunityFeedTabLabel(
+            name: c.name,
+            sortLabel: _communitySortLabel(mode),
+            onSortTap: () => _showCommunitySortSheet(c),
+          ),
+        );
+      }),
       const Tab(child: AppText('المجتمعات')),
     ];
 
     final pages = <Widget>[
       _PostsList(
         scrollController: _forYouScrollController,
-        posts: _visiblePosts,
+        posts: _forYouPosts,
         emptyText: 'لا توجد تغريدات بعد',
         isDark: isDark,
         refreshAvatars: _showRefreshAvatars ? _refreshAvatars : const [],
@@ -3484,12 +4080,7 @@ class _FeedScreenState extends State<FeedScreen> {
       ...followedCommunities.map((c) {
         final mode = _communitySortModes[c.id] ?? 'latest';
         final posts = List<CityPost>.from(c.posts)
-          ..sort((a, b) {
-            if (a.pinnedInCommunity != b.pinnedInCommunity) {
-              return a.pinnedInCommunity ? -1 : 1;
-            }
-            return mode == 'likes' ? b.likes.compareTo(a.likes) : b.id.compareTo(a.id);
-          });
+          ..sort((a, b) => _compareCommunityPosts(a, b, mode));
         return _CommunityQuickTab(
           community: c,
           posts: posts,
@@ -3526,8 +4117,17 @@ class _FeedScreenState extends State<FeedScreen> {
       child: Scaffold(
         appBar: null,
         floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
-        floatingActionButton: DragTarget<String>(
-          onWillAccept: (text) => (text ?? '').trim().isNotEmpty,
+        // زر النشر يتحرك مع البار العائم:
+        // - عند ظهور البار: يرتفع فوقه بمسافة خفيفة فقط.
+        // - عند اختفاء البار: ينزل للأسفل ويرجع لمكانه الطبيعي، لكن يبقى ظاهرًا.
+        floatingActionButton: AnimatedPadding(
+          duration: const Duration(milliseconds: 620),
+          curve: Curves.easeOutCubic,
+          padding: EdgeInsetsDirectional.only(
+            bottom: _requestedBottomBarVisible ? 76 : 10,
+          ),
+          child: DragTarget<String>(
+            onWillAccept: (text) => (text ?? '').trim().isNotEmpty,
           onAccept: (text) {
             HapticFeedback.heavyImpact();
             _openCompose(initialText: text);
@@ -3566,11 +4166,14 @@ class _FeedScreenState extends State<FeedScreen> {
                 ),
               ),
             );
-          },
+            },
+          ),
         ),
-        body: Directionality(
-          textDirection: context.appTextDirection,
-          child: Column(
+        body: NotificationListener<UserScrollNotification>(
+          onNotification: _handleFeedUserScroll,
+          child: Directionality(
+            textDirection: context.appTextDirection,
+            child: Column(
             children: [
               // ===== إضافة التبويبات هنا بدلاً من AppBar =====
               Container(
@@ -3594,6 +4197,7 @@ class _FeedScreenState extends State<FeedScreen> {
                 ),
               Expanded(child: TabBarView(children: pages)),
             ],
+            ),
           ),
         ),
       ),
@@ -3685,6 +4289,7 @@ class _PostsList extends StatelessWidget {
   final Future<void> Function(String username)? onStoryTap;
   final void Function(CityPost post) onAuthorTap;
   final Future<void> Function(CityPost post)? onMore;
+  final Set<String> moderatorUsernames;
   final bool isLoadingMore;
   final bool hasMore;
   final Future<void> Function()? onLoadMore;
@@ -3712,6 +4317,7 @@ class _PostsList extends StatelessWidget {
     this.onStoryTap,
     required this.onAuthorTap,
     this.onMore,
+    this.moderatorUsernames = const <String>{},
     this.isLoadingMore = false,
     this.hasMore = false,
     this.onLoadMore,
@@ -3869,6 +4475,7 @@ class _PostsList extends StatelessWidget {
                 },
                 onAuthorTap: () => onAuthorTap(post),
                 onMore: onMore == null ? null : () => onMore!(post),
+                showCommunityModeratorBadge: moderatorUsernames.contains(SupabaseService.displayUsername(post.username)),
               );
             },
           ),
@@ -4027,12 +4634,64 @@ class _RefreshAvatarsStrip extends StatelessWidget {
   }
 }
 
+class _CommunityFeedTabLabel extends StatelessWidget {
+  final String name;
+  final String sortLabel;
+  final VoidCallback onSortTap;
+
+  const _CommunityFeedTabLabel({
+    required this.name,
+    required this.sortLabel,
+    required this.onSortTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 116),
+          child: AppText(
+            name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontWeight: FontWeight.w900),
+          ),
+        ),
+        const SizedBox(width: 4),
+        Semantics(
+          button: true,
+          label: 'ترتيب $name حسب $sortLabel',
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onSortTap,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.keyboard_arrow_down_rounded, size: 18),
+                  const SizedBox(width: 2),
+                  AppText(
+                    sortLabel,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 11, color: AppColors.purple, fontWeight: FontWeight.w900),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _CommunityQuickTab extends StatelessWidget {
   final CityCommunity community;
   final List<CityPost> posts;
-  final String sortMode;
-  final ValueChanged<String> onSortChanged;
-  final VoidCallback onOpenCommunity;
   final Future<void> Function() onRefresh;
   final ImageProvider? Function(String? path) avatarProviderForPath;
   final Future<void> Function(CityPost post) onLike;
@@ -4046,56 +4705,50 @@ class _CommunityQuickTab extends StatelessWidget {
   final Future<void> Function(String username)? onMentionTap;
   final void Function(CityPost post) onAuthorTap;
   final Future<void> Function(CityPost post)? onMore;
-  const _CommunityQuickTab({required this.community, required this.posts, required this.sortMode, required this.onSortChanged, required this.onOpenCommunity, required this.onRefresh, required this.avatarProviderForPath, required this.onLike, required this.onFavorite, required this.onRepost, required this.onShare, required this.onMediaTap, required this.onReplies, this.onViewed, this.onQuotedPostTap, this.onMentionTap, required this.onAuthorTap, this.onMore});
+
+  const _CommunityQuickTab({
+    required this.community,
+    required this.posts,
+    required String sortMode,
+    required ValueChanged<String> onSortChanged,
+    required VoidCallback onOpenCommunity,
+    required this.onRefresh,
+    required this.avatarProviderForPath,
+    required this.onLike,
+    required this.onFavorite,
+    required this.onRepost,
+    required this.onShare,
+    required this.onMediaTap,
+    required this.onReplies,
+    this.onViewed,
+    this.onQuotedPostTap,
+    this.onMentionTap,
+    required this.onAuthorTap,
+    this.onMore,
+  });
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    return Column(
-      children: [
-        Container(
-          padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
-          decoration: BoxDecoration(border: Border(bottom: BorderSide(color: AppColors.purple.withValues(alpha: 0.20)))),
-          child: Row(
-            children: [
-              Expanded(child: InkWell(onTap: onOpenCommunity, child: AppText('# ${community.name}', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)))),
-              PopupMenuButton<String>(
-                initialValue: sortMode,
-                onSelected: onSortChanged,
-                itemBuilder: (_) => const [
-                  PopupMenuItem(value: 'latest', child: AppText('الأحدث')),
-                  PopupMenuItem(value: 'likes', child: AppText('الأكثر إعجاباً')),
-                ],
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  decoration: BoxDecoration(color: AppColors.purple.withValues(alpha: 0.14), borderRadius: BorderRadius.circular(999)),
-                  child: AppText(sortMode == 'likes' ? 'الأكثر إعجاباً' : 'الأحدث', style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w900)),
-                ),
-              ),
-            ],
-          ),
-        ),
-        Expanded(
-          child: _PostsList(
-            posts: posts,
-            emptyText: 'لا توجد تغريدات في هذا المجتمع',
-            isDark: isDark,
-            refreshAvatars: const [],
-            onRefresh: onRefresh,
-            avatarProviderForPath: avatarProviderForPath,
-            onLike: onLike,
-            onFavorite: onFavorite,
-            onRepost: onRepost,
-            onShare: onShare,
-            onMediaTap: onMediaTap,
-            onReplies: onReplies,
-            onViewed: onViewed,
-            onQuotedPostTap: onQuotedPostTap,
-            onMentionTap: onMentionTap,
-            onAuthorTap: onAuthorTap,
-            onMore: onMore,
-          ),
-        ),
-      ],
+    return _PostsList(
+      posts: posts,
+      emptyText: 'لا توجد تغريدات في هذا المجتمع',
+      isDark: isDark,
+      refreshAvatars: const [],
+      onRefresh: onRefresh,
+      avatarProviderForPath: avatarProviderForPath,
+      onLike: onLike,
+      onFavorite: onFavorite,
+      onRepost: onRepost,
+      onShare: onShare,
+      onMediaTap: onMediaTap,
+      onReplies: onReplies,
+      onViewed: onViewed,
+      onQuotedPostTap: onQuotedPostTap,
+      onMentionTap: onMentionTap,
+      onAuthorTap: onAuthorTap,
+      onMore: onMore,
+      moderatorUsernames: community.moderators.map(SupabaseService.displayUsername).toSet(),
     );
   }
 }
@@ -4241,8 +4894,10 @@ class CreateCommunityScreen extends StatefulWidget {
 class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
   final TextEditingController _nameCtrl = TextEditingController();
   final TextEditingController _descCtrl = TextEditingController();
+  final TextEditingController _rulesCtrl = TextEditingController();
   final FocusNode _nameFocus = FocusNode();
   final FocusNode _descFocus = FocusNode();
+  final FocusNode _rulesFocus = FocusNode();
   bool _canCreate = false;
 
   @override
@@ -4256,8 +4911,10 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
     _nameCtrl.removeListener(_updateCanCreate);
     _nameCtrl.dispose();
     _descCtrl.dispose();
+    _rulesCtrl.dispose();
     _nameFocus.dispose();
     _descFocus.dispose();
+    _rulesFocus.dispose();
     super.dispose();
   }
 
@@ -4275,15 +4932,27 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
       return;
     }
 
+    final rules = _rulesCtrl.text
+        .split(RegExp(r'[\n؛;]+'))
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList();
+    if (rules.isEmpty) {
+      NotificationService.showTopNotification(context.tr('اكتب قانون واحد على الأقل للمجتمع'));
+      return;
+    }
+
     FocusScope.of(context).unfocus();
     Navigator.of(context).pop(
       CityCommunity(
         id: DateTime.now().microsecondsSinceEpoch.toString(),
         name: name,
         description: _descCtrl.text.trim(),
+        rules: rules,
         ownerUsername: widget.ownerUsername,
-        moderators: [widget.ownerUsername],
-        members: [widget.ownerUsername],
+        moderators: [SupabaseService.displayUsername(widget.ownerUsername)],
+        members: [SupabaseService.displayUsername(widget.ownerUsername)],
       ),
     );
   }
@@ -4364,11 +5033,24 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
                     controller: _descCtrl,
                     focusNode: _descFocus,
                     maxLines: 4,
-                    textInputAction: TextInputAction.done,
-                    onSubmitted: (_) => _submit(),
+                    textInputAction: TextInputAction.next,
+                    onSubmitted: (_) => FocusScope.of(context).requestFocus(_rulesFocus),
                     decoration: InputDecoration(
                       prefixIcon: Icon(Icons.short_text_rounded),
                       hintText: context.tr('وصف المجتمع'),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _rulesCtrl,
+                    focusNode: _rulesFocus,
+                    minLines: 4,
+                    maxLines: 8,
+                    textInputAction: TextInputAction.newline,
+                    decoration: InputDecoration(
+                      prefixIcon: Icon(Icons.rule_rounded),
+                      hintText: context.tr('قوانين المجتمع - اكتب كل قانون في سطر مستقل'),
+                      helperText: context.tr('هذه القوانين ستظهر لأي شخص قبل متابعة المجتمع'),
                     ),
                   ),
                 ],
@@ -4698,6 +5380,9 @@ class _RepliesScreenState extends State<RepliesScreen> {
   CityReply? _replyingToReply;
   XFile? _selectedMedia;
   CityMediaType? _selectedMediaType;
+  Timer? _replyMentionDebounce;
+  List<Map<String, dynamic>> _replyMentionSuggestions = <Map<String, dynamic>>[];
+  bool _loadingReplyMentionSuggestions = false;
 
   final List<CityReply> _replyStack = <CityReply>[];
   final Set<String> _pendingReplyLikeIds = <String>{};
@@ -4722,6 +5407,7 @@ class _RepliesScreenState extends State<RepliesScreen> {
   @override
   void dispose() {
     _replyRecordTimer?.cancel();
+    _replyMentionDebounce?.cancel();
     _replyRecorder.dispose();
     _replyFocus.unfocus();
     _replyFocus.dispose();
@@ -4927,6 +5613,103 @@ class _RepliesScreenState extends State<RepliesScreen> {
     } catch (e, st) { _logIgnoredError(e, st); }
   }
 
+
+  String? _activeReplyMentionQuery() {
+    final selection = _replyCtrl.selection;
+    if (!selection.isValid) return null;
+    final end = selection.baseOffset.clamp(0, _replyCtrl.text.length).toInt();
+    final beforeCursor = _replyCtrl.text.substring(0, end);
+    final match = RegExp(r'(?:^|\s)@([a-zA-Z0-9_\.]*)$').firstMatch(beforeCursor);
+    if (match == null) return null;
+    return match.group(1) ?? '';
+  }
+
+  Future<void> _updateReplyMentionSuggestions() async {
+    final query = _activeReplyMentionQuery();
+    _replyMentionDebounce?.cancel();
+
+    if (query == null) {
+      if (_replyMentionSuggestions.isNotEmpty || _loadingReplyMentionSuggestions) {
+        setState(() {
+          _replyMentionSuggestions = <Map<String, dynamic>>[];
+          _loadingReplyMentionSuggestions = false;
+        });
+      }
+      return;
+    }
+
+    setState(() => _loadingReplyMentionSuggestions = true);
+    _replyMentionDebounce = Timer(const Duration(milliseconds: 180), () async {
+      try {
+        final users = query.trim().isEmpty
+            ? await SupabaseService.getUsers()
+            : await SupabaseService.searchUsers(query.trim());
+        if (!mounted || _activeReplyMentionQuery() != query) return;
+        final seen = <String>{};
+        final cleaned = <Map<String, dynamic>>[];
+        for (final raw in users) {
+          final username = SupabaseService.displayUsername((raw['username'] ?? raw['id'] ?? '').toString());
+          if (username == '@user' || !seen.add(username)) continue;
+          cleaned.add({
+            ...raw,
+            'username': username,
+            'name': (raw['name'] ?? raw['profileName'] ?? username).toString(),
+            'avatar_url': (raw['avatar_url'] ?? raw['imagePath'] ?? raw['profileImagePath'] ?? '').toString(),
+          });
+          if (cleaned.length >= 8) break;
+        }
+        setState(() {
+          _replyMentionSuggestions = cleaned;
+          _loadingReplyMentionSuggestions = false;
+        });
+      } catch (e, st) {
+        _logIgnoredError(e, st);
+        if (!mounted) return;
+        setState(() {
+          _replyMentionSuggestions = <Map<String, dynamic>>[];
+          _loadingReplyMentionSuggestions = false;
+        });
+      }
+    });
+  }
+
+  void _insertReplyMention(String username) {
+    final selection = _replyCtrl.selection;
+    if (!selection.isValid) return;
+    final end = selection.baseOffset.clamp(0, _replyCtrl.text.length).toInt();
+    final beforeCursor = _replyCtrl.text.substring(0, end);
+    final afterCursor = _replyCtrl.text.substring(end);
+    final match = RegExp(r'(?:^|\s)@([a-zA-Z0-9_\.]*)$').firstMatch(beforeCursor);
+    if (match == null) return;
+
+    final clean = SupabaseService.displayUsername(username);
+    final start = match.start;
+    final keepPrefix = beforeCursor.substring(0, start);
+    final hasLeadingSpace = match.group(0)?.startsWith(' ') == true;
+    final replacement = '${hasLeadingSpace ? ' ' : ''}$clean ';
+    final nextText = '$keepPrefix$replacement$afterCursor';
+    final cursor = (keepPrefix + replacement).length;
+
+    _replyCtrl.value = TextEditingValue(
+      text: nextText,
+      selection: TextSelection.collapsed(offset: cursor),
+    );
+    setState(() {
+      _replyMentionSuggestions = <Map<String, dynamic>>[];
+      _loadingReplyMentionSuggestions = false;
+    });
+    _replyFocus.requestFocus();
+  }
+
+  ImageProvider? _replyMentionAvatarProvider(String? path) {
+    final p = path?.trim();
+    if (p == null || p.isEmpty) return null;
+    if (p.startsWith('http://') || p.startsWith('https://')) return NetworkImage(p);
+    final f = File(p);
+    if (!f.existsSync()) return null;
+    return FileImage(f);
+  }
+
   Future<void> _saveReplyNotification(String text) async {
     final target = SupabaseService.displayUsername(widget.post.username);
     final author = SupabaseService.displayUsername(widget.currentUsername);
@@ -4966,8 +5749,15 @@ class _RepliesScreenState extends State<RepliesScreen> {
     if (text.isEmpty && _selectedMedia == null && _replyVoicePath == null) return;
 
     FocusScope.of(context).unfocus();
+    _replyMentionDebounce?.cancel();
 
-    if (mounted) setState(() => _sending = true);
+    if (mounted) {
+      setState(() {
+        _sending = true;
+        _replyMentionSuggestions = <Map<String, dynamic>>[];
+        _loadingReplyMentionSuggestions = false;
+      });
+    }
 
     final targetReply = _replyingToReply ?? _openedReply;
     final parentReplyId = targetReply?.id;
@@ -5059,6 +5849,8 @@ class _RepliesScreenState extends State<RepliesScreen> {
       _replyVoicePath = null;
       _replyVoiceSeconds = 0;
       _replyingToReply = null;
+      _replyMentionSuggestions = <Map<String, dynamic>>[];
+      _loadingReplyMentionSuggestions = false;
 
       unawaited(widget.onChanged());
 
@@ -5078,6 +5870,8 @@ class _RepliesScreenState extends State<RepliesScreen> {
       }
       _replyingToReply = reply;
       _replyCtrl.clear();
+      _replyMentionSuggestions = <Map<String, dynamic>>[];
+      _loadingReplyMentionSuggestions = false;
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) FocusScope.of(context).requestFocus(_replyFocus);
@@ -5113,6 +5907,8 @@ class _RepliesScreenState extends State<RepliesScreen> {
       }
       _replyingToReply = reply;
       _replyCtrl.clear();
+      _replyMentionSuggestions = <Map<String, dynamic>>[];
+      _loadingReplyMentionSuggestions = false;
     });
     unawaited(_markReplyViewed(reply));
   }
@@ -5123,6 +5919,8 @@ class _RepliesScreenState extends State<RepliesScreen> {
         _replyStack.removeLast();
         _replyingToReply = _openedReply;
         _replyCtrl.clear();
+        _replyMentionSuggestions = <Map<String, dynamic>>[];
+        _loadingReplyMentionSuggestions = false;
       });
       return false;
     }
@@ -5611,6 +6409,16 @@ class _RepliesScreenState extends State<RepliesScreen> {
                       ),
                       const SizedBox(height: 6),
                     ],
+                    if (_loadingReplyMentionSuggestions || _replyMentionSuggestions.isNotEmpty) ...[
+                      _MentionSuggestionsBox(
+                        users: _replyMentionSuggestions,
+                        loading: _loadingReplyMentionSuggestions,
+                        isDark: isDark,
+                        avatarProvider: _replyMentionAvatarProvider,
+                        onPick: _insertReplyMention,
+                      ).animate().fadeIn(duration: 180.ms).scale(begin: const Offset(0.98, 0.98), end: const Offset(1, 1)),
+                      const SizedBox(height: 8),
+                    ],
                     Row(
                       children: [
                         _SmallPurpleAction(icon: Icons.add_rounded, tooltip: context.tr('صوت / صورة / فيديو'), onTap: _pickReplyAttachment),
@@ -5620,6 +6428,8 @@ class _RepliesScreenState extends State<RepliesScreen> {
                             controller: _replyCtrl,
                             focusNode: _replyFocus,
                             textInputAction: TextInputAction.send,
+                            onTap: _updateReplyMentionSuggestions,
+                            onChanged: (_) => _updateReplyMentionSuggestions(),
                             onSubmitted: (_) => _addReply(),
                             decoration: InputDecoration(
                               hintText: targetName == null ? context.tr('اكتب رد...') : context.tr('اكتب ردك على $targetName...'),
@@ -5655,6 +6465,61 @@ class _RepliesScreenState extends State<RepliesScreen> {
 
 
 
+
+class _RespectFeedNumberFormatter {
+  const _RespectFeedNumberFormatter._();
+
+  static String compact(BuildContext context, int value) {
+    // لا نستخدم context.appLanguage هنا لأنه يعتمد على Provider listen=true،
+    // وقد تُستدعى هذه الدالة من عناصر ضغط/أنيميشن خارج مسار build فتظهر رسالة:
+    // Tried to listen to a value exposed with provider from outside of the widget tree.
+    final lang = Localizations.maybeLocaleOf(context)?.languageCode ?? 'ar';
+    final latin = _compactLatin(value);
+    return lang == 'ar' ? _toArabicDigits(latin) : latin;
+  }
+
+  static String _compactLatin(int value) {
+    final sign = value < 0 ? '-' : '';
+    final absValue = value.abs();
+    if (absValue < 1000) return '$value';
+
+    final units = <MapEntry<double, String>>[
+      const MapEntry(1000000000.0, 'B'),
+      const MapEntry(1000000.0, 'M'),
+      const MapEntry(1000.0, 'K'),
+    ];
+
+    for (final unit in units) {
+      if (absValue >= unit.key) {
+        final scaled = absValue / unit.key;
+        final decimals = scaled < 100 ? 1 : 0;
+        var text = scaled.toStringAsFixed(decimals);
+        if (text.endsWith('.0')) text = text.substring(0, text.length - 2);
+        return '$sign$text ${unit.value}';
+      }
+    }
+    return '$value';
+  }
+
+  static String _toArabicDigits(String value) {
+    const digits = <String, String>{
+      '0': '٠',
+      '1': '١',
+      '2': '٢',
+      '3': '٣',
+      '4': '٤',
+      '5': '٥',
+      '6': '٦',
+      '7': '٧',
+      '8': '٨',
+      '9': '٩',
+    };
+    var out = value;
+    digits.forEach((latin, arabic) => out = out.replaceAll(latin, arabic));
+    return out;
+  }
+}
+
 class _TweetActionRow extends StatelessWidget {
   final bool isDark;
   final bool liked;
@@ -5686,7 +6551,7 @@ class _TweetActionRow extends StatelessWidget {
     this.onShare,
   });
 
-  String _label(int value) => value <= 0 ? '' : value.toString();
+  String _label(BuildContext context, int value) => value <= 0 ? '' : _RespectFeedNumberFormatter.compact(context, value);
 
   @override
   Widget build(BuildContext context) {
@@ -5703,7 +6568,7 @@ class _TweetActionRow extends StatelessWidget {
           onTap: onReply,
           color: muted,
           activeColor: AppColors.purple,
-          count: _label(replies),
+          count: _label(context, replies),
           isActive: replies > 0,
           isDark: isDark,
         ),
@@ -5713,7 +6578,7 @@ class _TweetActionRow extends StatelessWidget {
           onTap: onRepost,
           color: muted,
           activeColor: AppColors.success,
-          count: _label(reposts),
+          count: _label(context, reposts),
           isActive: reposted,
           isDark: isDark,
           rotateOnTap: true,
@@ -5724,7 +6589,7 @@ class _TweetActionRow extends StatelessWidget {
           onTap: onLike,
           color: muted,
           activeColor: AppColors.danger,
-          count: _label(likes),
+          count: _label(context, likes),
           isActive: liked,
           isDark: isDark,
           heartBurst: true,
@@ -5744,7 +6609,7 @@ class _TweetActionRow extends StatelessWidget {
           onTap: () {},
           color: muted,
           activeColor: AppColors.purple,
-          count: _label(views),
+          count: _label(context, views),
           isActive: views > 0,
           isDark: isDark,
           passive: true,
@@ -6433,6 +7298,7 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
   late String _audience;
   String _communityId = '';
   String _communityName = '';
+  bool _checkingBeforePublish = false;
 
   @override
   void initState() {
@@ -6843,6 +7709,7 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
   }
 
   Future<void> _publish() async {
+    if (_checkingBeforePublish) return;
     final text = _ctrl.text.trim();
     if (_isRecording) {
       await _stopRecording();
@@ -6853,6 +7720,36 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
       NotificationService.showTopError(context.tr('تجاوزت حد ${widget.maxChars} حرف'));
       return;
     }
+
+    if (text.isNotEmpty) {
+      setState(() => _checkingBeforePublish = true);
+      try {
+        final moderation = await SupabaseService.checkPostBeforePublish(
+          text: text,
+          authorUsername: widget.username,
+          audience: _audience,
+          communityId: _communityId,
+        );
+        final blocked = moderation['blocked'] == true ||
+            moderation['prePublishBlocked'] == true ||
+            moderation['shouldDelete'] == true ||
+            moderation['delete'] == true;
+        if (blocked) {
+          await HapticFeedback.mediumImpact();
+          await NotificationService.showPrePublishBlockedNotification(
+            category: (moderation['category'] ?? '').toString(),
+            reason: (moderation['reason'] ?? '').toString(),
+            matchedTerm: (moderation['matchedTerm'] ?? '').toString(),
+            decisionSource: (moderation['decisionSource'] ?? moderation['decisionSourceKind'] ?? '').toString(),
+            moderationMemoryUsed: SupabaseService.truthy(moderation['moderationMemoryUsed'] ?? moderation['memoryUsed']),
+          );
+          return;
+        }
+      } finally {
+        if (mounted) setState(() => _checkingBeforePublish = false);
+      }
+    }
+
     if (!await _validateSelectedVideoPowerLimit()) return;
 
     Navigator.pop(
@@ -7020,9 +7917,15 @@ class _ComposePostScreenState extends State<ComposePostScreen> {
                                 : const [],
                           ),
                           child: FilledButton.icon(
-                            onPressed: hasContent ? _publish : null,
-                            icon: Icon(widget.editMode ? Icons.check_rounded : Icons.send_rounded, size: 18),
-                            label: AppText(widget.editMode ? 'حفظ' : 'نشر'),
+                            onPressed: hasContent && !_checkingBeforePublish ? _publish : null,
+                            icon: _checkingBeforePublish
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                  )
+                                : Icon(widget.editMode ? Icons.check_rounded : Icons.send_rounded, size: 18),
+                            label: AppText(_checkingBeforePublish ? 'جاري الفحص' : (widget.editMode ? 'حفظ' : 'نشر')),
                             style: FilledButton.styleFrom(
                               backgroundColor: AppColors.purple,
                               foregroundColor: Colors.white,
@@ -7598,23 +8501,25 @@ class _UserProfileViewScreenState extends State<UserProfileViewScreen> with Sing
 
   Future<void> _editPost(CityPost post) async {
     String draftText = post.text;
-    final result = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: Theme.of(context).brightness == Brightness.dark ? AppColors.darkCard : AppColors.lightCard,
-        title: const AppText('تعديل التغريدة', style: TextStyle(fontWeight: FontWeight.w900)),
-        content: TextFormField(
-          initialValue: post.text,
-          maxLines: 5,
-          autofocus: true,
-          onChanged: (value) => draftText = value,
-          decoration: InputDecoration(hintText: context.tr('اكتب نص التغريدة')),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const AppText('إلغاء')),
-          FilledButton(onPressed: () => Navigator.pop(context, draftText), child: const AppText('حفظ')),
-        ],
+    final result = await AppDialog.custom<String>(
+      context,
+      title: 'تعديل التغريدة',
+      type: AppDialogType.info,
+      icon: Icons.edit_rounded,
+      content: TextFormField(
+        initialValue: post.text,
+        maxLines: 5,
+        autofocus: true,
+        onChanged: (value) => draftText = value,
+        decoration: InputDecoration(hintText: context.tr('اكتب نص التغريدة')),
       ),
+      actions: <AppDialogAction<String>>[
+        const AppDialogAction<String>.secondary(text: 'إلغاء'),
+        AppDialogAction<String>.primary(
+          text: 'حفظ',
+          onPressed: () => Navigator.of(context, rootNavigator: true).pop(draftText),
+        ),
+      ],
     );
     if (result == null || result.trim().isEmpty) return;
     await widget.onEditPost?.call(post, result.trim());
@@ -7649,17 +8554,12 @@ class _UserProfileViewScreenState extends State<UserProfileViewScreen> with Sing
   }
 
   Future<void> _deletePost(CityPost post) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: Theme.of(context).brightness == Brightness.dark ? AppColors.darkCard : AppColors.lightCard,
-        title: const AppText('حذف التغريدة', style: TextStyle(fontWeight: FontWeight.w900)),
-        content: const AppText('هل تريد حذف هذه التغريدة نهائيًا؟'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const AppText('إلغاء')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const AppText('حذف')),
-        ],
-      ),
+    final ok = await AppDialog.delete(
+      context,
+      title: 'حذف التغريدة',
+      message: 'هل تريد حذف هذه التغريدة نهائيًا؟',
+      confirmText: 'حذف',
+      cancelText: 'إلغاء',
     );
     if (ok != true) return;
     await widget.onDeletePost?.call(post);
@@ -8660,6 +9560,7 @@ class _PostCard extends StatelessWidget {
   final VoidCallback? onMore;
   final VoidCallback? onDelete;
   final bool disableCardTap;
+  final bool showCommunityModeratorBadge;
 
   const _PostCard({
     required this.post,
@@ -8681,6 +9582,7 @@ class _PostCard extends StatelessWidget {
     this.onMore,
     this.onDelete,
     this.disableCardTap = false,
+    this.showCommunityModeratorBadge = false,
   });
 
   @override
@@ -8827,6 +9729,8 @@ class _PostCard extends StatelessWidget {
                                           ),
                                         ),
                                         AppText('· ${post.time}', style: TextStyle(color: mutedColor, fontSize: 12)),
+                                        if (showCommunityModeratorBadge)
+                                          const _MiniChip(text: 'مشرف', color: AppColors.purple),
                                         if (post.authorSubscriptionPriority > 0 && post.subscriptionTier != 'free')
                                           _SubscriptionBoostBadge(
                                             tier: post.subscriptionTier,
@@ -8888,7 +9792,9 @@ class _PostCard extends StatelessWidget {
                     ),
                     if ((post.mediaPath ?? '').trim().isNotEmpty && post.mediaType != null) ...[
                       const SizedBox(height: 12),
-                      GestureDetector(onTap: onMediaTap, child: _PostMedia(path: post.mediaPath!, type: post.mediaType!)),
+                      post.mediaType == CityMediaType.video
+                          ? _PostMedia(path: post.mediaPath!, type: post.mediaType!, onOpen: onMediaTap)
+                          : GestureDetector(onTap: onMediaTap, child: _PostMedia(path: post.mediaPath!, type: post.mediaType!, onOpen: onMediaTap)),
                     ],
                     if ((post.voicePath ?? '').trim().isNotEmpty) ...[
                       const SizedBox(height: 12),
@@ -9493,8 +10399,9 @@ class _ProfileAvatar extends StatelessWidget {
 class _PostMedia extends StatelessWidget {
   final String path;
   final CityMediaType type;
+  final VoidCallback? onOpen;
 
-  const _PostMedia({required this.path, required this.type});
+  const _PostMedia({required this.path, required this.type, this.onOpen});
 
   static bool _isRemote(String value) {
     final v = value.trim().toLowerCase();
@@ -9519,7 +10426,7 @@ class _PostMedia extends StatelessWidget {
     // أحيانًا يرجع رابط فيديو داخل حقل صورة بسبب بيانات قديمة أو إعادة نشر.
     // لا تسمح أبدًا بتمرير فيديو إلى Image.network حتى لا تعلق الواجهة.
     if (looksLikeVideo) {
-      return _VideoPlayerBox(path: mediaPath);
+      return _VideoPlayerBox(path: mediaPath, onOpen: onOpen);
     }
 
     if (type == CityMediaType.image || type == CityMediaType.gif) {
@@ -9553,38 +10460,121 @@ class _PostMedia extends StatelessWidget {
       );
     }
 
-    return _VideoPlayerBox(path: mediaPath);
+    return _VideoPlayerBox(path: mediaPath, onOpen: onOpen);
   }
 }
 
 
-class _VideoPlayerBox extends StatelessWidget {
-  final String path;
 
-  const _VideoPlayerBox({required this.path});
+class _VideoPlayerBox extends StatefulWidget {
+  final String path;
+  final VoidCallback? onOpen;
+
+  const _VideoPlayerBox({required this.path, this.onOpen});
+
+  @override
+  State<_VideoPlayerBox> createState() => _VideoPlayerBoxState();
+}
+
+class _VideoPlayerBoxState extends State<_VideoPlayerBox> {
+  VideoPlayerController? _controller;
+  bool _initializing = false;
+  bool _muted = true;
+  bool _loadFailed = false;
 
   bool get _isRemote {
-    final v = path.trim().toLowerCase();
+    final v = widget.path.trim().toLowerCase();
     return v.startsWith('http://') || v.startsWith('https://');
   }
 
   String get _cleanFileName {
-    final raw = path.trim().split('?').first;
+    final raw = widget.path.trim().split('?').first;
     final parts = raw.split('/').where((e) => e.trim().isNotEmpty).toList();
     final name = parts.isEmpty ? 'video' : parts.last;
     return name.length > 34 ? '${name.substring(0, 31)}...' : name;
   }
 
+  bool get _isReady => _controller?.value.isInitialized == true;
+  bool get _isPlaying => _controller?.value.isPlaying == true;
+
   @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return Container(
-      height: 230,
-      width: double.infinity,
+  void didUpdateWidget(covariant _VideoPlayerBox oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.path != widget.path) {
+      final old = _controller;
+      _controller = null;
+      _initializing = false;
+      _loadFailed = false;
+      old?.dispose();
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _ensureController() async {
+    if (_controller != null) return;
+    final raw = widget.path.trim();
+    if (raw.isEmpty) throw StateError('Empty video path');
+
+    final controller = _isRemote
+        ? VideoPlayerController.networkUrl(
+            Uri.parse(raw),
+            videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
+          )
+        : VideoPlayerController.file(
+            File(raw),
+            videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
+          );
+
+    _controller = controller;
+    await controller.initialize();
+    await controller.setLooping(true);
+    await controller.setVolume(_muted ? 0 : 1);
+  }
+
+  Future<void> _togglePlay() async {
+    if (_initializing) return;
+    try {
+      if (!_isReady) {
+        setState(() {
+          _initializing = true;
+          _loadFailed = false;
+        });
+        await _ensureController();
+      }
+
+      final controller = _controller;
+      if (controller == null) return;
+      if (controller.value.isPlaying) {
+        await controller.pause();
+      } else {
+        await controller.play();
+      }
+    } catch (e, st) {
+      _logIgnoredError(e, st);
+      if (mounted) setState(() => _loadFailed = true);
+    } finally {
+      if (mounted) setState(() => _initializing = false);
+    }
+  }
+
+  Future<void> _toggleMute() async {
+    final next = !_muted;
+    setState(() => _muted = next);
+    try {
+      await _controller?.setVolume(next ? 0 : 1);
+    } catch (e, st) {
+      _logIgnoredError(e, st);
+    }
+  }
+
+  Widget _placeholder(bool isDark) {
+    return DecoratedBox(
       decoration: BoxDecoration(
-        color: isDark ? AppColors.darkCard2 : AppColors.lightCard2,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
@@ -9606,67 +10596,230 @@ class _VideoPlayerBox extends StatelessWidget {
               ),
             ),
           ),
-          Center(
-            child: Container(
-              width: 74,
-              height: 74,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: Colors.black.withValues(alpha: .45),
-                border: Border.all(color: Colors.white.withValues(alpha: .22)),
-                boxShadow: [
-                  BoxShadow(
-                    color: AppColors.purple.withValues(alpha: .24),
-                    blurRadius: 24,
-                    spreadRadius: 2,
-                  ),
+          if (_loadFailed)
+            Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: const [
+                  Icon(Icons.error_outline_rounded, color: Colors.white70, size: 34),
+                  SizedBox(height: 8),
+                  AppText('تعذر تشغيل الفيديو', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w900)),
                 ],
               ),
-              child: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 46),
             ),
-          ),
-          PositionedDirectional(
-            start: 14,
-            end: 14,
-            bottom: 14,
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: .42),
-                    borderRadius: BorderRadius.circular(999),
-                    border: Border.all(color: Colors.white.withValues(alpha: .12)),
-                  ),
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.videocam_rounded, color: Colors.white, size: 16),
-                      SizedBox(width: 6),
-                      AppText(
-                        'فيديو',
-                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 12),
+        ],
+      ),
+    );
+  }
+
+  Widget _videoView() {
+    final controller = _controller;
+    if (controller == null || !controller.value.isInitialized) return const SizedBox.shrink();
+    final aspect = controller.value.aspectRatio <= 0 ? 16 / 9 : controller.value.aspectRatio;
+    return Center(
+      child: AspectRatio(
+        aspectRatio: aspect,
+        child: VideoPlayer(controller),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final ready = _isReady;
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        height: 230,
+        width: double.infinity,
+        decoration: BoxDecoration(
+          color: isDark ? AppColors.darkCard2 : AppColors.lightCard2,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
+        ),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: _togglePlay,
+          child: Stack(
+            children: [
+              Positioned.fill(child: ready ? _videoView() : _placeholder(isDark)),
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Colors.black.withValues(alpha: .08),
+                          Colors.transparent,
+                          Colors.black.withValues(alpha: .58),
+                        ],
                       ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: AppText(
-                    _isRemote ? 'اضغط للتشغيل' : _cleanFileName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: Colors.white.withValues(alpha: .78),
-                      fontWeight: FontWeight.w800,
-                      fontSize: 12,
                     ),
                   ),
                 ),
-              ],
-            ),
+              ),
+              Center(
+                child: AnimatedScale(
+                  scale: _isPlaying ? 0.72 : 1,
+                  duration: const Duration(milliseconds: 170),
+                  curve: Curves.easeOutBack,
+                  child: InkWell(
+                    onTap: _togglePlay,
+                    borderRadius: BorderRadius.circular(999),
+                    child: Container(
+                      width: 70,
+                      height: 70,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Colors.black.withValues(alpha: _isPlaying ? .25 : .52),
+                        border: Border.all(color: Colors.white.withValues(alpha: .22)),
+                        boxShadow: [
+                          BoxShadow(
+                            color: AppColors.purple.withValues(alpha: .24),
+                            blurRadius: 24,
+                            spreadRadius: 2,
+                          ),
+                        ],
+                      ),
+                      child: _initializing
+                          ? const Padding(
+                              padding: EdgeInsets.all(22),
+                              child: CircularProgressIndicator(strokeWidth: 2.6, color: Colors.white),
+                            )
+                          : Icon(
+                              _isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                              color: Colors.white,
+                              size: 44,
+                            ),
+                    ),
+                  ),
+                ),
+              ),
+              PositionedDirectional(
+                top: 10,
+                end: 10,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _VideoCircleButton(
+                      icon: _muted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
+                      tooltip: _muted ? 'تشغيل صوت الفيديو' : 'كتم صوت الفيديو',
+                      onTap: _toggleMute,
+                    ),
+                    if (widget.onOpen != null) ...[
+                      const SizedBox(width: 8),
+                      _VideoCircleButton(
+                        icon: Icons.open_in_full_rounded,
+                        tooltip: 'فتح الفيديو',
+                        onTap: widget.onOpen!,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              PositionedDirectional(
+                start: 14,
+                end: 14,
+                bottom: 14,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: .46),
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(color: Colors.white.withValues(alpha: .12)),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(_isPlaying ? Icons.play_circle_fill_rounded : Icons.videocam_rounded, color: Colors.white, size: 16),
+                              const SizedBox(width: 6),
+                              AppText(
+                                _isPlaying ? 'يعمل الآن' : 'فيديو',
+                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 12),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: AppText(
+                            _isRemote ? 'اضغط للتشغيل من الفيد' : _cleanFileName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: Colors.white.withValues(alpha: .82),
+                              fontWeight: FontWeight.w800,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (ready) ...[
+                      const SizedBox(height: 8),
+                      VideoProgressIndicator(
+                        _controller!,
+                        allowScrubbing: true,
+                        padding: EdgeInsets.zero,
+                        colors: VideoProgressColors(
+                          playedColor: AppColors.purpleLight,
+                          bufferedColor: Colors.white.withValues(alpha: .32),
+                          backgroundColor: Colors.white.withValues(alpha: .15),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
+      ),
+    );
+  }
+}
+
+class _VideoCircleButton extends StatelessWidget {
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onTap;
+
+  const _VideoCircleButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(999),
+          child: Container(
+            width: 40,
+            height: 40,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: .48),
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white.withValues(alpha: .16)),
+            ),
+            child: Icon(icon, color: Colors.white, size: 21),
+          ),
+        ),
       ),
     );
   }
@@ -10497,7 +11650,7 @@ class _FullscreenTweetInfo extends StatelessWidget {
             children: [
               _FullscreenAction(
                 icon: Icons.chat_bubble_outline_rounded,
-                label: '${post.replyCount}',
+                label: _RespectFeedNumberFormatter.compact(context, post.replyCount),
                 onTap: onReply == null ? null : () async {
                   Navigator.of(context).pop();
                   await onReply!();
@@ -10506,14 +11659,14 @@ class _FullscreenTweetInfo extends StatelessWidget {
               const SizedBox(width: 18),
               _FullscreenAction(
                 icon: Icons.repeat_rounded,
-                label: '${post.reposts}',
+                label: _RespectFeedNumberFormatter.compact(context, post.reposts),
                 color: post.isReposted ? AppColors.purple : Colors.white70,
                 onTap: onRepost == null ? null : () async => onRepost!(),
               ),
               const SizedBox(width: 18),
               _FullscreenAction(
                 icon: post.isLiked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
-                label: '${post.likes}',
+                label: _RespectFeedNumberFormatter.compact(context, post.likes),
                 color: post.isLiked ? AppColors.danger : Colors.white70,
                 onTap: onLike == null ? null : () async => onLike!(),
               ),
@@ -10525,7 +11678,7 @@ class _FullscreenTweetInfo extends StatelessWidget {
                 onTap: onFavorite == null ? null : () async => onFavorite!(),
               ),
               const Spacer(),
-              _FullscreenAction(icon: Icons.bar_chart_rounded, label: '${post.views}'),
+              _FullscreenAction(icon: Icons.bar_chart_rounded, label: _RespectFeedNumberFormatter.compact(context, post.views)),
             ],
           ),
         ],
@@ -10628,12 +11781,16 @@ class _PostDetailsScreenState extends State<PostDetailsScreen> {
   int _replyVoiceSeconds = 0;
   Timer? _replyRecordTimer;
   bool _sendingReply = false;
+  Timer? _inlineReplyMentionDebounce;
+  List<Map<String, dynamic>> _inlineReplyMentionSuggestions = <Map<String, dynamic>>[];
+  bool _loadingInlineReplyMentionSuggestions = false;
   String? _replyingToUser;
   String? _replyingToUsername;
 
   @override
   void dispose() {
     _replyRecordTimer?.cancel();
+    _inlineReplyMentionDebounce?.cancel();
     if (_recordingReply) {
       unawaited(_replyRecorder.stop());
     }
@@ -10875,6 +12032,103 @@ class _PostDetailsScreenState extends State<PostDetailsScreen> {
     }
   }
 
+
+  String? _activeInlineReplyMentionQuery() {
+    final selection = _replyCtrl.selection;
+    if (!selection.isValid) return null;
+    final end = selection.baseOffset.clamp(0, _replyCtrl.text.length).toInt();
+    final beforeCursor = _replyCtrl.text.substring(0, end);
+    final match = RegExp(r'(?:^|\s)@([a-zA-Z0-9_\.]*)$').firstMatch(beforeCursor);
+    if (match == null) return null;
+    return match.group(1) ?? '';
+  }
+
+  Future<void> _updateInlineReplyMentionSuggestions() async {
+    final query = _activeInlineReplyMentionQuery();
+    _inlineReplyMentionDebounce?.cancel();
+
+    if (query == null) {
+      if (_inlineReplyMentionSuggestions.isNotEmpty || _loadingInlineReplyMentionSuggestions) {
+        setState(() {
+          _inlineReplyMentionSuggestions = <Map<String, dynamic>>[];
+          _loadingInlineReplyMentionSuggestions = false;
+        });
+      }
+      return;
+    }
+
+    setState(() => _loadingInlineReplyMentionSuggestions = true);
+    _inlineReplyMentionDebounce = Timer(const Duration(milliseconds: 180), () async {
+      try {
+        final users = query.trim().isEmpty
+            ? await SupabaseService.getUsers()
+            : await SupabaseService.searchUsers(query.trim());
+        if (!mounted || _activeInlineReplyMentionQuery() != query) return;
+        final seen = <String>{};
+        final cleaned = <Map<String, dynamic>>[];
+        for (final raw in users) {
+          final username = SupabaseService.displayUsername((raw['username'] ?? raw['id'] ?? '').toString());
+          if (username == '@user' || !seen.add(username)) continue;
+          cleaned.add({
+            ...raw,
+            'username': username,
+            'name': (raw['name'] ?? raw['profileName'] ?? username).toString(),
+            'avatar_url': (raw['avatar_url'] ?? raw['imagePath'] ?? raw['profileImagePath'] ?? '').toString(),
+          });
+          if (cleaned.length >= 8) break;
+        }
+        setState(() {
+          _inlineReplyMentionSuggestions = cleaned;
+          _loadingInlineReplyMentionSuggestions = false;
+        });
+      } catch (e, st) {
+        _logIgnoredError(e, st);
+        if (!mounted) return;
+        setState(() {
+          _inlineReplyMentionSuggestions = <Map<String, dynamic>>[];
+          _loadingInlineReplyMentionSuggestions = false;
+        });
+      }
+    });
+  }
+
+  void _insertInlineReplyMention(String username) {
+    final selection = _replyCtrl.selection;
+    if (!selection.isValid) return;
+    final end = selection.baseOffset.clamp(0, _replyCtrl.text.length).toInt();
+    final beforeCursor = _replyCtrl.text.substring(0, end);
+    final afterCursor = _replyCtrl.text.substring(end);
+    final match = RegExp(r'(?:^|\s)@([a-zA-Z0-9_\.]*)$').firstMatch(beforeCursor);
+    if (match == null) return;
+
+    final clean = SupabaseService.displayUsername(username);
+    final start = match.start;
+    final keepPrefix = beforeCursor.substring(0, start);
+    final hasLeadingSpace = match.group(0)?.startsWith(' ') == true;
+    final replacement = '${hasLeadingSpace ? ' ' : ''}$clean ';
+    final nextText = '$keepPrefix$replacement$afterCursor';
+    final cursor = (keepPrefix + replacement).length;
+
+    _replyCtrl.value = TextEditingValue(
+      text: nextText,
+      selection: TextSelection.collapsed(offset: cursor),
+    );
+    setState(() {
+      _inlineReplyMentionSuggestions = <Map<String, dynamic>>[];
+      _loadingInlineReplyMentionSuggestions = false;
+    });
+    _replyFocus.requestFocus();
+  }
+
+  ImageProvider? _inlineReplyMentionAvatarProvider(String? path) {
+    final p = path?.trim();
+    if (p == null || p.isEmpty) return null;
+    if (p.startsWith('http://') || p.startsWith('https://')) return NetworkImage(p);
+    final f = File(p);
+    if (!f.existsSync()) return null;
+    return FileImage(f);
+  }
+
   Future<void> _sendInlineReply() async {
     if (_sendingReply) return;
     if (_recordingReply) {
@@ -10885,7 +12139,11 @@ class _PostDetailsScreenState extends State<PostDetailsScreen> {
     if (text.isEmpty && _replyMedia == null && _replyVoicePath == null) return;
 
     FocusScope.of(context).unfocus();
-    setState(() => _sendingReply = true);
+    setState(() {
+      _sendingReply = true;
+      _inlineReplyMentionSuggestions = <Map<String, dynamic>>[];
+      _loadingInlineReplyMentionSuggestions = false;
+    });
 
     try {
       final now = DateTime.now();
@@ -10933,6 +12191,8 @@ class _PostDetailsScreenState extends State<PostDetailsScreen> {
         _replyVoiceSeconds = 0;
         _replyingToUser = null;
         _replyingToUsername = null;
+        _inlineReplyMentionSuggestions = <Map<String, dynamic>>[];
+        _loadingInlineReplyMentionSuggestions = false;
       });
 
       await _refreshReplies();
@@ -11017,6 +12277,16 @@ class _PostDetailsScreenState extends State<PostDetailsScreen> {
               ),
               const SizedBox(height: 8),
             ],
+            if (_loadingInlineReplyMentionSuggestions || _inlineReplyMentionSuggestions.isNotEmpty) ...[
+              _MentionSuggestionsBox(
+                users: _inlineReplyMentionSuggestions,
+                loading: _loadingInlineReplyMentionSuggestions,
+                isDark: isDark,
+                avatarProvider: _inlineReplyMentionAvatarProvider,
+                onPick: _insertInlineReplyMention,
+              ).animate().fadeIn(duration: 180.ms).scale(begin: const Offset(0.98, 0.98), end: const Offset(1, 1)),
+              const SizedBox(height: 8),
+            ],
             Row(
               children: [
                 _SmallPurpleAction(icon: Icons.add_rounded, tooltip: context.tr('إضافة مع الرد'), onTap: _showInlineReplyPlusMenu),
@@ -11028,6 +12298,8 @@ class _PostDetailsScreenState extends State<PostDetailsScreen> {
                     minLines: 1,
                     maxLines: 4,
                     textInputAction: TextInputAction.send,
+                    onTap: _updateInlineReplyMentionSuggestions,
+                    onChanged: (_) => _updateInlineReplyMentionSuggestions(),
                     onSubmitted: (_) => _sendInlineReply(),
                     decoration: InputDecoration(
                       hintText: _replyingToUser == null ? context.tr('نشر ردّك') : context.tr('اكتب ردك على ${_replyingToUser!}'),
@@ -11095,11 +12367,11 @@ class _PostDetailsScreenState extends State<PostDetailsScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               child: Row(
                 children: [
-                  _StatPill(icon: Icons.visibility_rounded, text: '${widget.post.views}'),
+                  _StatPill(icon: Icons.visibility_rounded, text: _RespectFeedNumberFormatter.compact(context, widget.post.views)),
                   const SizedBox(width: 8),
-                  _StatPill(icon: Icons.chat_bubble_rounded, text: '${widget.post.replyCount} ردود'),
+                  _StatPill(icon: Icons.chat_bubble_rounded, text: '${_RespectFeedNumberFormatter.compact(context, widget.post.replyCount)} ردود'),
                   const SizedBox(width: 8),
-                  _StatPill(icon: Icons.repeat_rounded, text: '${widget.post.reposts}'),
+                  _StatPill(icon: Icons.repeat_rounded, text: _RespectFeedNumberFormatter.compact(context, widget.post.reposts)),
                 ],
               ),
             ),
@@ -11249,9 +12521,9 @@ class _ReplyActionBar extends StatelessWidget {
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         item(icon: Icons.chat_bubble_outline_rounded, label: 'رد', onTap: onReply, color: AppColors.purple),
-        item(icon: reply.isLiked ? Icons.favorite_rounded : Icons.favorite_border_rounded, label: '${reply.likes}', onTap: onLike, color: reply.isLiked ? AppColors.danger : null),
-        item(icon: Icons.repeat_rounded, label: '${reply.reposts}', onTap: onRepost, color: reply.isReposted ? AppColors.success : null),
-        item(icon: Icons.visibility_outlined, label: '${reply.views}', onTap: () {}, color: null),
+        item(icon: reply.isLiked ? Icons.favorite_rounded : Icons.favorite_border_rounded, label: _RespectFeedNumberFormatter.compact(context, reply.likes), onTap: onLike, color: reply.isLiked ? AppColors.danger : null),
+        item(icon: Icons.repeat_rounded, label: _RespectFeedNumberFormatter.compact(context, reply.reposts), onTap: onRepost, color: reply.isReposted ? AppColors.success : null),
+        item(icon: Icons.visibility_outlined, label: _RespectFeedNumberFormatter.compact(context, reply.views), onTap: () {}, color: null),
         item(icon: Icons.format_quote_rounded, label: 'اقتباس', onTap: onQuote, color: AppColors.purple),
         item(icon: reply.isFavorite ? Icons.bookmark_rounded : Icons.bookmark_border_rounded, label: '', onTap: onFavorite, color: reply.isFavorite ? AppColors.purple : null),
       ],
@@ -11738,6 +13010,7 @@ class CommunityScreen extends StatefulWidget {
   final String currentUsername;
   final String currentName;
   final String? currentAvatarPath;
+  final Set<String> blockedUsernames;
   final ImageProvider? Function(String? path) avatarProviderForPath;
   final Future<void> Function() onChanged;
 
@@ -11747,6 +13020,7 @@ class CommunityScreen extends StatefulWidget {
     required this.currentUsername,
     required this.currentName,
     required this.currentAvatarPath,
+    required this.blockedUsernames,
     required this.avatarProviderForPath,
     required this.onChanged,
   });
@@ -11760,7 +13034,9 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
 
   bool get _isOwner => widget.community.ownerUsername == widget.currentUsername;
   bool get _isMod => _isOwner || widget.community.moderators.contains(widget.currentUsername);
-  bool get _isMember => widget.community.members.contains(widget.currentUsername);
+  bool get _isMember => widget.community.members.map(SupabaseService.displayUsername).contains(SupabaseService.displayUsername(widget.currentUsername));
+  Set<String> get _moderatorUsernames => widget.community.moderators.map(SupabaseService.displayUsername).toSet();
+  bool get _blockedAnyModerator => widget.blockedUsernames.map(SupabaseService.displayUsername).any(_moderatorUsernames.contains);
 
   List<CityPost> get _posts {
     final visible = widget.community.posts.where((p) => !p.hiddenFromCommunity).toList();
@@ -11778,21 +13054,106 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
     super.dispose();
   }
 
+  Future<bool> _confirmCommunityRulesBeforeJoin() async {
+    final rules = widget.community.rules.where((r) => r.trim().isNotEmpty).toList();
+    if (rules.isEmpty) return true;
+    final accepted = await AppDialog.custom<bool>(
+      context,
+      title: 'قوانين ${widget.community.name}',
+      type: AppDialogType.info,
+      icon: Icons.rule_rounded,
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          AppText(
+            context.tr('اقرأ قوانين المجتمع قبل المتابعة. بمتابعتك للمجتمع أنت توافق على الالتزام بها.'),
+            style: const TextStyle(fontWeight: FontWeight.w700, height: 1.45),
+          ),
+          const SizedBox(height: 12),
+          ...rules.asMap().entries.map((entry) => Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 24,
+                  height: 24,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: AppColors.purple.withValues(alpha: 0.14),
+                    shape: BoxShape.circle,
+                  ),
+                  child: AppText('${entry.key + 1}', style: const TextStyle(color: AppColors.purple, fontWeight: FontWeight.w900, fontSize: 12)),
+                ),
+                const SizedBox(width: 8),
+                Expanded(child: AppText(entry.value, style: const TextStyle(height: 1.45))),
+              ],
+            ),
+          )),
+        ],
+      ),
+      actions: const <AppDialogAction<bool>>[
+        AppDialogAction<bool>.secondary(text: 'إلغاء', value: false),
+        AppDialogAction<bool>.primary(text: 'أوافق وأتابع', value: true),
+      ],
+    );
+    return accepted == true;
+  }
+
   Future<void> _joinLeave() async {
+    final me = SupabaseService.displayUsername(widget.currentUsername);
+    if (_isMember) {
+      if (_isOwner) return;
+      setState(() {
+        widget.community.members.removeWhere((u) => SupabaseService.displayUsername(u) == me);
+        widget.community.moderators.removeWhere((u) => SupabaseService.displayUsername(u) == me);
+      });
+      try {
+        await SupabaseService.leaveCommunity(communityId: widget.community.id, username: me);
+      } catch (e, st) { _logIgnoredError(e, st); }
+      await widget.onChanged();
+      if (mounted) NotificationService.showTopNotification(context.tr('تم إلغاء متابعة المجتمع وإخفاء تبويبه'));
+      return;
+    }
+
+    if (_blockedAnyModerator) {
+      NotificationService.showTopError(context.tr('لا يمكنك متابعة هذا المجتمع وأنت حاظر أحد مشرفيه. أزل الحظر ثم تابع المجتمع من جديد.'));
+      return;
+    }
+    if (widget.community.kickedMembers.map(SupabaseService.displayUsername).contains(me)) {
+      NotificationService.showTopError(context.tr('تم طردك من هذا المجتمع ولا يمكنك الرجوع إلا بعد إلغاء الطرد'));
+      return;
+    }
+
+    final acceptedRules = await _confirmCommunityRulesBeforeJoin();
+    if (!acceptedRules) return;
+
     setState(() {
-      if (_isMember) {
-        if (!_isOwner) {
-          widget.community.members.remove(widget.currentUsername);
-          widget.community.moderators.remove(widget.currentUsername);
-        }
-      } else {
-        if (widget.community.kickedMembers.contains(widget.currentUsername)) {
-          NotificationService.showTopError(context.tr('تم طردك من هذا المجتمع ولا يمكنك الرجوع'));
-          return;
-        }
-        widget.community.members.add(widget.currentUsername);
+      if (!widget.community.members.map(SupabaseService.displayUsername).contains(me)) {
+        widget.community.members.add(me);
       }
     });
+    try {
+      final updated = await SupabaseService.joinCommunity(communityId: widget.community.id, username: me);
+      if (updated != null && mounted) {
+        final fresh = CityCommunity.fromJson(updated);
+        setState(() {
+          widget.community.members
+            ..clear()
+            ..addAll(fresh.members);
+          widget.community.moderators
+            ..clear()
+            ..addAll(fresh.moderators);
+          widget.community.kickedMembers
+            ..clear()
+            ..addAll(fresh.kickedMembers);
+        });
+      }
+    } catch (e, st) {
+      _logIgnoredError(e, st);
+      if (mounted) NotificationService.showTopError(context.tr('تعذر متابعة المجتمع: $e'));
+    }
     await widget.onChanged();
   }
 
@@ -11866,6 +13227,10 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
   Future<void> _composeCommunityPost() async {
     if (!_isMember) {
       NotificationService.showTopNotification(context.tr('تابع المجتمع أولاً حتى تستطيع النشر'));
+      return;
+    }
+    if (_blockedAnyModerator) {
+      NotificationService.showTopError(context.tr('لا يمكنك النشر داخل مجتمع حظرت أحد مشرفيه. أزل الحظر أولاً.'));
       return;
     }
 
@@ -12082,11 +13447,130 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
     NotificationService.showTopNotification(context.tr('${post.user} ${post.username}'));
   }
 
+  Future<String?> _chooseRuleForHidePost() async {
+    final rules = widget.community.rules.where((r) => r.trim().isNotEmpty).toList();
+    String selectedRule = rules.isNotEmpty ? rules.first : 'مخالفة قوانين المجتمع';
+    String customReason = '';
+    final confirmed = await AppDialog.custom<bool>(
+      context,
+      title: 'اختر القانون المخالف',
+      type: AppDialogType.warning,
+      icon: Icons.rule_rounded,
+      content: StatefulBuilder(
+        builder: (context, setLocal) => Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (rules.isNotEmpty)
+              DropdownButtonFormField<String>(
+                value: selectedRule,
+                decoration: InputDecoration(labelText: context.tr('القانون الذي خالفه المستخدم')),
+                items: [
+                  ...rules.map((rule) => DropdownMenuItem(value: rule, child: AppText(rule, maxLines: 2, overflow: TextOverflow.ellipsis))),
+                  const DropdownMenuItem(value: 'سبب مخصص', child: AppText('سبب مخصص')),
+                ],
+                onChanged: (v) => setLocal(() => selectedRule = v ?? selectedRule),
+              )
+            else
+              TextField(
+                minLines: 2,
+                maxLines: 4,
+                onChanged: (v) => customReason = v,
+                decoration: InputDecoration(
+                  labelText: context.tr('سبب الإخفاء'),
+                  hintText: context.tr('اكتب القانون أو السبب الذي خالفه المستخدم'),
+                  border: const OutlineInputBorder(),
+                ),
+              ),
+            if (rules.isNotEmpty && selectedRule == 'سبب مخصص') ...[
+              const SizedBox(height: 12),
+              TextField(
+                minLines: 2,
+                maxLines: 4,
+                onChanged: (v) => customReason = v,
+                decoration: InputDecoration(labelText: context.tr('السبب المخصص'), border: const OutlineInputBorder()),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: const <AppDialogAction<bool>>[
+        AppDialogAction<bool>.secondary(text: 'إلغاء', value: false),
+        AppDialogAction<bool>.primary(text: 'إخفاء', value: true),
+      ],
+    );
+    if (confirmed != true) return null;
+    final reason = selectedRule == 'سبب مخصص' || rules.isEmpty ? customReason.trim() : selectedRule.trim();
+    if (reason.isEmpty) {
+      NotificationService.showTopError(context.tr('اختر أو اكتب سبب الإخفاء أولاً'));
+      return null;
+    }
+    return reason;
+  }
+
+  Future<void> _saveCommunityHiddenNotification(CityPost post, String rule) async {
+    final target = SupabaseService.displayUsername(post.username);
+    final actor = SupabaseService.displayUsername(widget.currentUsername);
+    if (target == actor || target == '@user') return;
+    final body = 'تم إخفاء تغريدتك في مجتمع ${widget.community.name} بسبب مخالفة القانون: $rule\n\nالتغريدة: ${post.text}';
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('respect_post_events_v1');
+    final items = <Map<String, dynamic>>[];
+    if (raw != null && raw.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is List) items.addAll(decoded.whereType<Map>().map((e) => e.map((k, v) => MapEntry(k.toString(), v))));
+      } catch (e, st) { _logIgnoredError(e, st); }
+    }
+    items.insert(0, {
+      'id': 'community_post_hidden_${post.id}_${DateTime.now().microsecondsSinceEpoch}',
+      'type': 'community_post_hidden',
+      'targetUsername': target,
+      'authorUsername': actor,
+      'authorName': widget.currentName,
+      'postId': post.id,
+      'text': body,
+      'communityName': widget.community.name,
+      'rule': rule,
+      'createdAt': DateTime.now().toIso8601String(),
+    });
+    await prefs.setString('respect_post_events_v1', jsonEncode(items.take(300).toList()));
+  }
+
   Future<void> _hidePost(CityPost post) async {
-    if (!_isMod && post.username != widget.currentUsername) return;
+    final isAuthor = SupabaseService.displayUsername(post.username) == SupabaseService.displayUsername(widget.currentUsername);
+    if (!_isMod && !isAuthor) return;
+
+    String rule = 'إخفاء بواسطة صاحب التغريدة';
+    if (_isMod && !isAuthor) {
+      final selected = await _chooseRuleForHidePost();
+      if (selected == null) return;
+      rule = selected;
+    }
+
     setState(() => post.hiddenFromCommunity = true);
     await widget.onChanged();
-    if (mounted) NotificationService.showTopSuccess(context.tr('تم إخفاء التغريدة من المجتمع'));
+
+    if (_isMod && !isAuthor) {
+      await _saveCommunityHiddenNotification(post, rule);
+      try {
+        await SupabaseService.hideCommunityPostByModerator(
+          postId: post.id,
+          communityId: widget.community.id,
+          communityName: widget.community.name,
+          postUsername: post.username,
+          postText: post.text,
+          moderatorUsername: widget.currentUsername,
+          moderatorName: widget.currentName,
+          rule: rule,
+        );
+      } catch (e, st) { _logIgnoredError(e, st); }
+    }
+
+    if (mounted) {
+      NotificationService.showTopSuccess(_isMod && !isAuthor
+          ? context.tr('تم إخفاء التغريدة وإرسال إشعار لصاحبها')
+          : context.tr('تم إخفاء التغريدة من المجتمع'));
+    }
   }
 
   Future<void> _togglePinPost(CityPost post) async {
@@ -12140,48 +13624,46 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
   Future<void> _reportCommunityPost(CityPost post) async {
     String reason = 'محتوى مخالف';
     String details = '';
-    final submitted = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const AppText('بلاغ للمشرفين', style: TextStyle(fontWeight: FontWeight.w900)),
-        content: StatefulBuilder(
-          builder: (context, setLocal) => SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                DropdownButtonFormField<String>(
-                  value: reason,
-                  decoration: InputDecoration(labelText: context.tr('نوع البلاغ')),
-                  items: const [
-                    DropdownMenuItem(value: 'محتوى مخالف', child: AppText('محتوى مخالف')),
-                    DropdownMenuItem(value: 'سرقة محتوى', child: AppText('سرقة محتوى')),
-                    DropdownMenuItem(value: 'سبام أو إزعاج', child: AppText('سبام أو إزعاج')),
-                    DropdownMenuItem(value: 'تحرش أو إساءة', child: AppText('تحرش أو إساءة')),
-                    DropdownMenuItem(value: 'معلومات مضللة', child: AppText('معلومات مضللة')),
-                    DropdownMenuItem(value: 'بلاغ مخصص', child: AppText('بلاغ مخصص')),
-                  ],
-                  onChanged: (v) => setLocal(() => reason = v ?? reason),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  minLines: 3,
-                  maxLines: 6,
-                  onChanged: (value) => details = value,
-                  decoration: InputDecoration(
-                    labelText: reason == 'بلاغ مخصص' ? context.tr('اكتب البلاغ الذي تريده') : context.tr('اشرح البلاغ بالتفصيل'),
-                    hintText: reason == 'بلاغ مخصص' ? context.tr('اكتب بلاغك كامل هنا') : context.tr('اختياري، لكنه يساعد المشرفين والذكاء الاصطناعي'),
-                    border: const OutlineInputBorder(),
-                  ),
-                ),
+    final submitted = await AppDialog.custom<bool>(
+      context,
+      title: 'بلاغ للمشرفين',
+      type: AppDialogType.warning,
+      icon: Icons.report_rounded,
+      content: StatefulBuilder(
+        builder: (context, setLocal) => Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            DropdownButtonFormField<String>(
+              value: reason,
+              decoration: InputDecoration(labelText: context.tr('نوع البلاغ')),
+              items: const [
+                DropdownMenuItem(value: 'محتوى مخالف', child: AppText('محتوى مخالف')),
+                DropdownMenuItem(value: 'سرقة محتوى', child: AppText('سرقة محتوى')),
+                DropdownMenuItem(value: 'سبام أو إزعاج', child: AppText('سبام أو إزعاج')),
+                DropdownMenuItem(value: 'تحرش أو إساءة', child: AppText('تحرش أو إساءة')),
+                DropdownMenuItem(value: 'معلومات مضللة', child: AppText('معلومات مضللة')),
+                DropdownMenuItem(value: 'بلاغ مخصص', child: AppText('بلاغ مخصص')),
               ],
+              onChanged: (v) => setLocal(() => reason = v ?? reason),
             ),
-          ),
+            const SizedBox(height: 12),
+            TextField(
+              minLines: 3,
+              maxLines: 6,
+              onChanged: (value) => details = value,
+              decoration: InputDecoration(
+                labelText: reason == 'بلاغ مخصص' ? context.tr('اكتب البلاغ الذي تريده') : context.tr('اشرح البلاغ بالتفصيل'),
+                hintText: reason == 'بلاغ مخصص' ? context.tr('اكتب بلاغك كامل هنا') : context.tr('اختياري، لكنه يساعد المشرفين والذكاء الاصطناعي'),
+                border: const OutlineInputBorder(),
+              ),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const AppText('إلغاء')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const AppText('إرسال')),
-        ],
       ),
+      actions: const <AppDialogAction<bool>>[
+        AppDialogAction<bool>.secondary(text: 'إلغاء', value: false),
+        AppDialogAction<bool>.primary(text: 'إرسال', value: true),
+      ],
     );
     details = details.trim();
     if (submitted != true) return;
@@ -12353,6 +13835,7 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
               avatarProviderForPath: widget.avatarProviderForPath,
               canModerate: _isMod,
               currentUsername: widget.currentUsername,
+              moderatorUsernames: _moderatorUsernames,
               onLike: _toggleLike,
               onFavorite: _toggleFavorite,
               onRepost: _repostPost,
@@ -12370,6 +13853,7 @@ class _CommunityScreenState extends State<CommunityScreen> with SingleTickerProv
               avatarProviderForPath: widget.avatarProviderForPath,
               canModerate: _isMod,
               currentUsername: widget.currentUsername,
+              moderatorUsernames: _moderatorUsernames,
               onLike: _toggleLike,
               onFavorite: _toggleFavorite,
               onRepost: _repostPost,
@@ -12468,6 +13952,14 @@ class _CommunityHeroCard extends StatelessWidget {
                   community.description.isEmpty ? 'مجتمع Respect App للنقاش والتغريدات والوسائط' : community.description,
                   style: TextStyle(color: isDark ? AppColors.darkMuted : AppColors.lightMuted, height: 1.45),
                 ),
+                if (community.rules.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: community.rules.take(3).map((rule) => _MiniChip(text: rule.length > 24 ? '${rule.substring(0, 24)}...' : rule, color: AppColors.purple)).toList(),
+                  ),
+                ],
                 const SizedBox(height: 14),
                 Wrap(
                   spacing: 14,
@@ -12512,6 +14004,7 @@ class _CommunityPostsTab extends StatelessWidget {
   final ImageProvider? Function(String? path) avatarProviderForPath;
   final bool canModerate;
   final String currentUsername;
+  final Set<String> moderatorUsernames;
   final Future<void> Function(CityPost post) onLike;
   final Future<void> Function(CityPost post) onFavorite;
   final Future<void> Function(CityPost post) onRepost;
@@ -12530,6 +14023,7 @@ class _CommunityPostsTab extends StatelessWidget {
     required this.avatarProviderForPath,
     required this.canModerate,
     required this.currentUsername,
+    required this.moderatorUsernames,
     required this.onLike,
     required this.onFavorite,
     required this.onRepost,
@@ -12656,6 +14150,7 @@ class _CommunityPostsTab extends StatelessWidget {
               // لأن زر الكرت الداخلي أحيانًا يدخل في Gesture arena مع فتح الردود.
               onMore: null,
               disableCardTap: true,
+              showCommunityModeratorBadge: moderatorUsernames.contains(SupabaseService.displayUsername(post.username)),
             ),
             PositionedDirectional(
               top: 12,
@@ -12893,6 +14388,7 @@ class CityCommunity {
   final String id;
   String name;
   String description;
+  final List<String> rules;
   final String ownerUsername;
   final List<String> moderators;
   final List<String> members;
@@ -12905,6 +14401,7 @@ class CityCommunity {
     required this.id,
     required this.name,
     required this.description,
+    List<String>? rules,
     required this.ownerUsername,
     List<String>? moderators,
     List<String>? members,
@@ -12912,7 +14409,8 @@ class CityCommunity {
     List<CityPost>? posts,
     List<String>? kickedMembers,
     List<CommunityReport>? reports,
-  })  : moderators = moderators ?? [],
+  })  : rules = rules ?? [],
+        moderators = moderators ?? [],
         members = members ?? [],
         messages = messages ?? [],
         posts = posts ?? [],
@@ -12921,13 +14419,33 @@ class CityCommunity {
 
   int get mediaCount => posts.where((p) => p.mediaPath != null || p.voicePath != null).length;
 
+  static List<String> _rulesFromJson(dynamic value) {
+    dynamic raw = value;
+    if (raw is String) {
+      final trimmed = raw.trim();
+      if (trimmed.isEmpty) return <String>[];
+      try {
+        raw = jsonDecode(trimmed);
+      } catch (_) {
+        raw = trimmed.split(RegExp(r'[\n؛;]+'));
+      }
+    }
+    if (raw is! Iterable) return <String>[];
+    return raw
+        .map((e) => e.toString().trim())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList();
+  }
+
   factory CityCommunity.fromJson(Map<String, dynamic> json) => CityCommunity(
     id: (json['id'] ?? DateTime.now().microsecondsSinceEpoch.toString()).toString(),
     name: (json['name'] ?? 'مجتمع').toString(),
     description: (json['description'] ?? '').toString(),
-    ownerUsername: (json['ownerUsername'] ?? '@user').toString(),
-    moderators: (json['moderators'] is List) ? (json['moderators'] as List).map((e) => e.toString()).toSet().toList() : [],
-    members: (json['members'] is List) ? (json['members'] as List).map((e) => e.toString()).toSet().toList() : [],
+    rules: _rulesFromJson(json['rules'] ?? json['community_rules'] ?? json['communityRules']),
+    ownerUsername: SupabaseService.displayUsername((json['ownerUsername'] ?? json['owner_username'] ?? '@user').toString()),
+    moderators: (json['moderators'] is List) ? (json['moderators'] as List).map((e) => SupabaseService.displayUsername(e.toString())).toSet().toList() : [],
+    members: (json['members'] is List) ? (json['members'] as List).map((e) => SupabaseService.displayUsername(e.toString())).toSet().toList() : [],
     kickedMembers: (json['kickedMembers'] is List) ? (json['kickedMembers'] as List).map((e) => SupabaseService.displayUsername(e.toString())).toSet().toList() : [],
     reports: (json['reports'] is List)
         ? (json['reports'] as List).whereType<Map>().map((e) => CommunityReport.fromJson(e.map((k, v) => MapEntry(k.toString(), v)))).toList()
@@ -12965,6 +14483,7 @@ class CityCommunity {
     'id': id,
     'name': name,
     'description': description,
+    'rules': rules.where((r) => r.trim().isNotEmpty).toSet().toList(),
     'ownerUsername': ownerUsername,
     'moderators': moderators.toSet().toList(),
     'members': members.toSet().toList(),

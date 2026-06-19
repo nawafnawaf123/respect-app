@@ -52,6 +52,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String? _profileImagePath;
   bool _isAdmin = false;
   bool _chatConversationActive = false;
+  bool _feedBottomBarVisible = true;
   int _unreadMessagesCount = 0;
   int _unreadNotificationsCount = 0;
 
@@ -561,7 +562,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     const _MenuItem(title: 'رسامين ريسبكت', icon: Icons.palette_rounded, pageIndex: 10),
     const _MenuItem(title: 'الإشعارات', icon: Icons.notifications, pageIndex: 3),
     const _MenuItem(title: 'المحفوظات', icon: Icons.bookmarks_rounded, pageIndex: 8),
-    const _MenuItem(title: 'الإعدادات', icon: Icons.settings, pageIndex: 5),
     if (_isAdmin) const _MenuItem(title: 'الإدارة', icon: Icons.admin_panel_settings, pageIndex: 6),
   ];
 
@@ -575,7 +575,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     const _BottomItem(title: 'الإشعارات', icon: Icons.notifications_rounded, pageIndex: 3),
     const _BottomItem(title: 'حسابي', icon: Icons.person_rounded, pageIndex: 4),
     const _BottomItem(title: 'المحفوظات', icon: Icons.bookmarks_rounded, pageIndex: 8),
-    const _BottomItem(title: 'الإعدادات', icon: Icons.settings_rounded, pageIndex: 5),
     if (_isAdmin) const _BottomItem(title: 'الإدارة', icon: Icons.admin_panel_settings_rounded, pageIndex: 6),
   ];
 
@@ -588,7 +587,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _chatConversationActive = false;
     }
     if (newIndex == index) return;
-    setState(() => index = newIndex);
+    setState(() {
+      index = newIndex;
+      _feedBottomBarVisible = true;
+    });
     if (newIndex == 2) {
       _markMessagesAsRead().then((_) {
         if (mounted) _loadUnreadMessagesCount();
@@ -604,8 +606,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   int _bottomSelectedIndex() {
-    final i = bottomItems.indexWhere((item) => item.pageIndex == index);
-    return i < 0 ? 0 : i;
+    return bottomItems.indexWhere((item) => item.pageIndex == index);
   }
 
   void _setChatConversationActive(bool active) {
@@ -613,20 +614,90 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     setState(() => _chatConversationActive = active);
   }
 
+  void _setFeedBottomBarVisible(bool visible) {
+    if (!mounted || index != 0 || _feedBottomBarVisible == visible) return;
+    setState(() => _feedBottomBarVisible = visible);
+  }
+
+  Widget _appHeaderLogo() {
+    return IgnorePointer(
+      child: Center(
+        child: Image.asset(
+          'assets/logo.png',
+          height: 34,
+          fit: BoxFit.contain,
+          errorBuilder: (_, __, ___) => const Icon(
+            Icons.hub_rounded,
+            color: AppColors.purple,
+            size: 32,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _topSettingsButton(bool isDark) {
+    return Padding(
+      padding: const EdgeInsetsDirectional.only(end: 10),
+      child: Center(
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () => _changePage(5),
+            borderRadius: BorderRadius.circular(16),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              width: 42,
+              height: 42,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: index == 5
+                    ? AppColors.purple.withValues(alpha: 0.18)
+                    : AppColors.purple.withValues(alpha: isDark ? 0.10 : 0.08),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: index == 5
+                      ? AppColors.purple.withValues(alpha: 0.45)
+                      : (isDark ? AppColors.darkBorder : AppColors.lightBorder),
+                ),
+              ),
+              child: Icon(
+                Icons.settings_rounded,
+                size: 22,
+                color: index == 5 ? AppColors.purple : (isDark ? AppColors.darkText : AppColors.lightText),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final hideMainHeader = index == 2 && _chatConversationActive;
+    final showBottomNav = index != 0 || _feedBottomBarVisible;
 
     return Scaffold(
+      extendBody: true,
       drawerEnableOpenDragGesture: false,
       appBar: hideMainHeader ? null : AppBar(
         title: null,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        shadowColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        backgroundColor: isDark ? AppColors.darkBg : AppColors.lightBg,
+        flexibleSpace: SafeArea(
+          bottom: false,
+          child: _appHeaderLogo(),
+        ),
         leading: Padding(
-          padding: const EdgeInsets.only(right: 8.0),
+          padding: const EdgeInsetsDirectional.only(start: 10),
           child: InkWell(
             onTap: () => setState(() => index = 4),
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(16),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -668,14 +739,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
           ),
         ),
-        leadingWidth: 220,
-        elevation: 0,
-        backgroundColor: isDark ? AppColors.darkBg.withValues(alpha: 0.85) : AppColors.lightBg.withValues(alpha: 0.9),
+        leadingWidth: 190,
+        actions: [
+          _topSettingsButton(isDark),
+        ],
       ),
       body: IndexedStack(
         index: index,
         children: [
-          const FeedScreen(),
+          FeedScreen(onBottomBarVisibleChanged: _setFeedBottomBarVisible),
           const StreamersScreen(),
           ChatScreen(onConversationActiveChanged: _setChatConversationActive),
           const NotificationsScreen(),
@@ -688,16 +760,64 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           const RespectPaintersScreen(),
         ],
       ),
-      bottomNavigationBar: _BottomNavBar(
-        items: bottomItems,
-        selectedIndex: _bottomSelectedIndex(),
-        unreadMessagesCount: _unreadMessagesCount,
-        unreadNotificationsCount: _unreadNotificationsCount,
-        onTap: (bottomIndex) {
-          final items = bottomItems;
-          if (bottomIndex < 0 || bottomIndex >= items.length) return;
-          _changePage(items[bottomIndex].pageIndex);
+      bottomNavigationBar: _SmoothBottomNavVisibility(
+        visible: showBottomNav,
+        child: _BottomNavBar(
+          items: bottomItems,
+          selectedIndex: _bottomSelectedIndex(),
+          unreadMessagesCount: _unreadMessagesCount,
+          unreadNotificationsCount: _unreadNotificationsCount,
+          onTap: (bottomIndex) {
+            final items = bottomItems;
+            if (bottomIndex < 0 || bottomIndex >= items.length) return;
+            _changePage(items[bottomIndex].pageIndex);
+          },
+        ),
+      ),
+    );
+  }
+}
+
+
+class _SmoothBottomNavVisibility extends StatelessWidget {
+  final bool visible;
+  final Widget child;
+
+  const _SmoothBottomNavVisibility({
+    required this.visible,
+    required this.child,
+  });
+
+  static const Duration _showDuration = Duration(milliseconds: 700);
+  static const Duration _hideDuration = Duration(milliseconds: 950);
+  static const Curve _showCurve = Curves.easeOutCubic;
+  static const Curve _hideCurve = Curves.easeInOutCubic;
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.viewPaddingOf(context).bottom;
+    final travelDistance = 132.0 + bottomInset;
+
+    return IgnorePointer(
+      ignoring: !visible,
+      child: TweenAnimationBuilder<double>(
+        tween: Tween<double>(end: visible ? 1.0 : 0.0),
+        duration: visible ? _showDuration : _hideDuration,
+        curve: visible ? _showCurve : _hideCurve,
+        builder: (context, value, animatedChild) {
+          final progress = value.clamp(0.0, 1.0);
+          final dy = (1.0 - progress) * travelDistance;
+          final opacity = progress.clamp(0.0, 1.0);
+
+          return Transform.translate(
+            offset: Offset(0, dy),
+            child: Opacity(
+              opacity: opacity,
+              child: animatedChild,
+            ),
+          );
         },
+        child: RepaintBoundary(child: child),
       ),
     );
   }
@@ -757,7 +877,7 @@ class _BottomNavBarState extends State<_BottomNavBar> {
   }
 
   void _centerSelectedItem() {
-    if (!_scrollController.hasClients || widget.items.isEmpty) return;
+    if (!_scrollController.hasClients || widget.items.isEmpty || widget.selectedIndex < 0) return;
     const itemWidth = 88.0;
     final viewport = _scrollController.position.viewportDimension;
     final target = (widget.selectedIndex * itemWidth) - (viewport / 2) + (itemWidth / 2);

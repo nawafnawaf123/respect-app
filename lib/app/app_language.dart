@@ -103,9 +103,22 @@ class AppLanguageProvider extends ChangeNotifier {
 }
 
 extension RespectTranslateContext on BuildContext {
+  // للاستخدام داخل build فقط، لأنه يستمع لتغيير اللغة ويعيد بناء الواجهة.
   AppLanguageProvider get appLanguage => watch<AppLanguageProvider>();
-  String tr(String text) => appLanguage.translate(text);
-  TextDirection get appTextDirection => appLanguage.textDirection;
+
+  // للاستخدام داخل onPressed / async callbacks / timers / streams / notifications.
+  // مهم جدًا: بدون listen حتى لا يظهر خطأ Provider خارج شجرة البناء.
+  AppLanguageProvider get appLanguageRead => read<AppLanguageProvider>();
+
+  // جعل الترجمة الافتراضية آمنة في كل الأماكن؛ لأنها لا تستمع للـ Provider.
+  // MaterialApp نفسه يعيد بناء التطبيق عند تغيير اللغة من RPStreamHubApp.
+  String tr(String text) => appLanguageRead.translate(text);
+
+  // نسخة تستمع للتغيير، استخدمها فقط داخل build عند الحاجة.
+  String trWatch(String text) => appLanguage.translate(text);
+
+  TextDirection get appTextDirection => appLanguageRead.textDirection;
+  TextDirection get appTextDirectionWatch => appLanguage.textDirection;
 }
 
 class AppText extends StatelessWidget {

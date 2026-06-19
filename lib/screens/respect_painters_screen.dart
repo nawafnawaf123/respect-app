@@ -9,6 +9,7 @@ import '../services/notification_service.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/glass_card.dart';
+import '../widgets/app_dialog.dart';
 
 import '../app/app_language.dart';
 class RespectPaintersScreen extends StatefulWidget {
@@ -148,8 +149,8 @@ class _RespectPaintersScreenState extends State<RespectPaintersScreen> {
     final name = (drawing['name'] ?? drawing['username'] ?? '').toString();
     final rank = int.tryParse((drawing['rank'] ?? 0).toString()) ?? 0;
 
-    showDialog(
-      context: context,
+    AppDialog.fullscreen(
+      context,
       barrierColor: Colors.black.withValues(alpha: 0.92),
       builder: (context) {
         return Directionality(

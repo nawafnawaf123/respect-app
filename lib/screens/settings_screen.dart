@@ -6,10 +6,12 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../app/theme_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/glass_card.dart';
+import '../widgets/app_dialog.dart';
 import '../services/supabase_service.dart';
 import '../services/realtime_notification_service.dart';
 import '../services/notification_service.dart';
@@ -41,17 +43,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final TextEditingController _feedbackTitleCtrl = TextEditingController(text: 'مشكلة في التطبيق');
   final TextEditingController _feedbackNoteCtrl = TextEditingController();
   final TextEditingController _feedbackScreenCtrl = TextEditingController(text: 'الإعدادات');
+  final ImagePicker _feedbackMediaPicker = ImagePicker();
+  XFile? _feedbackMediaFile;
+  bool _feedbackMediaIsVideo = false;
   String _phoneE164 = '';
   bool _phoneVerified = false;
   bool _smsSecurityEnabled = false;
   bool _phoneCodeSent = false;
   bool _savingPhoneSecurity = false;
-
-  // ----- ميزات الخصوصية الجديدة -----
-  bool _isScreenBlack = false;
-  bool _privacyModeEnabled = false;
-  bool _quickHideEnabled = false;
-
   bool _messagesEnabled = true;
   bool _verifiedOnlyMessages = false;
   bool _callsEnabled = true;
@@ -59,9 +58,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _canUseVerifiedOnlyMessages = false;
   bool _savingMessagingPrivacy = false;
 
-  bool _sendingAiFeedback = false;
-  bool _approvingAiFeedbackFix = false;
-  Map<String, dynamic>? _latestAiFeedbackResult;
+  bool _sendingAppFeedback = false;
+  Map<String, dynamic>? _latestAppFeedbackResult;
 
   @override
   void initState() {
@@ -84,47 +82,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final prefs = await SharedPreferences.getInstance();
     await _loadProfile(prefs);
     await Future.wait<void>([
-      _loadPrivacySettings(prefs),
       _loadMessagingPrivacySettings(),
       _loadPhoneSecuritySettings(),
     ]);
-  }
-
-  Future<void> _loadPrivacySettings([SharedPreferences? cachedPrefs]) async {
-    final prefs = cachedPrefs ?? await SharedPreferences.getInstance();
-    final enabled = prefs.getBool('privacy_mode_enabled') ?? false;
-    final quickHide = prefs.getBool('quick_hide_enabled') ?? false;
-    if (mounted) {
-      setState(() {
-        _privacyModeEnabled = enabled;
-        _quickHideEnabled = quickHide;
-      });
-    }
-  }
-
-  Future<void> _savePrivacyMode(bool enabled) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('privacy_mode_enabled', enabled);
-  }
-
-  Future<void> _saveQuickHide(bool enabled) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('quick_hide_enabled', enabled);
-  }
-
-  Future<void> _togglePrivacyMode(bool value) async {
-    setState(() => _privacyModeEnabled = value);
-    await _savePrivacyMode(value);
-  }
-
-  Future<void> _toggleQuickHide(bool value) async {
-    setState(() {
-      _quickHideEnabled = value;
-      if (!value) {
-        _isScreenBlack = false;
-      }
-    });
-    await _saveQuickHide(value);
   }
 
   Future<void> _loadPhoneSecuritySettings() async {
@@ -318,25 +278,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _logout() async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (context) {
-        final isDark = Theme.of(context).brightness == Brightness.dark;
-        return AlertDialog(
-          backgroundColor: isDark ? AppColors.darkCard : AppColors.lightCard,
-          title: const AppText('تسجيل الخروج'),
-          content: const AppText('هل تريد تسجيل الخروج من الحساب الحالي؟'),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context, false), child: const AppText('إلغاء')),
-            ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger, foregroundColor: Colors.white),
-              onPressed: () => Navigator.pop(context, true),
-              icon: const Icon(Icons.logout_rounded),
-              label: const AppText('خروج'),
-            ),
-          ],
-        );
-      },
+    final confirm = await AppDialog.confirm(
+      context,
+      title: 'تسجيل الخروج',
+      message: 'هل تريد تسجيل الخروج من الحساب الحالي؟',
+      confirmText: 'خروج',
+      cancelText: 'إلغاء',
+      type: AppDialogType.danger,
+      destructive: true,
+      icon: Icons.logout_rounded,
     );
 
     if (confirm != true || !mounted) return;
@@ -352,13 +302,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final file = File(path);
     if (!file.existsSync()) return null;
     return FileImage(file);
-  }
-
-  void _handleLongPress() {
-    if (!_quickHideEnabled) return;
-    setState(() {
-      _isScreenBlack = !_isScreenBlack;
-    });
   }
 
   void _showSettingsSuccess(
@@ -390,30 +333,252 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
 
 
-  bool get _canApproveAiFeedbackFix {
-    final clean = _profileUsername.trim().toLowerCase().replaceAll('@', '');
-    return clean == 'mjakcon8' || clean == 'nawafrp' || clean == 'nawaf_city' || clean == 'nawafnawaf123';
-  }
-
-  String _aiFeedbackStatusText(String status) {
+  String _appFeedbackStatusText(String status) {
     switch (status.trim().toLowerCase()) {
-      case 'analyzed':
-        return 'تم التحليل وينتظر موافقتك';
-      case 'approved':
-        return 'تمت الموافقة ويجري تجهيز التصحيح';
-      case 'pull_request_created':
-        return 'تم إنشاء Pull Request في GitHub';
-      case 'applied':
-        return 'تم تجهيز التصحيح';
-      case 'failed':
-        return 'فشل تنفيذ التصحيح';
+      case 'pending':
+      case 'submitted':
+        return 'بانتظار مراجعة الإدارة';
+      case 'resolved':
+      case 'done':
+        return 'تم حل المشكلة';
+      case 'rejected':
+      case 'deleted':
+        return 'تم رفض البلاغ';
       default:
-        return status.isEmpty ? 'لم يتم الإرسال بعد' : status;
+        return status.isEmpty ? 'بانتظار مراجعة الإدارة' : status;
     }
   }
 
-  Future<void> _submitAiFeedbackReport() async {
-    if (_sendingAiFeedback) return;
+
+  String _feedbackMediaFileName() {
+    final file = _feedbackMediaFile;
+    if (file == null) return '';
+    final rawName = file.name.trim();
+    if (rawName.isNotEmpty) return rawName;
+    final cleanPath = file.path.replaceAll('\\', '/');
+    final parts = cleanPath.split('/').where((e) => e.trim().isNotEmpty).toList();
+    if (parts.isNotEmpty) return parts.last;
+    return _feedbackMediaIsVideo ? 'feedback_video.mp4' : 'feedback_image.jpg';
+  }
+
+  String _feedbackMediaLabel() {
+    if (_feedbackMediaFile == null) return 'لا يوجد مرفق';
+    return _feedbackMediaIsVideo ? 'فيديو مرفق' : 'صورة مرفقة';
+  }
+
+  Future<void> _pickAppFeedbackMedia({required bool video}) async {
+    if (_sendingAppFeedback) return;
+    try {
+      final picked = video
+          ? await _feedbackMediaPicker.pickVideo(
+              source: ImageSource.gallery,
+              maxDuration: const Duration(minutes: 3),
+            )
+          : await _feedbackMediaPicker.pickImage(
+              source: ImageSource.gallery,
+              imageQuality: 88,
+              maxWidth: 1920,
+            );
+      if (picked == null) return;
+
+      final file = File(picked.path);
+      final sizeMb = await file.length() / (1024 * 1024);
+      if (video && sizeMb > 120) {
+        _showSettingsError('الفيديو كبير جدًا، اختر فيديو أقل من 120MB');
+        return;
+      }
+      if (!video && sizeMb > 20) {
+        _showSettingsError('الصورة كبيرة جدًا، اختر صورة أقل من 20MB');
+        return;
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _feedbackMediaFile = picked;
+        _feedbackMediaIsVideo = video;
+      });
+      _showSettingsInfo(
+        video ? 'تم إرفاق الفيديو مع البلاغ' : 'تم إرفاق الصورة مع البلاغ',
+        title: 'تم اختيار المرفق',
+        icon: video ? Icons.video_file_rounded : Icons.image_rounded,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      _showSettingsError('تعذر اختيار المرفق: ${e.toString().replaceFirst('Exception: ', '')}');
+    }
+  }
+
+  Future<void> _showAppFeedbackMediaPicker() async {
+    if (_sendingAppFeedback) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        return Container(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 22),
+          decoration: BoxDecoration(
+            color: isDark ? AppColors.darkCard : AppColors.lightCard,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+            border: Border.all(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
+          ),
+          child: SafeArea(
+            top: false,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 44,
+                  height: 5,
+                  decoration: BoxDecoration(
+                    color: (isDark ? AppColors.darkMuted : AppColors.lightMuted).withValues(alpha: 0.35),
+                    borderRadius: BorderRadius.circular(99),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                const ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.attach_file_rounded, color: AppColors.purple),
+                  title: AppText('إضافة مرفق للبلاغ', style: TextStyle(fontWeight: FontWeight.w900)),
+                  subtitle: AppText('اختر صورة أو فيديو يوضح المشكلة للإدارة'),
+                ),
+                const SizedBox(height: 6),
+                ListTile(
+                  leading: const Icon(Icons.image_rounded, color: AppColors.purple),
+                  title: const AppText('اختيار صورة'),
+                  subtitle: const AppText('لقطة شاشة أو صورة توضح المشكلة'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _pickAppFeedbackMedia(video: false);
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.video_file_rounded, color: AppColors.purple),
+                  title: const AppText('اختيار فيديو'),
+                  subtitle: const AppText('تسجيل شاشة أو فيديو قصير للمشكلة'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _pickAppFeedbackMedia(video: true);
+                  },
+                ),
+                if (_feedbackMediaFile != null)
+                  ListTile(
+                    leading: const Icon(Icons.delete_outline_rounded, color: AppColors.danger),
+                    title: const AppText('حذف المرفق الحالي'),
+                    onTap: () {
+                      Navigator.pop(context);
+                      setState(() {
+                        _feedbackMediaFile = null;
+                        _feedbackMediaIsVideo = false;
+                      });
+                    },
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildAppFeedbackMediaPicker() {
+    final file = _feedbackMediaFile;
+    final hasMedia = file != null;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final borderColor = hasMedia ? AppColors.purple.withValues(alpha: 0.35) : (isDark ? AppColors.darkBorder : AppColors.lightBorder);
+    final title = hasMedia ? _feedbackMediaLabel() : 'إرفاق صورة أو فيديو';
+    final subtitle = hasMedia
+        ? _feedbackMediaFileName()
+        : 'اختياري: أضف لقطة شاشة أو فيديو حتى تظهر المشكلة للإدارة بوضوح';
+
+    Widget preview;
+    if (hasMedia && !_feedbackMediaIsVideo && File(file.path).existsSync()) {
+      preview = ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: Image.file(
+          File(file.path),
+          width: 58,
+          height: 58,
+          fit: BoxFit.cover,
+        ),
+      );
+    } else {
+      preview = Container(
+        width: 58,
+        height: 58,
+        decoration: BoxDecoration(
+          color: AppColors.purple.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: AppColors.purple.withValues(alpha: 0.18)),
+        ),
+        child: Icon(
+          hasMedia
+              ? (_feedbackMediaIsVideo ? Icons.play_circle_fill_rounded : Icons.image_rounded)
+              : Icons.add_photo_alternate_rounded,
+          color: AppColors.purple,
+          size: 30,
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.purple.withValues(alpha: hasMedia ? 0.08 : 0.04),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: borderColor),
+      ),
+      child: Row(
+        children: [
+          preview,
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                AppText(title, style: const TextStyle(fontWeight: FontWeight.w900)),
+                const SizedBox(height: 4),
+                AppText(
+                  subtitle,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isDark ? AppColors.darkMuted : AppColors.lightMuted,
+                    fontWeight: FontWeight.w700,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          IconButton(
+            style: IconButton.styleFrom(
+              backgroundColor: AppColors.purple.withValues(alpha: 0.10),
+              foregroundColor: AppColors.purple,
+            ),
+            onPressed: _sendingAppFeedback ? null : _showAppFeedbackMediaPicker,
+            icon: Icon(hasMedia ? Icons.edit_rounded : Icons.add_rounded),
+            tooltip: hasMedia ? 'تغيير المرفق' : 'إضافة مرفق',
+          ),
+          if (hasMedia)
+            IconButton(
+              onPressed: _sendingAppFeedback
+                  ? null
+                  : () => setState(() {
+                        _feedbackMediaFile = null;
+                        _feedbackMediaIsVideo = false;
+                      }),
+              icon: const Icon(Icons.close_rounded, color: AppColors.danger),
+              tooltip: 'حذف المرفق',
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _submitAppFeedbackReport() async {
+    if (_sendingAppFeedback) return;
     final note = _feedbackNoteCtrl.text.trim();
     if (note.length < 8) {
       _showSettingsError('اكتب وصف المشكلة بتفاصيل أكثر');
@@ -421,86 +586,59 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
 
     FocusScope.of(context).unfocus();
-    setState(() => _sendingAiFeedback = true);
+    setState(() => _sendingAppFeedback = true);
     try {
-      final result = await SupabaseService.submitRespectAiAppFeedback(
+      final selectedMedia = _feedbackMediaFile;
+      String mediaUrl = '';
+      String mediaType = '';
+      String mediaName = '';
+      if (selectedMedia != null) {
+        mediaType = _feedbackMediaIsVideo ? 'video' : 'image';
+        mediaName = _feedbackMediaFileName();
+        mediaUrl = await SupabaseService.uploadAppFeedbackMedia(
+          username: _profileUsername,
+          filePath: selectedMedia.path,
+          video: _feedbackMediaIsVideo,
+        );
+      }
+
+      final result = await SupabaseService.submitAppFeedbackReport(
         username: _profileUsername,
         name: _profileName,
         title: _feedbackTitleCtrl.text,
         note: note,
         screen: _feedbackScreenCtrl.text,
         appVersion: '1.0.0',
+        mediaUrl: mediaUrl,
+        mediaType: mediaType,
+        mediaName: mediaName,
       );
       if (!mounted) return;
-      setState(() => _latestAiFeedbackResult = result);
-      _showSettingsSuccess(
-        'تم إرسال البلاغ وبدأ تحليل Qwen3-Coder',
-        title: 'تم إرسال البلاغ',
-      );
-    } catch (e) {
-      if (!mounted) return;
-      _showSettingsError('تعذر تحليل البلاغ: ${e.toString().replaceFirst('Exception: ', '')}');
-    } finally {
-      if (mounted) setState(() => _sendingAiFeedback = false);
-    }
-  }
-
-  Future<void> _approveAiFeedbackFix() async {
-    if (_approvingAiFeedbackFix) return;
-    final reportId = (_latestAiFeedbackResult?['id'] ?? _latestAiFeedbackResult?['reportId'] ?? '').toString();
-    if (reportId.trim().isEmpty) {
-      _showSettingsError('لا يوجد بلاغ محلل للموافقة عليه');
-      return;
-    }
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const AppText('تأكيد التصحيح'),
-        content: const AppText('سيتم طلب التصحيح من Qwen3-Coder ثم إنشاء Pull Request في GitHub إذا كانت مفاتيح GitHub مضبوطة على السيرفر.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const AppText('إلغاء')),
-          FilledButton.icon(
-            onPressed: () => Navigator.pop(context, true),
-            icon: const Icon(Icons.auto_fix_high_rounded),
-            label: const AppText('ابدأ التصحيح'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) return;
-
-    setState(() => _approvingAiFeedbackFix = true);
-    try {
-      final result = await SupabaseService.approveRespectAiAppFeedbackFix(
-        reportId: reportId,
-        approvedBy: _profileUsername,
-      );
-      if (!mounted) return;
-      setState(() => _latestAiFeedbackResult = result);
-      final prUrl = (result['pullRequestUrl'] ?? result['prUrl'] ?? '').toString();
-      _showSettingsSuccess(
-        prUrl.isNotEmpty ? 'تم إنشاء Pull Request للتصحيح' : 'تم تجهيز نتيجة التصحيح',
-        title: 'نتيجة التصحيح',
+      setState(() {
+        _latestAppFeedbackResult = result;
+        _feedbackNoteCtrl.clear();
+        _feedbackMediaFile = null;
+        _feedbackMediaIsVideo = false;
+      });
+      await NotificationService.showGeneralNotification(
+        id: 'app_feedback_submitted_${DateTime.now().microsecondsSinceEpoch}',
+        title: 'تم إرسال الملاحظة',
+        body: 'تم إرسال الملاحظة، شكرًا لتعاونكم',
+        senderName: 'Respect',
+        showSystemNotification: false,
       );
     } catch (e) {
       if (!mounted) return;
-      _showSettingsError('تعذر تنفيذ التصحيح: ${e.toString().replaceFirst('Exception: ', '')}');
+      _showSettingsError('تعذر إرسال الملاحظة: ${e.toString().replaceFirst('Exception: ', '')}');
     } finally {
-      if (mounted) setState(() => _approvingAiFeedbackFix = false);
+      if (mounted) setState(() => _sendingAppFeedback = false);
     }
   }
 
-  Widget _buildAiFeedbackCard() {
-    final result = _latestAiFeedbackResult;
-    final analysis = result == null ? null : Map<String, dynamic>.from((result['analysis'] is Map ? result['analysis'] : result) as Map);
-    final status = (result?['status'] ?? analysis?['status'] ?? '').toString();
-    final suspectedFilesRaw = analysis?['suspectedFiles'] ?? analysis?['files'] ?? result?['suspectedFiles'];
-    final suspectedFiles = suspectedFilesRaw is List
-        ? suspectedFilesRaw.map((e) => e.toString()).where((e) => e.trim().isNotEmpty).take(8).toList()
-        : <String>[];
-    final summary = (analysis?['summary'] ?? analysis?['problem'] ?? result?['summary'] ?? '').toString();
-    final prUrl = (result?['pullRequestUrl'] ?? result?['prUrl'] ?? '').toString();
+  Widget _buildAppFeedbackCard() {
+    final result = _latestAppFeedbackResult;
+    final status = (result?['status'] ?? '').toString();
+    final reportId = (result?['id'] ?? result?['reportId'] ?? '').toString();
 
     return GlassCard(
       child: Padding(
@@ -512,7 +650,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               contentPadding: EdgeInsets.zero,
               leading: Icon(Icons.bug_report_rounded, color: AppColors.purple),
               title: AppText('ملاحظات / بلاغ مشكلة', style: TextStyle(fontWeight: FontWeight.w900)),
-              subtitle: AppText('اكتب المشكله او الملاحظه وسيتم المراجعة والاصلاح في اقرب وقت ممكن '),
+              subtitle: AppText('اكتب المشكلة أو أرفق صورة/فيديو وسيتم إرسالها مباشرة للإدارة بدون ذكاء اصطناعي'),
             ),
             const SizedBox(height: 8),
             TextField(
@@ -547,52 +685,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             const SizedBox(height: 12),
+            _buildAppFeedbackMediaPicker(),
+            const SizedBox(height: 12),
             FilledButton.icon(
-              onPressed: _sendingAiFeedback ? null : _submitAiFeedbackReport,
-              icon: _sendingAiFeedback
+              onPressed: _sendingAppFeedback ? null : _submitAppFeedbackReport,
+              icon: _sendingAppFeedback
                   ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.psychology_alt_rounded),
-              label: AppText(_sendingAiFeedback ? 'جاري التحليل...' : 'إرسال'),
+                  : const Icon(Icons.send_rounded),
+              label: AppText(_sendingAppFeedback ? 'جاري الإرسال...' : 'إرسال للإدارة'),
             ),
             if (result != null) ...[
               const SizedBox(height: 14),
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: AppColors.purple.withValues(alpha: 0.08),
+                  color: AppColors.success.withValues(alpha: 0.08),
                   borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: AppColors.purple.withValues(alpha: 0.22)),
+                  border: Border.all(color: AppColors.success.withValues(alpha: 0.22)),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    AppText('الحالة: ${_aiFeedbackStatusText(status)}', style: const TextStyle(fontWeight: FontWeight.w900)),
-                    if (summary.trim().isNotEmpty) ...[
-                      const SizedBox(height: 8),
-                      AppText(summary),
+                    const AppText('تم حفظ الملاحظة وإرسالها للإدارة.', style: TextStyle(fontWeight: FontWeight.w900)),
+                    if (reportId.trim().isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      AppText('رقم البلاغ: $reportId', textDirection: TextDirection.ltr),
                     ],
-                    if (suspectedFiles.isNotEmpty) ...[
-                      const SizedBox(height: 10),
-                      const AppText('الملفات المتوقعة:', style: TextStyle(fontWeight: FontWeight.w900)),
+                    if (status.trim().isNotEmpty) ...[
                       const SizedBox(height: 4),
-                      ...suspectedFiles.map((file) => Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 2),
-                        child: AppText('• $file', textDirection: TextDirection.ltr),
-                      )),
-                    ],
-                    if (prUrl.isNotEmpty) ...[
-                      const SizedBox(height: 10),
-                      AppText('Pull Request: $prUrl', textDirection: TextDirection.ltr),
-                    ],
-                    if (_canApproveAiFeedbackFix && status.toLowerCase() == 'analyzed') ...[
-                      const SizedBox(height: 12),
-                      OutlinedButton.icon(
-                        onPressed: _approvingAiFeedbackFix ? null : _approveAiFeedbackFix,
-                        icon: _approvingAiFeedbackFix
-                            ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                            : const Icon(Icons.auto_fix_high_rounded),
-                        label: AppText(_approvingAiFeedbackFix ? 'جاري التصحيح...' : 'الموافقة وبدء التصحيح'),
-                      ),
+                      AppText('الحالة: ${_appFeedbackStatusText(status)}'),
                     ],
                   ],
                 ),
@@ -718,31 +839,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  // طبقة الخصوصية تغطي الشاشة كاملة مع تأثير جانبي
-  Widget _privacyOverlay() {
-    if (!_privacyModeEnabled) return const SizedBox.shrink();
-    return Positioned.fill(
-      child: IgnorePointer(
-        child: Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.centerLeft,
-              end: Alignment.centerRight,
-              colors: [
-                Colors.black.withValues(alpha: 0.8),
-                Colors.black.withValues(alpha: 0.5),
-                Colors.transparent,
-                Colors.black.withValues(alpha: 0.5),
-                Colors.black.withValues(alpha: 0.8),
-              ],
-              stops: const [0.0, 0.1, 0.5, 0.9, 1.0],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final themeProvider = context.watch<ThemeProvider>();
@@ -751,16 +847,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     return Scaffold(
       appBar: null,
-      body: GestureDetector(
-        onLongPress: _handleLongPress,
-        behavior: HitTestBehavior.opaque,
-        child: Stack(
-          children: [
-            // المحتوى الأصلي
-            RefreshIndicator(
-              color: AppColors.purple,
-              onRefresh: _loadProfile,
-              child: ListView(
+      body: RefreshIndicator(
+        color: AppColors.purple,
+        onRefresh: _loadProfile,
+        child: ListView(
                 padding: const EdgeInsets.all(16),
                 children: [
                   const SizedBox(height: 8),
@@ -778,33 +868,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                   const SizedBox(height: 12),
 
-                  GlassCard(
-                    child: SwitchListTile(
-                      title: const AppText('وضع الخصوصية (تأثير جانبي)'),
-                      subtitle: const AppText('يجعل الشاشة غير واضحة عند النظر من الجانب'),
-                      value: _privacyModeEnabled,
-                      onChanged: _togglePrivacyMode,
-                      secondary: const Icon(Icons.visibility_off_rounded, color: AppColors.purple),
-                      activeThumbColor: AppColors.purple,
-                    ),
-                  ).animate().fadeIn(delay: 150.ms),
-
-                  const SizedBox(height: 12),
-
-                  GlassCard(
-                    child: SwitchListTile(
-                      title: const AppText('إخفاء سريع (الضغط 3 ثواني)'),
-                      subtitle: const AppText('تفعيل ميزة تعتيم الشاشة بالضغط مع الاستمرار'),
-                      value: _quickHideEnabled,
-                      onChanged: _toggleQuickHide,
-                      secondary: const Icon(Icons.touch_app_rounded, color: AppColors.purple),
-                      activeThumbColor: AppColors.purple,
-                    ),
-                  ).animate().fadeIn(delay: 200.ms),
-
-                  const SizedBox(height: 12),
-
-                  _buildAiFeedbackCard().animate().fadeIn(delay: 220.ms),
+                  _buildAppFeedbackCard().animate().fadeIn(delay: 220.ms),
 
                   const SizedBox(height: 12),
 
@@ -978,24 +1042,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       onTap: _logout,
                     ),
                   ).animate().fadeIn(delay: 400.ms),
-                ],
-              ),
-            ),
-
-            // طبقة التعتيم الكامل (الشاشة السوداء)
-            if (_isScreenBlack)
-              Positioned.fill(
-                child: GestureDetector(
-                  onLongPress: _handleLongPress,
-                  behavior: HitTestBehavior.opaque,
-                  child: Container(color: Colors.black),
-                ),
-              ),
-
-            // طبقة الخصوصية (تأثير الجوانب)
-            _privacyOverlay(),
-          ],
-        ),
+            ],
+          ),
       ),
     );
   }
