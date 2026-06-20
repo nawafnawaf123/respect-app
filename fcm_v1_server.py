@@ -513,11 +513,17 @@ RESPECT_MODERATION_ASYNC = os.getenv("RESPECT_MODERATION_ASYNC", "true").strip()
 RESPECT_GENERAL_PUSH_ASYNC = os.getenv("RESPECT_GENERAL_PUSH_ASYNC", "true").strip().lower() not in {"0", "false", "no", "off"}
 RESPECT_BACKGROUND_WORKERS = max(1, int(os.getenv("RESPECT_BACKGROUND_WORKERS", "2") or "2"))
 RESPECT_VIDEO_MODERATION_MAX_CONCURRENCY = max(1, int(os.getenv("RESPECT_VIDEO_MODERATION_MAX_CONCURRENCY", "1") or "1"))
+# فشل فحص الفيديو ليس سببًا للحذف. نخلي الفيديو معلقًا ونحاول فحصه لاحقًا.
+RESPECT_VIDEO_MODERATION_RETRY_ENABLED = os.getenv("RESPECT_VIDEO_MODERATION_RETRY_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
+RESPECT_VIDEO_MODERATION_MAX_RETRIES = max(0, int(os.getenv("RESPECT_VIDEO_MODERATION_MAX_RETRIES", "5") or "5"))
+RESPECT_VIDEO_MODERATION_RETRY_DELAYS_SECONDS = os.getenv("RESPECT_VIDEO_MODERATION_RETRY_DELAYS_SECONDS", "600,1800,3600,7200,14400").strip()
 # يقلل الحذف الخاطئ عند قراءة OCR داخل الصور/الفيديوهات:
 # مثال: نص ديني أو تعليمي عادي عن "المرأة" أو "يوم القيامة" لا يعتبر محتوى جنسيًا ولا إساءة دينية.
 RESPECT_VISION_TEXT_CONTEXT_RELAXATION = os.getenv("RESPECT_VISION_TEXT_CONTEXT_RELAXATION", "true").strip().lower() not in {"0", "false", "no", "off"}
 _background_executor = ThreadPoolExecutor(max_workers=RESPECT_BACKGROUND_WORKERS, thread_name_prefix="respect-bg")
 _video_moderation_semaphore = threading.BoundedSemaphore(RESPECT_VIDEO_MODERATION_MAX_CONCURRENCY)
+_video_moderation_retry_lock = threading.Lock()
+_video_moderation_retry_attempts: Dict[str, int] = {}
 
 
 def _model_to_dict(model: Any) -> Dict[str, Any]:
@@ -547,6 +553,129 @@ def _submit_background_job(job_name: str, fn: Any, *args: Any, **kwargs: Any) ->
     job_id = _new_background_job_id(job_name)
     _background_executor.submit(_run_background_job, job_id, fn, *args, **kwargs)
     return job_id
+
+
+def _video_moderation_retry_delays() -> list[int]:
+    raw = RESPECT_VIDEO_MODERATION_RETRY_DELAYS_SECONDS or "600,1800,3600"
+    delays: list[int] = []
+    for part in raw.split(","):
+        try:
+            value = int(float(part.strip()))
+        except Exception:
+            continue
+        if value > 0:
+            delays.append(value)
+    return delays or [600, 1800, 3600]
+
+
+def _pending_video_moderation_result(
+    *,
+    category: str = "video_pending_review",
+    reason: str = "تعذر فحص الفيديو مؤقتًا، وسيعاد فحصه لاحقًا بدون حذف المنشور.",
+    confidence: float = 0.0,
+    checks: int = 0,
+    video_checks: Optional[list[Dict[str, Any]]] = None,
+    extra: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "shouldDelete": False,
+        "delete": False,
+        "blocked": False,
+        "category": category or "video_pending_review",
+        "reason": reason or "تعذر فحص الفيديو مؤقتًا، وسيعاد فحصه لاحقًا بدون حذف المنشور.",
+        "confidence": float(confidence or 0.0),
+        "checks": int(checks or 0),
+        "videoChecks": video_checks or [],
+        "deferred": True,
+        "retryable": True,
+        "moderationPending": True,
+        "videoModerationPending": True,
+        "reviewStatus": "pending_video_scan",
+    }
+    if extra:
+        payload.update(extra)
+    return payload
+
+
+def _is_video_moderation_pending(result: Dict[str, Any]) -> bool:
+    if not isinstance(result, dict):
+        return False
+    if result.get("videoModerationPending") is True or result.get("moderationPending") is True:
+        return True
+    if result.get("deferred") is True and str(result.get("category") or "").startswith("video_"):
+        return True
+    if result.get("retryable") is True and str(result.get("category") or "").startswith("video_"):
+        return True
+    return str(result.get("reviewStatus") or "").strip().lower() == "pending_video_scan"
+
+
+def _video_moderation_retry_key(req: RespectAIModerationRequest) -> str:
+    urls = _public_video_urls_from_req(req)
+    raw = "|".join([
+        str(req.postId or req.replyId or ""),
+        str(req.username or req.reportedUsername or ""),
+        *urls,
+    ])
+    return hashlib.sha256(raw.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def _clear_pending_video_moderation_retry(req: RespectAIModerationRequest) -> None:
+    key = _video_moderation_retry_key(req)
+    if not key:
+        return
+    with _video_moderation_retry_lock:
+        _video_moderation_retry_attempts.pop(key, None)
+
+
+def _schedule_pending_video_moderation_retry(req: RespectAIModerationRequest, video_result: Dict[str, Any]) -> Dict[str, Any]:
+    if not RESPECT_VIDEO_MODERATION_RETRY_ENABLED:
+        return {"scheduled": False, "reason": "retry_disabled"}
+    if not _public_video_urls_from_req(req):
+        return {"scheduled": False, "reason": "no_video_urls"}
+    if not (req.postId or req.replyId or "").strip():
+        return {"scheduled": False, "reason": "missing_content_id"}
+
+    key = _video_moderation_retry_key(req)
+    delays = _video_moderation_retry_delays()
+    with _video_moderation_retry_lock:
+        attempt = int(_video_moderation_retry_attempts.get(key, 0))
+        if attempt >= RESPECT_VIDEO_MODERATION_MAX_RETRIES:
+            return {
+                "scheduled": False,
+                "reason": "max_retries_reached",
+                "attempt": attempt,
+                "maxRetries": RESPECT_VIDEO_MODERATION_MAX_RETRIES,
+            }
+        _video_moderation_retry_attempts[key] = attempt + 1
+
+    delay = delays[min(attempt, len(delays) - 1)]
+    req_data = _model_to_dict(req)
+
+    def _enqueue_retry() -> None:
+        try:
+            _submit_background_job("video_moderation_retry", _run_post_moderation_job, req_data)
+        except Exception as exc:
+            logger.warning("failed to enqueue pending video moderation retry post_id=%s error=%s", req.postId, exc)
+
+    timer = threading.Timer(delay, _enqueue_retry)
+    timer.daemon = True
+    timer.start()
+
+    logger.warning(
+        "video moderation pending post_id=%s retry_attempt=%s/%s retry_after_seconds=%s category=%s reason=%s",
+        req.postId,
+        attempt + 1,
+        RESPECT_VIDEO_MODERATION_MAX_RETRIES,
+        delay,
+        str(video_result.get("category") or "video_pending_review"),
+        _safe_response_text(str(video_result.get("reason") or ""), 350),
+    )
+    return {
+        "scheduled": True,
+        "attempt": attempt + 1,
+        "maxRetries": RESPECT_VIDEO_MODERATION_MAX_RETRIES,
+        "retryAfterSeconds": delay,
+    }
 
 
 _moderation_rate: Dict[str, list[float]] = defaultdict(list)
@@ -7830,13 +7959,12 @@ def _single_video_frame_moderation_pass(frame_data_url: str, video_index: int, f
 
     parsed = _safe_json_from_ai(str(content))
     if not parsed:
-        result = {
-            "shouldDelete": True,
-            "deleteParentReply": False,
-            "category": "vision_parse_error",
-            "reason": "تعذر قراءة نتيجة فحص لقطة من الفيديو، تم رفض الفيديو احتياطيًا",
-            "confidence": 1.0,
-        }
+        result = _pending_video_moderation_result(
+            category="video_vision_parse_pending",
+            reason="تعذر قراءة نتيجة فحص لقطة من الفيديو، لذلك بقي المنشور معلقًا للمراجعة وإعادة الفحص بدل الحذف.",
+            confidence=0.0,
+            extra={"deleteParentReply": False},
+        )
     else:
         result = _normalize_moderation_result(parsed)
         result = _relax_contextual_text_false_positive(parsed, result, media_kind="الفيديو")
@@ -7864,15 +7992,14 @@ def moderate_videos_with_qwen(req: RespectAIModerationRequest) -> Dict[str, Any]
     acquired = _video_moderation_semaphore.acquire(timeout=max(0.0, wait_seconds))
     if not acquired:
         logger.warning("video moderation deferred because concurrency limit is full urls=%s", len(urls))
-        return {
-            "shouldDelete": False,
-            "category": "video_deferred",
-            "reason": "تم تأجيل فحص الفيديو مؤقتًا بسبب ضغط المراجعة. سيبقى المنشور تحت المراقبة الخلفية.",
-            "confidence": 0.0,
-            "checks": 0,
-            "videoChecks": [],
-            "deferred": True,
-        }
+        return _pending_video_moderation_result(
+            category="video_deferred",
+            reason="تم تأجيل فحص الفيديو مؤقتًا بسبب ضغط المراجعة. سيبقى المنشور تحت المراجعة وسيعاد فحصه لاحقًا بدون حذف.",
+            confidence=0.0,
+            checks=0,
+            video_checks=[],
+            extra={"deferred": True},
+        )
     try:
         return _moderate_videos_with_qwen_inner(req)
     finally:
@@ -7895,14 +8022,13 @@ def _moderate_videos_with_qwen_inner(req: RespectAIModerationRequest) -> Dict[st
         }
 
     if not QWEN_API_KEY:
-        return {
-            "shouldDelete": True,
-            "category": "vision_unavailable",
-            "reason": "QWEN_API_KEY غير موجود، تم رفض الفيديو احتياطيًا لأن فحص الفيديو غير متاح",
-            "confidence": 1.0,
-            "checks": 0,
-            "videoChecks": [],
-        }
+        return _pending_video_moderation_result(
+            category="video_vision_unavailable",
+            reason="QWEN_API_KEY غير موجود حاليًا، لذلك بقي الفيديو معلقًا وسيعاد فحصه لاحقًا بدل حذف المنشور.",
+            confidence=0.0,
+            checks=0,
+            video_checks=[],
+        )
 
     max_frames = int(os.getenv("RESPECT_AI_VIDEO_FRAMES", "6"))
     max_frames = max(3, min(max_frames, 12))
@@ -7912,24 +8038,26 @@ def _moderate_videos_with_qwen_inner(req: RespectAIModerationRequest) -> Dict[st
         try:
             frames = _extract_video_frame_data_urls(url, max_frames=max_frames)
         except Exception as e:
-            # Fail-closed: إذا لم نستطع فحص الفيديو لا نسمح بمروره.
+            # Fail-pending: فشل الفحص التقني ليس مخالفة. لا نحذف الفيديو؛ نعيد المحاولة لاحقًا.
             r = {
-                "shouldDelete": True,
-                "category": "video_error",
-                "reason": f"تعذر فحص الفيديو رقم {video_index}، تم رفضه احتياطيًا: {e}",
-                "confidence": 1.0,
+                "shouldDelete": False,
+                "category": "video_extract_pending",
+                "reason": f"تعذر فحص الفيديو رقم {video_index} مؤقتًا، وسيعاد فحصه لاحقًا بدون حذف المنشور: {e}",
+                "confidence": 0.0,
                 "videoUrl": url,
                 "videoIndex": video_index,
+                "retryable": True,
+                "moderationPending": True,
+                "videoModerationPending": True,
             }
             results.append(r)
-            return {
-                "shouldDelete": True,
-                "category": "video_error",
-                "reason": r["reason"],
-                "confidence": 1.0,
-                "checks": len(results),
-                "videoChecks": results,
-            }
+            return _pending_video_moderation_result(
+                category="video_extract_pending",
+                reason=r["reason"],
+                confidence=0.0,
+                checks=len(results),
+                video_checks=results,
+            )
 
         for frame in frames:
             frame_index = int(frame.get("frameIndex") or 0)
@@ -7955,20 +8083,32 @@ def _moderate_videos_with_qwen_inner(req: RespectAIModerationRequest) -> Dict[st
                     }
                 else:
                     r = {
-                        "shouldDelete": True,
-                        "category": "video_vision_error",
-                        "reason": f"تعذر فحص لقطة من الفيديو رقم {video_index} عند الثانية {second}، تم رفضه احتياطيًا: {e}",
-                        "confidence": 1.0,
+                        "shouldDelete": False,
+                        "category": "video_vision_pending",
+                        "reason": f"تعذر فحص لقطة من الفيديو رقم {video_index} عند الثانية {second} مؤقتًا، وسيعاد فحص الفيديو لاحقًا بدون حذف المنشور: {e}",
+                        "confidence": 0.0,
                         "videoUrl": url,
                         "videoIndex": video_index,
                         "frameIndex": frame_index,
                         "second": second,
+                        "retryable": True,
+                        "moderationPending": True,
+                        "videoModerationPending": True,
                     }
 
             # لا نرجع dataUrl حتى لا يكبر response.
             r["videoUrl"] = url
             r.pop("imageUrl", None)
             results.append(r)
+
+            if _is_video_moderation_pending(r):
+                return _pending_video_moderation_result(
+                    category=str(r.get("category") or "video_pending_review"),
+                    reason=str(r.get("reason") or "تعذر فحص الفيديو مؤقتًا، وسيعاد فحصه لاحقًا بدون حذف المنشور."),
+                    confidence=0.0,
+                    checks=len(results),
+                    video_checks=results,
+                )
 
             if r.get("shouldDelete") is True:
                 return {
@@ -8619,10 +8759,14 @@ def _combine_text_image_video_moderation(
         or image_result.get("delete") is True
         or image_result.get("blocked") is True
     )
+    video_pending = _is_video_moderation_pending(video_result)
     video_delete = bool(
-        video_result.get("shouldDelete") is True
-        or video_result.get("delete") is True
-        or video_result.get("blocked") is True
+        not video_pending
+        and (
+            video_result.get("shouldDelete") is True
+            or video_result.get("delete") is True
+            or video_result.get("blocked") is True
+        )
     )
     link_delete = bool(
         link_result.get("shouldDelete") is True
@@ -8692,6 +8836,25 @@ def _combine_text_image_video_moderation(
             "category": str(image_result.get("category") or "image_violation"),
             "reason": str(image_result.get("reason") or "الصورة مخالفة"),
             "decisionSource": "qwen-vl-plus-image",
+            "textModeration": text_result,
+            "imageModeration": image_result,
+            "videoModeration": video_result,
+            "linkModeration": link_result,
+            "virusTotalModeration": vt,
+        }
+
+    if video_pending:
+        return {
+            **video_result,
+            "shouldDelete": False,
+            "deleteParentReply": False,
+            "category": str(video_result.get("category") or "video_pending_review"),
+            "reason": str(video_result.get("reason") or "تعذر فحص الفيديو مؤقتًا، وسيعاد فحصه لاحقًا بدون حذف المنشور."),
+            "confidence": float(video_result.get("confidence") or 0.0),
+            "decisionSource": "qwen-vl-plus-video-pending",
+            "moderationPending": True,
+            "videoModerationPending": True,
+            "retryable": True,
             "textModeration": text_result,
             "imageModeration": image_result,
             "videoModeration": video_result,
@@ -8908,6 +9071,8 @@ def _respect_ai_moderate_story_sync(req: RespectAIModerationRequest) -> Dict[str
         "category": str(result.get("category") or "safe"),
         "confidence": float(result.get("confidence") or 0.0),
         "decisionSource": str(result.get("decisionSource") or "combined"),
+        "moderationPending": bool(result.get("moderationPending") or result.get("videoModerationPending")),
+        "videoModerationPending": bool(result.get("videoModerationPending")),
         "textModeration": result.get("textModeration", text_result),
         "imageModeration": result.get("imageModeration", image_result),
         "videoModeration": result.get("videoModeration", video_result),
@@ -9157,6 +9322,12 @@ def _respect_ai_moderate_post_sync(req: RespectAIModerationRequest) -> Dict[str,
     text_result = moderate_with_qwen(req)
     image_result = moderate_images_with_qwen(req)
     video_result = moderate_videos_with_qwen(req)
+    video_retry_result: Dict[str, Any] = {"scheduled": False, "reason": "not_pending"}
+    if _is_video_moderation_pending(video_result):
+        video_retry_result = _schedule_pending_video_moderation_retry(req, video_result)
+        video_result = {**video_result, "retrySchedule": video_retry_result}
+    else:
+        _clear_pending_video_moderation_retry(req)
     result = _combine_text_image_video_moderation(text_result, image_result, video_result, link_result, virustotal_result)
 
     should_delete = bool(
@@ -9247,6 +9418,9 @@ def _respect_ai_moderate_post_sync(req: RespectAIModerationRequest) -> Dict[str,
         "visionModel": QWEN_VISION_MODEL,
         "provider": "local-guard+moderation-memory+qwen+safe-browsing+virustotal",
         "serverSideDelete": True,
+        "moderationPending": bool(result.get("moderationPending") or result.get("videoModerationPending")),
+        "videoModerationPending": bool(result.get("videoModerationPending")),
+        "videoRetryResult": video_retry_result,
         "memoryUsed": memory_used,
         "moderationMemoryUsed": memory_used,
         "memoryDecision": str(result.get("memoryDecision") or ""),
