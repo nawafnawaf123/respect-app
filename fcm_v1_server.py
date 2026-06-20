@@ -1681,6 +1681,8 @@ def _android_channel_id_for_type(msg_type: str) -> str:
         "post_event",
         "post_moderation_deleted",
         "post_deleted_by_moderation",
+        "reply_moderation_deleted",
+        "reply_deleted_by_moderation",
         "app_feedback_resolved",
         "community_report_rejected",
         "community_report_accepted",
@@ -1708,6 +1710,8 @@ def _android_should_include_notification(msg_type: str, privacy_data_only: bool)
         "app_feedback_resolved",
         "post_moderation_deleted",
         "post_deleted_by_moderation",
+        "reply_moderation_deleted",
+        "reply_deleted_by_moderation",
     }
 
 
@@ -1918,6 +1922,23 @@ def _moderation_delete_body(language: str, source_label: str, category: str, rea
     return f"Your tweet was deleted by {source_label}. Category: {clean_category}"
 
 
+def _moderation_delete_reply_body(language: str, source_label: str, category: str, reason: str) -> str:
+    lang = normalize_language(language)
+    clean_reason = (reason or "").strip()
+    clean_category = (category or "violation").strip()
+    if lang == "ar":
+        if clean_reason:
+            return f"تم حذف ردك بواسطة {source_label}. السبب: {clean_reason[:180]}"
+        return f"تم حذف ردك بواسطة {source_label}. التصنيف: {clean_category}"
+    if clean_reason:
+        return f"Your reply was deleted by {source_label}. Reason: {clean_reason[:180]}"
+    return f"Your reply was deleted by {source_label}. Category: {clean_category}"
+
+
+def _moderation_reply_deleted_title(language: str) -> str:
+    return "تم حذف ردك" if normalize_language(language) == "ar" else "Your reply was deleted"
+
+
 def _send_post_moderation_deleted_push(
     username: str,
     post_id: str,
@@ -1997,6 +2018,99 @@ def _send_post_moderation_deleted_push(
             "reason": "push_exception",
             "error": str(exc)[:500],
             "username": user,
+            "postId": pid,
+        }
+
+
+
+def _send_reply_moderation_deleted_push(
+    username: str,
+    reply_id: str,
+    post_id: str,
+    reason: str,
+    category: str,
+    confidence: float,
+    decision_source: str,
+    memory_used: bool = False,
+    matched_term: str = "",
+    fallback_language: str = "ar",
+) -> Dict[str, Any]:
+    """
+    يرسل إشعارًا لصاحب الرد عند حذف رده بواسطة مراقبة Respect AI أو بلاغ صحيح.
+    فشل FCM لا يفشل الحذف؛ فقط يرجع نتيجة واضحة في response والـ logs.
+    """
+    user = display_username(username)
+    rid = (reply_id or "").strip()
+    pid = (post_id or "").strip()
+    if not user or user == "@user":
+        return {"sent": False, "reason": "missing_username", "replyId": rid, "postId": pid}
+
+    try:
+        target = get_user_push_target(user, fallback_language=fallback_language)
+        if not target:
+            return {"sent": False, "reason": "missing_fcm_token", "username": user, "replyId": rid, "postId": pid}
+
+        language = normalize_language(target.get("language") or fallback_language)
+        kind = _moderation_delete_source_kind(decision_source, memory_used=memory_used)
+        source_label = _moderation_delete_source_label(kind, language)
+        title = _moderation_reply_deleted_title(language)
+        body = _moderation_delete_reply_body(language, source_label, category, reason)
+
+        data = _localized_data(
+            {
+                "postId": pid,
+                "post_id": pid,
+                "replyId": rid,
+                "reply_id": rid,
+                "username": user,
+                "category": category or "violation",
+                "reason": (reason or "")[:700],
+                "confidence": round(float(confidence or 0.0), 4),
+                "decisionSource": decision_source or ("respect_ai_moderation_memory" if kind == "memory" else "respect_ai"),
+                "decisionSourceKind": kind,
+                "decisionSourceLabel": source_label,
+                "deletionSource": kind,
+                "deletedBy": source_label,
+                "memoryUsed": bool(memory_used),
+                "moderationMemoryUsed": bool(memory_used),
+                "matchedTerm": (matched_term or "")[:160],
+            },
+            language,
+            title,
+            body,
+        )
+
+        result = send_fcm_v1(
+            target["token"],
+            "reply_moderation_deleted",
+            title,
+            body,
+            data,
+        )
+        return {
+            "sent": True,
+            "username": user,
+            "replyId": rid,
+            "postId": pid,
+            "decisionSourceKind": kind,
+            "decisionSourceLabel": source_label,
+            "firebase": result.get("firebase"),
+        }
+    except Exception as exc:
+        logger.warning(
+            "reply moderation delete push failed username=%s reply_id=%s post_id=%s source=%s error=%s",
+            user,
+            rid,
+            pid,
+            decision_source,
+            exc,
+        )
+        return {
+            "sent": False,
+            "reason": "push_exception",
+            "error": str(exc)[:500],
+            "username": user,
+            "replyId": rid,
             "postId": pid,
         }
 
@@ -9081,6 +9195,7 @@ def respect_ai_review_report(req: RespectAIModerationRequest, x_app_secret: Opti
 
     update_result: Dict[str, Any] = {"updated": False}
     delete_result: Dict[str, Any] = {"deleted": False}
+    notification_result: Dict[str, Any] = {"sent": False, "reason": "not_deleted"}
     warning_result: Dict[str, Any] = {"warningCount": 0, "blocked": False}
     learn_result: Dict[str, Any] = {"learned": False, "terms": []}
     if should_hide:
@@ -9090,6 +9205,19 @@ def respect_ai_review_report(req: RespectAIModerationRequest, x_app_secret: Opti
             try:
                 delete_result = _delete_supabase_reply(req.replyId)
                 update_result = delete_result
+                if bool(delete_result.get("deleted")):
+                    notification_result = _send_reply_moderation_deleted_push(
+                        username=str(delete_result.get("ownerUsername") or reported or req.reportedUsername or req.username or ""),
+                        reply_id=req.replyId,
+                        post_id=str(delete_result.get("postId") or req.postId or ""),
+                        reason=str(result.get("reason") or report_reason),
+                        category=str(result.get("category") or "report_accepted"),
+                        confidence=confidence,
+                        decision_source="report_review",
+                        memory_used=False,
+                        matched_term="",
+                        fallback_language=req.language,
+                    )
             except Exception as e:
                 update_result = {"deleted": False, "error": str(e)}
         else:
@@ -9133,6 +9261,8 @@ def respect_ai_review_report(req: RespectAIModerationRequest, x_app_secret: Opti
         "learnResult": learn_result,
         "learnedTerms": learn_result.get("terms", []),
         "warning": warning_result,
+        "notificationSent": bool(notification_result.get("sent")),
+        "notificationResult": notification_result,
     }
 
 
@@ -9426,7 +9556,18 @@ def _respect_ai_moderate_post_sync(req: RespectAIModerationRequest) -> Dict[str,
         memory_learn_result: Dict[str, Any] = {"learned": False, "reason": "not_deleted"}
         if bool(delete_result.get("deleted")):
             if is_reply_content:
-                notification_result = {"sent": False, "reason": "reply_deleted_no_post_push", "username": owner_username, "replyId": req.replyId}
+                notification_result = _send_reply_moderation_deleted_push(
+                    username=owner_username,
+                    reply_id=req.replyId,
+                    post_id=str(delete_result.get("postId") or req.postId or ""),
+                    reason=reason,
+                    category=category,
+                    confidence=confidence,
+                    decision_source=decision_source,
+                    memory_used=True,
+                    matched_term=str(learned_result.get("matchedTerm") or ""),
+                    fallback_language=req.language,
+                )
             else:
                 notification_result = _send_post_moderation_deleted_push(
                     username=owner_username,
@@ -9550,7 +9691,18 @@ def _respect_ai_moderate_post_sync(req: RespectAIModerationRequest) -> Dict[str,
     if bool(delete_result.get("deleted")):
         owner_username = str(req.username or delete_result.get("ownerUsername") or "").strip()
         if is_reply_content:
-            notification_result = {"sent": False, "reason": "reply_deleted_no_post_push", "username": owner_username, "replyId": req.replyId}
+            notification_result = _send_reply_moderation_deleted_push(
+                username=owner_username,
+                reply_id=req.replyId,
+                post_id=str(delete_result.get("postId") or req.postId or ""),
+                reason=reason,
+                category=category,
+                confidence=confidence,
+                decision_source=decision_source,
+                memory_used=memory_used,
+                matched_term=str(result.get("matchedTerm") or ""),
+                fallback_language=req.language,
+            )
         else:
             notification_result = _send_post_moderation_deleted_push(
                 username=owner_username,
