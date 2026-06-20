@@ -5323,21 +5323,23 @@ def _insert_learned_abuse_term(*, term: str, category: str, reason: str, source_
 
 
 def _learn_abuse_terms_from_valid_report(req: RespectAIModerationRequest, result: Dict[str, Any]) -> Dict[str, Any]:
-    post_text = (req.postText or req.text or "").strip()
+    content_type = (req.contentType or "post").strip().lower()
+    post_text = (req.text if content_type == "reply" else (req.postText or req.text) or "").strip()
     if not post_text:
-        return {"learned": False, "terms": [], "reason": "empty_post_text"}
+        return {"learned": False, "terms": [], "reason": "empty_reported_text"}
     terms = _extract_learned_terms_with_ai(post_text, req.reason or "", req.details or "", str(result.get("reason") or ""))
+    source_id = req.replyId if content_type == "reply" and (req.replyId or "").strip() else (req.postId or "")
     inserted = [_insert_learned_abuse_term(
         term=term,
         category=str(result.get("category") or "learned_abuse"),
         reason=str(result.get("reason") or req.reason or "بلاغ صحيح"),
-        source_post_id=req.postId or "",
+        source_post_id=source_id,
         source_report_id=req.reportId or "",
         reporter_username=req.reporterUsername or "",
         reported_username=req.reportedUsername or req.username or "",
     ) for term in terms]
     ok_count = sum(1 for x in inserted if x.get("inserted") is True)
-    return {"learned": ok_count > 0, "terms": terms, "inserted": inserted, "count": ok_count}
+    return {"learned": ok_count > 0, "terms": terms, "inserted": inserted, "count": ok_count, "contentType": content_type}
 
 
 def _load_active_learned_terms(force: bool = False) -> list[Dict[str, Any]]:
@@ -7563,6 +7565,120 @@ def _delete_supabase_post(post_id: str) -> Dict[str, Any]:
 
 
 
+def _delete_supabase_reply(reply_id: str) -> Dict[str, Any]:
+    rid = (reply_id or "").strip()
+    if not rid:
+        raise HTTPException(status_code=400, detail="replyId is empty")
+
+    headers = {**_supabase_headers(use_service_role=True), "Prefer": "return=representation"}
+    post_id = ""
+    owner_username = ""
+    child_ids: list[str] = []
+
+    try:
+        r0 = requests.get(
+            f"{SB_URL}/rest/v1/post_replies",
+            headers=_supabase_headers(use_service_role=True),
+            params={"select": "id,post_id,author_username,username", "id": f"eq.{rid}", "limit": "1"},
+            timeout=10,
+        )
+        if r0.status_code < 400:
+            data = r0.json() if r0.text else []
+            if isinstance(data, list) and data:
+                row = dict(data[0])
+                post_id = str(row.get("post_id") or "").strip()
+                owner_username = _display_username(str(row.get("author_username") or row.get("username") or ""))
+                if owner_username == "@user":
+                    owner_username = ""
+    except Exception as exc:
+        logger.debug("Could not read reply before delete reply_id=%s error=%s", rid, exc)
+
+    try:
+        rc = requests.get(
+            f"{SB_URL}/rest/v1/post_replies",
+            headers=_supabase_headers(use_service_role=True),
+            params={"select": "id", "parent_reply_id": f"eq.{rid}", "limit": "500"},
+            timeout=10,
+        )
+        if rc.status_code < 400:
+            data = rc.json() if rc.text else []
+            if isinstance(data, list):
+                child_ids = [str(x.get("id") or "").strip() for x in data if isinstance(x, dict) and str(x.get("id") or "").strip()]
+    except Exception as exc:
+        logger.debug("Could not read reply children reply_id=%s error=%s", rid, exc)
+
+    for child_id in child_ids:
+        for table in ("reply_likes", "reply_reposts", "reply_views"):
+            try:
+                requests.delete(f"{SB_URL}/rest/v1/{table}", headers=headers, params={"reply_id": f"eq.{child_id}"}, timeout=8)
+            except Exception:
+                pass
+
+    for table in ("reply_likes", "reply_reposts", "reply_views"):
+        try:
+            requests.delete(f"{SB_URL}/rest/v1/{table}", headers=headers, params={"reply_id": f"eq.{rid}"}, timeout=8)
+        except Exception:
+            pass
+
+    try:
+        requests.delete(
+            f"{SB_URL}/rest/v1/post_replies",
+            headers=headers,
+            params={"parent_reply_id": f"eq.{rid}"},
+            timeout=12,
+        )
+    except Exception:
+        pass
+
+    r = requests.delete(
+        f"{SB_URL}/rest/v1/post_replies",
+        headers=headers,
+        params={"id": f"eq.{rid}"},
+        timeout=15,
+    )
+    logger.info("Backend delete reply reply_id=%s status=%s server_delete_mode=%s", rid, r.status_code, bool(SB_SERVICE))
+    logger.debug("Backend delete reply body=%s", _safe_response_text(r.text, 800))
+    if r.status_code >= 400:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "supabase_status": r.status_code,
+                "supabase_body": r.text,
+                "hint": "فعّل Service Role في Render حتى يستطيع السيرفر حذف الرد رغم RLS.",
+            },
+        )
+
+    try:
+        if post_id:
+            count = requests.get(
+                f"{SB_URL}/rest/v1/post_replies",
+                headers=_supabase_headers(use_service_role=True),
+                params={"select": "id", "post_id": f"eq.{post_id}", "limit": "10000"},
+                timeout=10,
+            )
+            if count.status_code < 400:
+                data = count.json() if count.text else []
+                comments = len(data) if isinstance(data, list) else 0
+                requests.patch(
+                    f"{SB_URL}/rest/v1/posts",
+                    headers={**_supabase_headers(use_service_role=True), "Prefer": "return=minimal"},
+                    params={"id": f"eq.{post_id}"},
+                    json={"comments": comments},
+                    timeout=10,
+                )
+    except Exception as exc:
+        logger.debug("Could not update post comments after reply delete reply_id=%s error=%s", rid, exc)
+
+    return {
+        "deleted": True,
+        "replyId": rid,
+        "postId": post_id,
+        "ownerUsername": owner_username,
+        "deletedChildReplies": len(child_ids),
+        "serverDeleteMode": bool(SB_SERVICE),
+    }
+
+
 def _delete_supabase_story(story_id: str) -> Dict[str, Any]:
     from datetime import datetime, timezone
 
@@ -8903,19 +9019,25 @@ def respect_ai_review_report(req: RespectAIModerationRequest, x_app_secret: Opti
 
     report_reason = (req.reason or "").strip()
     report_details = (req.details or "").strip()
-    post_text = (req.postText or req.text or "").strip()
+    content_type = (req.contentType or "post").strip().lower()
+    is_reply_report = content_type == "reply" or bool((req.replyId or "").strip())
+    reported_text = (req.text if is_reply_report else (req.postText or req.text) or "").strip()
+    post_context = (req.postText or "").strip()
     reported = _display_username(req.reportedUsername or req.username)
+    content_label = "الرد" if is_reply_report else "التغريدة"
 
     prompt = f"""
 أنت نظام مراجعة بلاغات داخل Respect App.
-مهم جدًا: لا تعتبر البلاغ صحيحًا إلا إذا الدليل واضح من نص المنشور والبلاغ.
+مهم جدًا: لا تعتبر البلاغ صحيحًا إلا إذا الدليل واضح من نص {content_label} والبلاغ.
 إذا البلاغ عن سرقة محتوى ولا يوجد نص كافٍ للمقارنة أو رابط/اسم صاحب المحتوى الأصلي، اعتبره يحتاج مراجعة بشرية ولا تحذف.
 أعد JSON فقط بدون شرح خارج JSON:
 {{"validReport": true/false, "action": "none|hide|delete", "category": "copyright|abuse|spam|misleading|other|insufficient_evidence", "confidence": 0.0-1.0, "reason": "سبب قصير بالعربية"}}
 
+نوع المحتوى: {content_label}
 سبب البلاغ: {report_reason}
 تفاصيل البلاغ: {report_details}
-نص التغريدة المبلغ عنها: {post_text}
+نص {content_label} المبلغ عنه: {reported_text}
+نص التغريدة الأصلية للسياق: {post_context if is_reply_report else ""}
 المستخدم المبلغ عنه: {reported}
 المجتمع: {req.communityName}
 """.strip()
@@ -8928,7 +9050,7 @@ def respect_ai_review_report(req: RespectAIModerationRequest, x_app_secret: Opti
         "reason": "لم توجد أدلة كافية لتأكيد البلاغ تلقائيًا",
     }
 
-    if QWEN_API_KEY and post_text:
+    if QWEN_API_KEY and reported_text:
         try:
             content = _chat_completion_request(
                 model=QWEN_TEXT_MODEL,
@@ -8941,7 +9063,7 @@ def respect_ai_review_report(req: RespectAIModerationRequest, x_app_secret: Opti
                 temperature=0.05,
                 max_tokens=450,
                 timeout=45,
-                log_label="REPORT_REVIEW",
+                log_label="REPORT_REVIEW_REPLY" if is_reply_report else "REPORT_REVIEW",
             )
             m = re.search(r"\{.*\}", content, re.S)
             if m:
@@ -8957,37 +9079,91 @@ def respect_ai_review_report(req: RespectAIModerationRequest, x_app_secret: Opti
     should_hide = valid and action in {"hide", "delete"}
 
     update_result: Dict[str, Any] = {"updated": False}
+    delete_result: Dict[str, Any] = {"deleted": False}
     warning_result: Dict[str, Any] = {"warningCount": 0, "blocked": False}
     learn_result: Dict[str, Any] = {"learned": False, "terms": []}
     if should_hide:
-        # أهم تعديل: أي بلاغ صحيح تسبب بحذف التغريدة يعلّم Respect AI العبارة المخالفة.
         learn_result = _learn_abuse_terms_from_valid_report(req, result)
 
-        # داخل المجتمع نخفي، وخارج المجتمع نحذف إذا action=delete.
-        if req.communityId:
-            update_result = _patch_supabase_post(req.postId, {"community_hidden": True, "hidden_reason": str(result.get("reason") or "")})
-        else:
+        if is_reply_report:
             try:
-                update_result = _delete_supabase_post(req.postId)
+                delete_result = _delete_supabase_reply(req.replyId)
+                update_result = delete_result
             except Exception as e:
                 update_result = {"deleted": False, "error": str(e)}
-        warning_result = _insert_user_warning(reported, str(result.get("reason") or report_reason), req.postId, req.reportId)
+        else:
+            if req.communityId:
+                update_result = _patch_supabase_post(req.postId, {"community_hidden": True, "hidden_reason": str(result.get("reason") or "")})
+            else:
+                try:
+                    delete_result = _delete_supabase_post(req.postId)
+                    update_result = delete_result
+                except Exception as e:
+                    update_result = {"deleted": False, "error": str(e)}
+        warning_result = _insert_user_warning(reported, str(result.get("reason") or report_reason), req.replyId if is_reply_report else req.postId, req.reportId)
+
+    report_update_result = {"updated": False, "reason": "empty_report_id"}
+    if (req.reportId or "").strip():
+        report_update_result = _patch_supabase_report(req.reportId, {
+            "status": "accepted" if should_hide else "rejected",
+            "ai_status": "accepted" if should_hide else "rejected",
+            "ai_reason": str(result.get("reason") or ""),
+            "ai_confidence": confidence,
+            "reviewed_at": datetime.now(timezone.utc).isoformat(),
+        })
 
     return {
         "ok": True,
         "reportId": req.reportId,
         "postId": req.postId,
+        "replyId": req.replyId,
+        "contentType": "reply" if is_reply_report else "post",
         "validReport": valid,
         "shouldDelete": should_hide,
-        "action": "hide" if should_hide and req.communityId else ("delete" if should_hide else "none"),
+        "deleted": bool((update_result or {}).get("deleted") or (delete_result or {}).get("deleted")),
+        "action": "delete" if should_hide else "none",
         "category": str(result.get("category") or "other"),
         "confidence": confidence,
         "reason": str(result.get("reason") or ""),
-        "postUpdate": update_result,
+        "postUpdate": update_result if not is_reply_report else {"updated": False, "reason": "reply_report"},
+        "replyDeleteResult": update_result if is_reply_report else {"deleted": False, "reason": "not_reply"},
+        "deleteResult": update_result,
+        "reportUpdate": report_update_result,
         "learnResult": learn_result,
         "learnedTerms": learn_result.get("terms", []),
         "warning": warning_result,
     }
+
+
+def _patch_supabase_report(report_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    rid = (report_id or "").strip()
+    if not rid:
+        return {"updated": False, "reason": "empty_report_id"}
+    headers = {**_supabase_headers(use_service_role=True), "Prefer": "return=representation"}
+    try:
+        r = requests.patch(
+            f"{SB_URL}/rest/v1/post_reports",
+            headers=headers,
+            params={"id": f"eq.{rid}"},
+            json=payload,
+            timeout=12,
+        )
+        if r.status_code < 400:
+            return {"updated": True, "reportId": rid}
+        minimal = {k: v for k, v in payload.items() if k in {"status", "ai_status"}}
+        if minimal:
+            r2 = requests.patch(
+                f"{SB_URL}/rest/v1/post_reports",
+                headers=headers,
+                params={"id": f"eq.{rid}"},
+                json=minimal,
+                timeout=12,
+            )
+            if r2.status_code < 400:
+                return {"updated": True, "reportId": rid, "fallback": True}
+        return {"updated": False, "status": r.status_code, "body": r.text[:500]}
+    except Exception as e:
+        return {"updated": False, "error": str(e)}
 
 def _run_story_moderation_job(req_data: Dict[str, Any]) -> None:
     req = RespectAIModerationRequest(**req_data)
@@ -9212,13 +9388,15 @@ def respect_ai_moderate_post(req: RespectAIModerationRequest, request: FastAPIRe
         return {
             "ok": True,
             "postId": req.postId,
+            "replyId": req.replyId,
+            "contentType": (req.contentType or "post"),
             "queued": True,
             "moderationQueued": True,
             "jobId": job_id,
             "shouldDelete": False,
             "deleted": False,
             "category": "queued",
-            "reason": "تم قبول المنشور، والمراجعة الثقيلة تعمل بالخلفية.",
+            "reason": "تم قبول المحتوى، والمراجعة الثقيلة تعمل بالخلفية.",
             "provider": "background-moderation",
             "serverSideDelete": True,
         }
@@ -9227,12 +9405,16 @@ def respect_ai_moderate_post(req: RespectAIModerationRequest, request: FastAPIRe
 
 
 def _respect_ai_moderate_post_sync(req: RespectAIModerationRequest) -> Dict[str, Any]:
+    content_type = (req.contentType or "post").strip().lower()
+    is_reply_content = content_type == "reply" or bool((req.replyId or "").strip())
+    target_id = (req.replyId if is_reply_content else req.postId) or ""
+
     # طبقة تعلم البلاغات: تفحص القاموس المتعلم قبل Qwen، حتى يكون الحذف فوريًا ومتسقًا.
     learned_result = _learned_abuse_violation_guard(req.text or req.postText or "")
     if learned_result is not None and learned_result.get("shouldDelete") is True:
         delete_result: Dict[str, Any] = {"deleted": False}
-        if (req.postId or "").strip():
-            delete_result = _delete_supabase_post(req.postId)
+        if target_id.strip():
+            delete_result = _delete_supabase_reply(req.replyId) if is_reply_content else _delete_supabase_post(req.postId)
 
         reason = str(learned_result.get("reason") or "عبارة مخالفة متعلمة من بلاغ صحيح سابق")
         category = str(learned_result.get("category") or "learned_abuse")
@@ -9242,17 +9424,20 @@ def _respect_ai_moderate_post_sync(req: RespectAIModerationRequest) -> Dict[str,
         notification_result: Dict[str, Any] = {"sent": False, "reason": "not_deleted"}
         memory_learn_result: Dict[str, Any] = {"learned": False, "reason": "not_deleted"}
         if bool(delete_result.get("deleted")):
-            notification_result = _send_post_moderation_deleted_push(
-                username=owner_username,
-                post_id=req.postId,
-                reason=reason,
-                category=category,
-                confidence=confidence,
-                decision_source=decision_source,
-                memory_used=True,
-                matched_term=str(learned_result.get("matchedTerm") or ""),
-                fallback_language=req.language,
-            )
+            if is_reply_content:
+                notification_result = {"sent": False, "reason": "reply_deleted_no_post_push", "username": owner_username, "replyId": req.replyId}
+            else:
+                notification_result = _send_post_moderation_deleted_push(
+                    username=owner_username,
+                    post_id=req.postId,
+                    reason=reason,
+                    category=category,
+                    confidence=confidence,
+                    decision_source=decision_source,
+                    memory_used=True,
+                    matched_term=str(learned_result.get("matchedTerm") or ""),
+                    fallback_language=req.language,
+                )
             learned_for_memory = dict(learned_result)
             learned_for_memory.setdefault("shouldDelete", True)
             learned_for_memory.setdefault("category", category)
@@ -9270,9 +9455,12 @@ def _respect_ai_moderate_post_sync(req: RespectAIModerationRequest) -> Dict[str,
         return {
             "ok": True,
             "postId": req.postId,
+            "replyId": req.replyId,
+            "contentType": "reply" if is_reply_content else "post",
             "shouldDelete": True,
             "deleted": bool(delete_result.get("deleted")),
             "deleteResult": delete_result,
+            "replyDeleteResult": delete_result if is_reply_content else {"deleted": False, "reason": "not_reply"},
             "notificationSent": bool(notification_result.get("sent")),
             "notificationResult": notification_result,
             "memoryLearned": bool(memory_learn_result.get("learned")),
@@ -9338,7 +9526,7 @@ def _respect_ai_moderate_post_sync(req: RespectAIModerationRequest) -> Dict[str,
 
     delete_result: Dict[str, Any] = {"deleted": False}
     if should_delete:
-        delete_result = _delete_supabase_post(req.postId)
+        delete_result = _delete_supabase_reply(req.replyId) if is_reply_content else _delete_supabase_post(req.postId)
 
     reason = str(result.get("reason") or "")
     category = str(result.get("category") or "safe")
@@ -9360,17 +9548,20 @@ def _respect_ai_moderate_post_sync(req: RespectAIModerationRequest) -> Dict[str,
 
     if bool(delete_result.get("deleted")):
         owner_username = str(req.username or delete_result.get("ownerUsername") or "").strip()
-        notification_result = _send_post_moderation_deleted_push(
-            username=owner_username,
-            post_id=req.postId,
-            reason=reason,
-            category=category,
-            confidence=confidence,
-            decision_source=decision_source,
-            memory_used=memory_used,
-            matched_term=str(result.get("matchedTerm") or ""),
-            fallback_language=req.language,
-        )
+        if is_reply_content:
+            notification_result = {"sent": False, "reason": "reply_deleted_no_post_push", "username": owner_username, "replyId": req.replyId}
+        else:
+            notification_result = _send_post_moderation_deleted_push(
+                username=owner_username,
+                post_id=req.postId,
+                reason=reason,
+                category=category,
+                confidence=confidence,
+                decision_source=decision_source,
+                memory_used=memory_used,
+                matched_term=str(result.get("matchedTerm") or ""),
+                fallback_language=req.language,
+            )
 
         # ضمان أخير: أي حذف ناجح لازم يحاول تسجيل الذاكرة.
         # إذا كان الحذف جاء من local_hard_filter، فغالبًا تم التعلم داخل moderate_with_qwen.
@@ -9393,9 +9584,12 @@ def _respect_ai_moderate_post_sync(req: RespectAIModerationRequest) -> Dict[str,
     return {
         "ok": True,
         "postId": req.postId,
+        "replyId": req.replyId,
+        "contentType": "reply" if is_reply_content else "post",
         "shouldDelete": should_delete,
         "deleted": bool(delete_result.get("deleted")),
         "deleteResult": delete_result,
+        "replyDeleteResult": delete_result if is_reply_content else {"deleted": False, "reason": "not_reply"},
         "notificationSent": bool(notification_result.get("sent")),
         "notificationResult": notification_result,
         "memoryLearned": bool(memory_learn_result.get("learned")),
