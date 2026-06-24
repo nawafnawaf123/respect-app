@@ -292,10 +292,17 @@ AI_TOPIC_MEMORY_LEARN_MIN_CONFIDENCE = float(os.getenv("AI_TOPIC_MEMORY_LEARN_MI
 AI_TOPIC_MEMORY_MAX_TERMS_PER_POST = int(os.getenv("AI_TOPIC_MEMORY_MAX_TERMS_PER_POST", "22"))
 POST_TOPIC_STORE_MIN_CONFIDENCE = float(os.getenv("POST_TOPIC_STORE_MIN_CONFIDENCE", "0.35"))
 
+# ================= Respect AI Unified Local Memory =================
+# جدول واحد لكل ما يتعلمه الذكاء المحلي:
+# - moderation: قرارات حذف/سماح للمنشورات والردود والبلاغات.
+# - qa: أجوبة Respect AI المتكررة.
+# لو عندك جداول قديمة تقدر تترك env كما هو، لكن الوضع الافتراضي الجديد موحد.
+RESPECT_AI_LOCAL_MEMORY_TABLE = os.getenv("RESPECT_AI_LOCAL_MEMORY_TABLE", "respect_ai_local_memory").strip() or "respect_ai_local_memory"
+
 # ================= Respect AI Q&A Reply Memory =================
 # ذاكرة الأسئلة والأجوبة تقلل استدعاءات Qwen للأسئلة المتكررة.
 # الفكرة: إذا تكرر نفس السؤال أو سؤال شديد التشابه في نفس السياق، يرجع Respect AI الجواب المتعلم مباشرة.
-RESPECT_AI_QA_MEMORY_TABLE = os.getenv("RESPECT_AI_QA_MEMORY_TABLE", "respect_ai_qa_memory").strip() or "respect_ai_qa_memory"
+RESPECT_AI_QA_MEMORY_TABLE = os.getenv("RESPECT_AI_QA_MEMORY_TABLE", RESPECT_AI_LOCAL_MEMORY_TABLE).strip() or RESPECT_AI_LOCAL_MEMORY_TABLE
 RESPECT_AI_QA_MEMORY_ENABLED = os.getenv("RESPECT_AI_QA_MEMORY_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
 RESPECT_AI_QA_MEMORY_AUTO_APPROVE = os.getenv("RESPECT_AI_QA_MEMORY_AUTO_APPROVE", "true").strip().lower() not in {"0", "false", "no", "off"}
 RESPECT_AI_QA_MEMORY_MATCH_THRESHOLD = float(os.getenv("RESPECT_AI_QA_MEMORY_MATCH_THRESHOLD", "0.92"))
@@ -5134,9 +5141,9 @@ def _simple_safe_moderation(text: str) -> Optional[Dict[str, Any]]:
 
 
 # ================= Respect AI Learned Abuse Dictionary =================
-# إذا تم قبول بلاغ وحُذفت التغريدة، نحفظ العبارة المخالفة في Supabase.
-# بعدها moderate-post يفحص هذا القاموس قبل Qwen ويحذف فورًا حتى مع الفواصل/المسافات/التمويه.
-LEARNED_TERMS_TABLE = os.getenv("RESPECT_AI_LEARNED_TERMS_TABLE", "respect_ai_learned_terms").strip() or "respect_ai_learned_terms"
+# توافق قديم مع مسار البلاغات، لكنه الآن يكتب في نفس جدول الذاكرة المحلي الموحد.
+# لا نستخدم جدولًا منفصلًا للبلاغات حتى تصبح ذاكرة المنشورات والردود والبلاغات واحدة.
+LEARNED_TERMS_TABLE = os.getenv("RESPECT_AI_LEARNED_TERMS_TABLE", RESPECT_AI_LOCAL_MEMORY_TABLE).strip() or RESPECT_AI_LOCAL_MEMORY_TABLE
 _LEARNED_TERMS_CACHE: Dict[str, Any] = {"ts": 0.0, "items": []}
 _LEARNED_TERMS_TTL_SECONDS = int(os.getenv("RESPECT_AI_LEARNED_TERMS_CACHE_TTL", "60") or "60")
 
@@ -5403,45 +5410,70 @@ def _extract_learned_terms_with_ai(post_text: str, report_reason: str, report_de
 
 
 def _insert_learned_abuse_term(*, term: str, category: str, reason: str, source_post_id: str, source_report_id: str, reporter_username: str, reported_username: str) -> Dict[str, Any]:
+    """
+    توافق قديم لمسار البلاغات.
+    بدل جدول respect_ai_learned_terms المنفصل، نحول العبارة إلى صف phrase داخل ذاكرة المودريشن الموحدة.
+    """
     phrase = _safe_term_phrase(term)
-    if not _is_learnable_term(phrase):
+    if not _is_moderation_memory_learnable_delete_phrase(phrase):
         return {"inserted": False, "reason": "not_learnable", "term": phrase}
+
     n = _learned_normalized(phrase)
-    now = datetime.now(timezone.utc).isoformat()
+    compact = n.get("compact") or ""
+    if not compact:
+        return {"inserted": False, "reason": "empty_normalized", "term": phrase}
+
     payload = {
-        "term": phrase,
-        "normalized_spaced": n["spaced"],
-        "normalized_compact": n["compact"],
-        "term_hash": _learned_hash(n["compact"]),
+        "memory_key": _moderation_memory_key("phrase", compact),
+        "memory_type": "phrase",
+        "normalized_spaced": (n.get("spaced") or "")[:500],
+        "normalized_compact": compact[:500],
+        "sample_text": phrase[:500],
+        "decision": "delete",
         "category": (category or "learned_abuse")[:80],
-        "reason": (reason or "تم تعلمها من بلاغ صحيح")[:500],
+        "reason": (reason or "تم تعلمها من بلاغ صحيح")[:700],
+        "confidence": 0.97,
+        "source": "report_review",
+        "model": "report_review_dictionary",
+        "active": True,
+        # حقول توافق اختيارية إذا كان جدولك الموحد يحتويها.
+        "term": phrase[:500],
+        "term_hash": _learned_hash(compact),
         "source_post_id": (source_post_id or "")[:120],
         "source_report_id": (source_report_id or "")[:120],
         "reporter_username": _display_username(reporter_username or ""),
         "reported_username": _display_username(reported_username or ""),
-        "active": True,
-        "match_count": 0,
-        "created_at": now,
-        "updated_at": now,
     }
-    headers = {**_supabase_headers(use_service_role=True), "Prefer": "return=representation", "Prefer": "resolution=merge-duplicates,return=representation"}
-    try:
-        r = requests.post(f"{SB_URL}/rest/v1/{LEARNED_TERMS_TABLE}", headers=headers, params={"on_conflict": "term_hash"}, json=payload, timeout=12)
-        if r.status_code in (200, 201):
+
+    # لو الجدول الموحد لا يحتوي حقول التوافق القديمة، نحذفها ونحاول مرة ثانية.
+    res = _upsert_moderation_memory_row(payload)
+    if res.get("ok") is True:
+        _invalidate_learned_terms_cache()
+        return {"inserted": True, "term": phrase, "hash": payload["term_hash"], "memory_key": payload["memory_key"]}
+
+    if str(res.get("body") or "").lower().find("column") >= 0:
+        slim = dict(payload)
+        for key in ("term", "term_hash", "source_post_id", "source_report_id", "reporter_username", "reported_username"):
+            slim.pop(key, None)
+        res = _upsert_moderation_memory_row(slim)
+        if res.get("ok") is True:
             _invalidate_learned_terms_cache()
-            return {"inserted": True, "term": phrase, "hash": payload["term_hash"]}
-        logger.warning("Insert learned term failed status=%s body=%s", r.status_code, _safe_response_text(r.text, 300))
-        return {"inserted": False, "status": r.status_code, "body": r.text[:300], "term": phrase}
-    except Exception as e:
-        logger.warning("Insert learned term exception: %s", e)
-        return {"inserted": False, "error": str(e), "term": phrase}
+            return {"inserted": True, "term": phrase, "memory_key": slim["memory_key"], "fallbackSlim": True}
+
+    logger.warning("Insert learned term into unified memory failed: %s", res)
+    return {"inserted": False, "term": phrase, "result": res}
 
 
 def _learn_abuse_terms_from_valid_report(req: RespectAIModerationRequest, result: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    يتعلم من البلاغ المقبول في نفس الذاكرة المحلية الموحدة.
+    يسجل النص كاملًا كـ exact + العبارات المخالفة كـ phrase، ثم يرجع نفس المفاتيح القديمة حتى Flutter/Admin لا يحتاجان تغييرًا.
+    """
     content_type = (req.contentType or "post").strip().lower()
     post_text = (req.text if content_type == "reply" else (req.postText or req.text) or "").strip()
     if not post_text:
         return {"learned": False, "terms": [], "reason": "empty_reported_text"}
+
     terms = _extract_learned_terms_with_ai(post_text, req.reason or "", req.details or "", str(result.get("reason") or ""))
     source_id = req.replyId if content_type == "reply" and (req.replyId or "").strip() else (req.postId or "")
     inserted = [_insert_learned_abuse_term(
@@ -5453,8 +5485,40 @@ def _learn_abuse_terms_from_valid_report(req: RespectAIModerationRequest, result
         reporter_username=req.reporterUsername or "",
         reported_username=req.reportedUsername or req.username or "",
     ) for term in terms]
+
+    report_memory_result = dict(result)
+    report_memory_result.update({
+        "shouldDelete": True,
+        "blocked": True,
+        "category": str(result.get("category") or "report_accepted"),
+        "reason": str(result.get("reason") or req.reason or "بلاغ صحيح"),
+        "confidence": max(0.90, _mm_float(result.get("confidence"), 0.90)),
+        "decisionSource": "report_review",
+        "model": QWEN_TEXT_MODEL if QWEN_API_KEY else "report_review",
+    })
+    memory_result = _learn_moderation_memory_safely(
+        req,
+        report_memory_result,
+        text_result=report_memory_result,
+        source=f"report_review_{content_type}",
+    )
+
     ok_count = sum(1 for x in inserted if x.get("inserted") is True)
-    return {"learned": ok_count > 0, "terms": terms, "inserted": inserted, "count": ok_count, "contentType": content_type}
+    memory_ok = bool(memory_result.get("learned"))
+    local_rows = memory_result.get("localMemoryRows") or memory_result.get("learnedRows") or []
+    learned_terms = list(dict.fromkeys([*terms, *[str(x) for x in (memory_result.get("learnedTerms") or []) if str(x).strip()]]))
+    return {
+        "learned": ok_count > 0 or memory_ok,
+        "terms": learned_terms,
+        "inserted": inserted,
+        "count": ok_count + int(memory_result.get("count") or 0),
+        "contentType": content_type,
+        "memoryLearnResult": memory_result,
+        "localMemoryRows": local_rows,
+        "learnedRows": local_rows,
+        "learnedTerms": learned_terms,
+        "table": RESPECT_AI_MODERATION_MEMORY_TABLE,
+    }
 
 
 def _load_active_learned_terms(force: bool = False) -> list[Dict[str, Any]]:
@@ -5467,7 +5531,45 @@ def _load_active_learned_terms(force: bool = False) -> list[Dict[str, Any]]:
             return items
         if (now - float(_LEARNED_TERMS_CACHE.get("ts") or 0)) < _LEARNED_TERMS_TTL_SECONDS:
             return list(_LEARNED_TERMS_CACHE.get("items") or [])
+
+    # القراءة الجديدة: من جدول الذاكرة الموحد، صفوف phrase/keyword ذات قرار delete.
     try:
+        r = requests.get(
+            f"{SB_URL}/rest/v1/{RESPECT_AI_MODERATION_MEMORY_TABLE}",
+            headers=_supabase_headers(use_service_role=True),
+            params={
+                "select": "id,sample_text,normalized_spaced,normalized_compact,category,reason,active,decision,memory_type,confidence,hits,memory_hits,updated_at",
+                "active": "eq.true",
+                "decision": "eq.delete",
+                "memory_type": "in.(phrase,keyword)",
+                "order": "updated_at.desc",
+                "limit": "900",
+            },
+            timeout=10,
+        )
+        if r.status_code < 400:
+            data = r.json() if r.text else []
+            rows = [dict(x) for x in data if isinstance(x, dict)] if isinstance(data, list) else []
+            items = []
+            for row in rows:
+                sample = str(row.get("sample_text") or "").strip()
+                items.append({
+                    **row,
+                    "term": sample,
+                    "source": "respect_ai_local_memory",
+                })
+            _LEARNED_TERMS_CACHE.update({"ts": now, "items": items})
+            _redis_set_json(_learned_terms_cache_key(), items, _LEARNED_TERMS_TTL_SECONDS)
+            return items
+        logger.warning("Load unified learned terms failed status=%s body=%s", r.status_code, _safe_response_text(r.text, 250))
+    except Exception as e:
+        logger.warning("Load unified learned terms exception: %s", e)
+
+    # توافق احتياطي: لو ما زلت تستخدم جدول learned_terms القديم عبر env.
+    try:
+        if LEARNED_TERMS_TABLE == RESPECT_AI_MODERATION_MEMORY_TABLE:
+            _LEARNED_TERMS_CACHE.update({"ts": now, "items": []})
+            return []
         r = requests.get(
             f"{SB_URL}/rest/v1/{LEARNED_TERMS_TABLE}",
             headers=_supabase_headers(use_service_role=True),
@@ -5475,7 +5577,7 @@ def _load_active_learned_terms(force: bool = False) -> list[Dict[str, Any]]:
             timeout=10,
         )
         if r.status_code >= 400:
-            logger.warning("Load learned terms failed status=%s body=%s", r.status_code, _safe_response_text(r.text, 250))
+            logger.warning("Load legacy learned terms failed status=%s body=%s", r.status_code, _safe_response_text(r.text, 250))
             _LEARNED_TERMS_CACHE.update({"ts": now, "items": []})
             return []
         data = r.json() if r.text else []
@@ -5505,6 +5607,10 @@ def _learned_phrase_matches_text(term_compact: str, term_spaced: str, text_compa
 
 
 def _learned_abuse_violation_guard(text: str) -> Optional[Dict[str, Any]]:
+    """
+    فحص سريع متوافق مع الاسم القديم، لكنه يقرأ من ذاكرة المودريشن الموحدة.
+    وجوده يحافظ على بقية المسارات بدون تعديل، والقرار يخرج باسم ذاكرة Respect AI.
+    """
     if not (text or "").strip():
         return None
     n = _learned_normalized(text)
@@ -5513,29 +5619,34 @@ def _learned_abuse_violation_guard(text: str) -> Optional[Dict[str, Any]]:
     for item in _load_active_learned_terms():
         term_compact = str(item.get("normalized_compact") or "").strip()
         term_spaced = str(item.get("normalized_spaced") or "").strip()
+        sample = str(item.get("sample_text") or item.get("term") or term_spaced or term_compact).strip()
         if term_compact and _learned_phrase_matches_text(term_compact, term_spaced, n["compact"], n["spaced"]):
             return {
                 "shouldDelete": True,
                 "deleteParentReply": False,
                 "category": str(item.get("category") or "learned_abuse"),
-                "reason": f"تم حذف المحتوى لأنه يطابق عبارة مخالفة تعلمها Respect AI من بلاغ صحيح سابق: {str(item.get('term') or '')[:60]}",
-                "confidence": 0.99,
-                "checks": 1,
+                "reason": str(item.get("reason") or "عبارة مخالفة تعلمتها ذاكرة Respect AI الموحدة"),
+                "confidence": max(0.96, _mm_float(item.get("confidence"), 0.96)),
+                "checks": 0,
                 "learned_guard": True,
-                "matchedTerm": str(item.get("term") or ""),
+                "memoryUsed": True,
+                "moderationMemoryUsed": True,
+                "decisionSource": "respect_ai_moderation_memory",
+                "matchedTerm": sample[:120],
+                "model": "respect_ai_local_memory_v2",
             }
     return None
 
 
+
+
 # ================= Respect AI Moderation Memory =================
-# ذاكرة عامة لمراجعة المحتوى: تتعلم من قرارات Qwen القوية ثم تستخدمها قبل استدعاء Qwen لاحقًا.
-# الفرق بينها وبين respect_ai_learned_terms:
-# - learned_terms يتعلم من البلاغات المقبولة فقط.
-# - moderation_memory يتعلم من كل قرار AI قوي: آمن/مخالف، مع عتبات محافظة حتى لا تزيد الأخطاء.
+# ذاكرة عامة موحدة لمراجعة المحتوى: تتعلم من قرارات Qwen القوية + البلاغات المقبولة + الردود والمنشورات.
+# نفس جدول RESPECT_AI_LOCAL_MEMORY_TABLE يستخدم لكل مسارات التعلم حتى لا تتشتت الذاكرة.
 RESPECT_AI_MODERATION_MEMORY_TABLE = os.getenv(
     "RESPECT_AI_MODERATION_MEMORY_TABLE",
-    "respect_ai_moderation_memory",
-).strip() or "respect_ai_moderation_memory"
+    RESPECT_AI_LOCAL_MEMORY_TABLE,
+).strip() or RESPECT_AI_LOCAL_MEMORY_TABLE
 AI_MODERATION_MEMORY_ENABLED = os.getenv("AI_MODERATION_MEMORY_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
 AI_MODERATION_MEMORY_CACHE_TTL_SECONDS = int(os.getenv("AI_MODERATION_MEMORY_CACHE_TTL_SECONDS", "90") or "90")
 AI_MODERATION_MEMORY_MAX_ROWS = int(os.getenv("AI_MODERATION_MEMORY_MAX_ROWS", "2500") or "2500")
@@ -9259,7 +9370,10 @@ def respect_ai_review_report(req: RespectAIModerationRequest, x_app_secret: Opti
         "deleteResult": update_result,
         "reportUpdate": report_update_result,
         "learnResult": learn_result,
-        "learnedTerms": learn_result.get("terms", []),
+        "memoryLearnResult": learn_result.get("memoryLearnResult", learn_result),
+        "localMemoryRows": learn_result.get("localMemoryRows") or learn_result.get("learnedRows") or [],
+        "learnedTerms": learn_result.get("learnedTerms") or learn_result.get("terms", []),
+        "memoryLearned": bool(learn_result.get("learned")),
         "warning": warning_result,
         "notificationSent": bool(notification_result.get("sent")),
         "notificationResult": notification_result,
@@ -9426,8 +9540,8 @@ def respect_ai_precheck_post(req: RespectAIModerationRequest, request: FastAPIRe
     learned_result = _learned_abuse_violation_guard(text)
     if learned_result is not None and learned_result.get("shouldDelete") is True:
         result = dict(learned_result)
-        result.setdefault("decisionSource", "learned_report_dictionary")
-        result.setdefault("model", "learned_dictionary")
+        result.setdefault("decisionSource", "respect_ai_moderation_memory")
+        result.setdefault("model", "respect_ai_local_memory_v2")
     else:
         result = moderate_with_qwen(req)
 
@@ -9550,7 +9664,7 @@ def _respect_ai_moderate_post_sync(req: RespectAIModerationRequest) -> Dict[str,
         reason = str(learned_result.get("reason") or "عبارة مخالفة متعلمة من بلاغ صحيح سابق")
         category = str(learned_result.get("category") or "learned_abuse")
         confidence = float(learned_result.get("confidence") or 0.99)
-        decision_source = "learned_report_dictionary"
+        decision_source = "respect_ai_moderation_memory"
         owner_username = str(req.username or delete_result.get("ownerUsername") or "").strip()
         notification_result: Dict[str, Any] = {"sent": False, "reason": "not_deleted"}
         memory_learn_result: Dict[str, Any] = {"learned": False, "reason": "not_deleted"}
@@ -9586,12 +9700,12 @@ def _respect_ai_moderate_post_sync(req: RespectAIModerationRequest) -> Dict[str,
             learned_for_memory.setdefault("reason", reason)
             learned_for_memory.setdefault("confidence", confidence)
             learned_for_memory.setdefault("decisionSource", decision_source)
-            learned_for_memory.setdefault("model", "learned_dictionary")
+            learned_for_memory.setdefault("model", "respect_ai_local_memory_v2")
             memory_learn_result = _learn_moderation_memory_safely(
                 req,
                 learned_for_memory,
                 text_result=learned_for_memory,
-                source="learned_report_dictionary_delete",
+                source="respect_ai_local_memory_delete",
             )
 
         return {
@@ -9624,7 +9738,7 @@ def _respect_ai_moderate_post_sync(req: RespectAIModerationRequest) -> Dict[str,
             "virusTotalModeration": {"shouldDelete": False, "category": "skipped", "reason": "تم الحذف من طبقة التعلم النصية"},
             "learnedMatch": True,
             "matchedTerm": str(learned_result.get("matchedTerm") or ""),
-            "model": "learned_dictionary",
+            "model": "respect_ai_local_memory_v2",
             "textModel": QWEN_TEXT_MODEL,
             "visionModel": QWEN_VISION_MODEL,
         }
