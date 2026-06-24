@@ -305,12 +305,17 @@ RESPECT_AI_LOCAL_MEMORY_TABLE = os.getenv("RESPECT_AI_LOCAL_MEMORY_TABLE", "resp
 RESPECT_AI_QA_MEMORY_TABLE = os.getenv("RESPECT_AI_QA_MEMORY_TABLE", RESPECT_AI_LOCAL_MEMORY_TABLE).strip() or RESPECT_AI_LOCAL_MEMORY_TABLE
 RESPECT_AI_QA_MEMORY_ENABLED = os.getenv("RESPECT_AI_QA_MEMORY_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
 RESPECT_AI_QA_MEMORY_AUTO_APPROVE = os.getenv("RESPECT_AI_QA_MEMORY_AUTO_APPROVE", "true").strip().lower() not in {"0", "false", "no", "off"}
-RESPECT_AI_QA_MEMORY_MATCH_THRESHOLD = float(os.getenv("RESPECT_AI_QA_MEMORY_MATCH_THRESHOLD", "0.92"))
-RESPECT_AI_QA_MEMORY_MIN_CONFIDENCE = float(os.getenv("RESPECT_AI_QA_MEMORY_MIN_CONFIDENCE", "0.74"))
-RESPECT_AI_QA_MEMORY_MIN_QUESTION_CHARS = int(os.getenv("RESPECT_AI_QA_MEMORY_MIN_QUESTION_CHARS", "4"))
+RESPECT_AI_QA_MEMORY_MATCH_THRESHOLD = float(os.getenv("RESPECT_AI_QA_MEMORY_MATCH_THRESHOLD", "0.88"))
+RESPECT_AI_QA_MEMORY_MIN_CONFIDENCE = float(os.getenv("RESPECT_AI_QA_MEMORY_MIN_CONFIDENCE", "0.10"))
+RESPECT_AI_QA_MEMORY_MIN_QUESTION_CHARS = int(os.getenv("RESPECT_AI_QA_MEMORY_MIN_QUESTION_CHARS", "1"))
 RESPECT_AI_QA_MEMORY_MAX_QUESTION_CHARS = int(os.getenv("RESPECT_AI_QA_MEMORY_MAX_QUESTION_CHARS", "520"))
-RESPECT_AI_QA_MEMORY_MAX_ANSWER_CHARS = int(os.getenv("RESPECT_AI_QA_MEMORY_MAX_ANSWER_CHARS", "1200"))
-RESPECT_AI_QA_MEMORY_SIMILAR_SCAN_LIMIT = int(os.getenv("RESPECT_AI_QA_MEMORY_SIMILAR_SCAN_LIMIT", "250"))
+RESPECT_AI_QA_MEMORY_MAX_ANSWER_CHARS = int(os.getenv("RESPECT_AI_QA_MEMORY_MAX_ANSWER_CHARS", "2000"))
+RESPECT_AI_QA_MEMORY_SIMILAR_SCAN_LIMIT = int(os.getenv("RESPECT_AI_QA_MEMORY_SIMILAR_SCAN_LIMIT", "350"))
+# إذا true: Respect AI يتعلم حتى التحيات والأسئلة القصيرة جدًا.
+# يبقى يمنع فقط حفظ الأسرار الواضحة مثل passwords/tokens/otp حماية للمستخدمين.
+RESPECT_AI_QA_MEMORY_LEARN_EVERYTHING = os.getenv("RESPECT_AI_QA_MEMORY_LEARN_EVERYTHING", "true").strip().lower() not in {"0", "false", "no", "off"}
+RESPECT_AI_QA_MEMORY_ALLOW_FRESH_TOPICS = os.getenv("RESPECT_AI_QA_MEMORY_ALLOW_FRESH_TOPICS", "true").strip().lower() not in {"0", "false", "no", "off"}
+RESPECT_AI_QA_MEMORY_ALLOW_MEDICAL_LEGAL = os.getenv("RESPECT_AI_QA_MEMORY_ALLOW_MEDICAL_LEGAL", "true").strip().lower() not in {"0", "false", "no", "off"}
 
 
 # ================= Respect App AI Fixer / GitHub =================
@@ -4608,7 +4613,15 @@ def _qa_memory_has_fresh_or_sensitive_topic(question: str, answer: str = "") -> 
         "تشخيص", "دواء", "علاج", "محكمه", "محكمة", "قضيه", "قضية", "فتوى", "حلال", "حرام",
         "diagnosis", "medicine", "lawyer", "court", "legal",
     }
-    return any(term in text for term in fresh_terms | sensitive_terms | medical_legal_terms)
+
+    # لا نحفظ الأسرار الواضحة حتى مع وضع التعلم الكامل، حماية للمستخدمين.
+    if any(term in text for term in sensitive_terms):
+        return True
+    if not RESPECT_AI_QA_MEMORY_ALLOW_FRESH_TOPICS and any(term in text for term in fresh_terms):
+        return True
+    if not RESPECT_AI_QA_MEMORY_ALLOW_MEDICAL_LEGAL and any(term in text for term in medical_legal_terms):
+        return True
+    return False
 
 
 def _qa_memory_is_cacheable(question: str, answer: str = "", mode: str = "reply") -> bool:
@@ -4617,14 +4630,18 @@ def _qa_memory_is_cacheable(question: str, answer: str = "", mode: str = "reply"
     m = (mode or "reply").strip().lower()
     if not _qa_memory_enabled():
         return False
-    if m.startswith("daily_") or m in {"poll", "daily_poll", "daily_question", "daily_info"}:
-        return False
+
+    # الوضع الجديد: يتعلم أي سؤال/تحية/كلام قصير، بدل فلترة الأسئلة العامة.
+    if not RESPECT_AI_QA_MEMORY_LEARN_EVERYTHING:
+        if m.startswith("daily_") or m in {"poll", "daily_poll", "daily_question", "daily_info"}:
+            return False
+
     if len(q) < RESPECT_AI_QA_MEMORY_MIN_QUESTION_CHARS:
         return False
     if len(q) > RESPECT_AI_QA_MEMORY_MAX_QUESTION_CHARS:
         return False
     if answer is not None:
-        if len(a) < 2 or len(a) > RESPECT_AI_QA_MEMORY_MAX_ANSWER_CHARS:
+        if len(a) < 1 or len(a) > RESPECT_AI_QA_MEMORY_MAX_ANSWER_CHARS:
             return False
         if "NO_REPEATED_QUESTION" in a:
             return False
