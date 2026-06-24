@@ -1542,11 +1542,14 @@ class RespectAIRequest(BaseModel):
     parentReplyText: str = ""
     recentRepliesText: str = ""
     postId: str = ""
-    mode: str = "reply"  # reply / summarize / poll / question / daily_question / daily_poll / daily_info / chat
+    mode: str = "reply"  # reply / chat / coding / file_review / creative / study / moderation
     language: str = "ar"
     imageUrls: list[str] = Field(default_factory=list)
     imageUrl: str = ""
     mediaType: str = "text"
+    conversationContext: str = ""
+    deepThinking: bool = False
+    fileAttachments: list[Dict[str, Any]] = Field(default_factory=list)
 
 
 class RespectAIResponse(BaseModel):
@@ -1558,6 +1561,8 @@ class RespectAIResponse(BaseModel):
     memoryId: str = ""
     confidence: float = 0.0
     category: str = ""
+    thinkingSummary: str = ""
+    usedMode: str = ""
 
 
 class RespectAIChatTranslateRequest(BaseModel):
@@ -4273,6 +4278,18 @@ def _respect_ai_system_prompt(mode: str) -> str:
 لا تكتب معلومة اليوم من خيالك. استخدم فقط موضوعًا متكررًا مثبتًا في الطلب.
 إذا لا يوجد موضوع متكرر واضح، اكتب بالضبط: NO_REPEATED_QUESTION
 """.strip()
+    if mode in {"chat", "general"}:
+        return base + "\n\n" + trend_rule + "\n\nأنت داخل صفحة Respect AI الخاصة. جاوب كدردشة مفيدة وواضحة، واذكر الخطوات فقط عند الحاجة."
+    if mode == "coding":
+        return base + "\n\n" + trend_rule + "\n\nوضع البرمجة: كن قويًا في Flutter/Dart/FastAPI/Supabase/Firebase. شخّص الخطأ، أعطِ سببًا واضحًا، ثم أعطِ كودًا عمليًا عند الحاجة. لا تعطِ كلامًا عامًا."
+    if mode == "file_review":
+        return base + "\n\n" + trend_rule + "\n\nوضع فحص الملفات: اقرأ مقتطفات الملفات بعناية، اذكر أهم الملاحظات، الأخطاء، والتحسينات. إذا الملف غير قابل للقراءة قل ذلك بوضوح."
+    if mode == "creative":
+        return base + "\n\n" + trend_rule + "\n\nوضع الإبداع: أعطِ صياغات جميلة، أفكار قوية، أسلوب تسويقي/تشويقي، مع اختصار ووضوح."
+    if mode == "study":
+        return base + "\n\n" + trend_rule + "\n\nوضع التعلم: اشرح ببساطة، أعطِ مثالًا قصيرًا، ثم خلاصة."
+    if mode == "moderation":
+        return base + "\n\n" + trend_rule + "\n\nوضع الحماية: حلل المحتوى من ناحية الإساءات والمخالفات والبلاغات، أعطِ قرارًا واضحًا وسببًا مختصرًا بدون تهويل."
     return base + "\n\n" + trend_rule + "\n\nرد على منشن المستخدم بنفس لهجته، لكن بدقة عالية. ابدأ بالجواب مباشرة، ثم توضيح قصير عند الحاجة."
 
 def _clean_ai_text(text: str) -> str:
@@ -4295,7 +4312,11 @@ def _auto_detect_mode(mode: str, text: str) -> str:
         return "poll"
     if any(word in t for word in ["سؤال تفاعلي", "سؤال للنقاش", "نقاش", "question"]):
         return "question"
-    return "reply"
+    if any(word in t for word in ["كود", "برمجة", "flutter", "dart", "fastapi", "supabase", "firebase", "bug", "error"]):
+        return "coding"
+    if any(word in t for word in ["ملف", "افحص", "راجع الملف", "file", "review"]):
+        return "file_review"
+    return "chat" if requested in {"chat", "general"} else "reply"
 
 
 def _build_user_prompt(
@@ -4304,6 +4325,9 @@ def _build_user_prompt(
     post_text: str = "",
     parent_reply_text: str = "",
     recent_replies_text: str = "",
+    conversation_context: str = "",
+    file_attachments: Optional[list[Dict[str, Any]]] = None,
+    deep_thinking: bool = False,
 ) -> str:
     clean_text = _clean_ai_text(text)
     if not clean_text and post_text.strip():
@@ -4329,6 +4353,43 @@ def _build_user_prompt(
             "سياق الردود/المجتمع والمواضيع المتكررة:\n"
             f"{recent_replies_text.strip()[:5000]}\n\n"
             "استخدم هذا السياق فقط لفهم الجو والموضوع. لا تعتبره مصدر حقائق مؤكد إذا كان مجرد كلام مستخدمين."
+        )
+
+    clean_context = (conversation_context or "").strip()
+    if clean_context:
+        parts.append(
+            "سياق آخر الرسائل في محادثة Respect AI:\n"
+            f"{clean_context[:6000]}\n\n"
+            "استخدمه لفهم المحادثة فقط، ولا تكرر الكلام القديم إلا إذا احتاج الرد."
+        )
+
+    attachments = file_attachments or []
+    if attachments:
+        file_parts = []
+        for item in attachments[:8]:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or item.get("fileName") or "file").strip()[:180]
+            ftype = str(item.get("type") or item.get("mediaType") or "file").strip()[:40]
+            url = str(item.get("url") or item.get("fileUrl") or "").strip()[:500]
+            extracted = str(item.get("text") or item.get("content") or item.get("textSnippet") or "").strip()
+            block = f"- الملف: {name} | النوع: {ftype}"
+            if url:
+                block += f" | الرابط: {url}"
+            if extracted:
+                block += f"\nمقتطف قابل للقراءة من الملف:\n{extracted[:12000]}"
+            file_parts.append(block)
+        if file_parts:
+            parts.append(
+                "ملفات أرفقها المستخدم داخل محادثة Respect AI:\n"
+                + "\n\n".join(file_parts)
+                + "\n\nحلل الملفات بناءً على المقتطفات المتاحة. إذا كان الملف صورة استخدم الصورة المرسلة. إذا كان PDF/ملف ثنائي ولا يوجد مقتطف نصي، وضح أنك تحتاج محتواه النصي أو صورة منه."
+            )
+
+    if deep_thinking:
+        parts.append(
+            "وضع التفكير العميق مفعل: خذ وقتك في التحليل، دقق المنطق، ثم أعطِ الرد النهائي فقط. "
+            "يمكنك إضافة قسم قصير بعنوان: ملخص التفكير، يكون عبارة عن نقاط عالية المستوى فقط بدون كشف تفكير داخلي تفصيلي."
         )
 
     if any(tag in clean_text for tag in ["السؤال المتكرر", "عدد التكرار", "أمثلة من المجتمع"]):
@@ -4421,6 +4482,9 @@ def ask_qwen_ai(
     post_text: str = "",
     parent_reply_text: str = "",
     recent_replies_text: str = "",
+    conversation_context: str = "",
+    file_attachments: Optional[list[Dict[str, Any]]] = None,
+    deep_thinking: bool = False,
 ) -> str:
     if not QWEN_API_KEY:
         raise HTTPException(status_code=500, detail="QWEN_API_KEY missing")
@@ -4438,12 +4502,21 @@ def ask_qwen_ai(
             },
             {
                 "role": "user",
-                "content": _build_user_prompt(text, username, post_text, parent_reply_text, recent_replies_text),
+                "content": _build_user_prompt(
+                    text,
+                    username,
+                    post_text,
+                    parent_reply_text,
+                    recent_replies_text,
+                    conversation_context=conversation_context,
+                    file_attachments=file_attachments,
+                    deep_thinking=deep_thinking,
+                ),
             },
         ],
-        temperature=0.25,
-        max_tokens=280,
-        timeout=60,
+        temperature=0.18 if deep_thinking else 0.25,
+        max_tokens=900 if deep_thinking else 420,
+        timeout=95 if deep_thinking else 60,
         log_label="QWEN",
     )
 
@@ -4453,8 +4526,9 @@ def ask_qwen_ai(
     reply = str(reply).replace("@RespectAI", "").replace("@respectai", "").strip()
     if effective_mode.startswith("daily_") and "NO_REPEATED_QUESTION" in reply:
         return "NO_REPEATED_QUESTION"
-    if len(reply) > 900:
-        reply = reply[:900].rstrip() + "..."
+    max_reply_chars = 2400 if deep_thinking else 1200
+    if len(reply) > max_reply_chars:
+        reply = reply[:max_reply_chars].rstrip() + "..."
     return reply
 
 
@@ -4462,7 +4536,15 @@ def ask_qwen_ai(
 
 def _respect_ai_reply_image_urls(req: RespectAIRequest) -> list[str]:
     urls: list[str] = []
-    for raw in [*(req.imageUrls or []), req.imageUrl]:
+    raw_items = [*(req.imageUrls or []), req.imageUrl]
+    for item in (req.fileAttachments or []):
+        if not isinstance(item, dict):
+            continue
+        item_type = str(item.get("type") or item.get("mediaType") or "").strip().lower()
+        item_url = str(item.get("url") or item.get("fileUrl") or "").strip()
+        if item_type == "image" and item_url:
+            raw_items.append(item_url)
+    for raw in raw_items:
         url = str(raw or "").strip()
         if not url:
             continue
@@ -4490,6 +4572,9 @@ def ask_qwen_ai_multimodal(
     parent_reply_text: str = "",
     recent_replies_text: str = "",
     image_urls: Optional[list[str]] = None,
+    conversation_context: str = "",
+    file_attachments: Optional[list[Dict[str, Any]]] = None,
+    deep_thinking: bool = False,
 ) -> str:
     urls = [str(u or "").strip() for u in (image_urls or []) if str(u or "").strip()]
     if not urls:
@@ -4500,6 +4585,9 @@ def ask_qwen_ai_multimodal(
             post_text=post_text,
             parent_reply_text=parent_reply_text,
             recent_replies_text=recent_replies_text,
+            conversation_context=conversation_context,
+            file_attachments=file_attachments,
+            deep_thinking=deep_thinking,
         )
     if not QWEN_API_KEY:
         raise HTTPException(status_code=500, detail="QWEN_API_KEY missing")
@@ -4511,6 +4599,9 @@ def ask_qwen_ai_multimodal(
         post_text,
         parent_reply_text,
         recent_replies_text,
+        conversation_context=conversation_context,
+        file_attachments=file_attachments,
+        deep_thinking=deep_thinking,
     )
     prompt_text += (
         "\n\nالمستخدم أرفق صورة أو أكثر. حلل الصورة بدقة، وإذا كان السؤال عن محتوى الصورة فأجب بناءً عليها. "
@@ -4529,17 +4620,18 @@ def ask_qwen_ai_multimodal(
             {"role": "system", "content": _respect_ai_system_prompt(effective_mode)},
             {"role": "user", "content": content_parts},
         ],
-        temperature=0.20,
-        max_tokens=520,
-        timeout=90,
+        temperature=0.15 if deep_thinking else 0.20,
+        max_tokens=1100 if deep_thinking else 620,
+        timeout=120 if deep_thinking else 90,
         log_label="QWEN_VISION_REPLY",
     )
 
     if not reply:
         raise HTTPException(status_code=500, detail="Qwen vision returned empty reply")
     reply = str(reply).replace("@RespectAI", "").replace("@respectai", "").strip()
-    if len(reply) > 1200:
-        reply = reply[:1200].rstrip() + "..."
+    max_reply_chars = 2600 if deep_thinking else 1400
+    if len(reply) > max_reply_chars:
+        reply = reply[:max_reply_chars].rstrip() + "..."
     return reply
 
 
@@ -12863,6 +12955,44 @@ def admin_qa_memory(
     return {"ok": True, "table": RESPECT_AI_QA_MEMORY_TABLE, "count": len(rows), "items": rows}
 
 
+def _respect_ai_thinking_summary(
+    *,
+    mode: str,
+    memory_used: bool,
+    deep_thinking: bool,
+    image_count: int = 0,
+    file_count: int = 0,
+) -> str:
+    """High-level reasoning summary for UI. It is not a hidden chain-of-thought."""
+    labels = {
+        "chat": "عام",
+        "general": "عام",
+        "reply": "عام",
+        "coding": "برمجة",
+        "file_review": "فحص ملفات",
+        "creative": "إبداع",
+        "study": "تعلم",
+        "moderation": "حماية",
+        "summarize": "تلخيص",
+        "poll": "استطلاع",
+        "question": "سؤال نقاش",
+    }
+    mode_label = labels.get((mode or "chat").strip().lower(), mode or "عام")
+    lines = [
+        f"• حددت الوضع المناسب: {mode_label}",
+        "• راجعت الذاكرة المحلية قبل استدعاء الذكاء الخارجي" if not memory_used else "• وجدت إجابة مناسبة في الذاكرة المحلية",
+    ]
+    if image_count:
+        lines.append(f"• حللت الصور المرفقة: {image_count}")
+    if file_count:
+        lines.append(f"• راجعت الملفات المرفقة: {file_count}")
+    if deep_thinking:
+        lines.append("• فعلت وضع التفكير العميق: تحليل أوسع وتدقيق للرد النهائي")
+    else:
+        lines.append("• استخدمت ردًا سريعًا ومباشرًا")
+    return "\n".join(lines)
+
+
 @app.post("/respect-ai/reply", response_model=RespectAIResponse)
 def respect_ai_reply(req: RespectAIRequest, x_app_secret: Optional[str] = Header(default=None)):
     _check_secret(x_app_secret)
@@ -12874,6 +13004,7 @@ def respect_ai_reply(req: RespectAIRequest, x_app_secret: Optional[str] = Header
         raise HTTPException(status_code=400, detail="text or imageUrl is required")
 
     effective_mode = _auto_detect_mode(req.mode, text)
+    file_attachments = req.fileAttachments or []
     memory_question = _respect_ai_question_with_images(text, image_urls)
 
     _enforce_respect_ai_quota(username)
@@ -12899,6 +13030,14 @@ def respect_ai_reply(req: RespectAIRequest, x_app_secret: Optional[str] = Header
             memoryId=str(memory_reply.get("memoryId") or ""),
             confidence=float(memory_reply.get("confidence") or 0.0),
             category=str(memory_reply.get("category") or "general"),
+            thinkingSummary=_respect_ai_thinking_summary(
+                mode=effective_mode,
+                memory_used=True,
+                deep_thinking=bool(req.deepThinking),
+                image_count=len(image_urls),
+                file_count=len(file_attachments),
+            ),
+            usedMode=effective_mode,
         )
 
     reply = ask_qwen_ai_multimodal(
@@ -12909,6 +13048,9 @@ def respect_ai_reply(req: RespectAIRequest, x_app_secret: Optional[str] = Header
         parent_reply_text=req.parentReplyText,
         recent_replies_text=req.recentRepliesText,
         image_urls=image_urls,
+        conversation_context=req.conversationContext,
+        file_attachments=file_attachments,
+        deep_thinking=bool(req.deepThinking),
     )
 
     used_model = QWEN_VISION_MODEL if image_urls else QWEN_MODEL
@@ -12934,6 +13076,14 @@ def respect_ai_reply(req: RespectAIRequest, x_app_secret: Optional[str] = Header
         memoryId=str(learned.get("memoryId") or "") if isinstance(learned, dict) else "",
         confidence=0.0,
         category=_qa_memory_category(text, effective_mode),
+        thinkingSummary=_respect_ai_thinking_summary(
+            mode=effective_mode,
+            memory_used=False,
+            deep_thinking=bool(req.deepThinking),
+            image_count=len(image_urls),
+            file_count=len(file_attachments),
+        ),
+        usedMode=effective_mode,
     )
 
 
