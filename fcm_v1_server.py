@@ -1534,7 +1534,7 @@ class PaddleVerificationCheckoutRequest(BaseModel):
 
 
 class RespectAIRequest(BaseModel):
-    text: str = Field(default="", min_length=1)
+    text: str = ""
     username: str = ""
     askerUsername: str = ""
     question: str = ""
@@ -1542,8 +1542,11 @@ class RespectAIRequest(BaseModel):
     parentReplyText: str = ""
     recentRepliesText: str = ""
     postId: str = ""
-    mode: str = "reply"  # reply / summarize / poll / question / daily_question / daily_poll / daily_info
+    mode: str = "reply"  # reply / summarize / poll / question / daily_question / daily_poll / daily_info / chat
     language: str = "ar"
+    imageUrls: list[str] = Field(default_factory=list)
+    imageUrl: str = ""
+    mediaType: str = "text"
 
 
 class RespectAIResponse(BaseModel):
@@ -4454,6 +4457,90 @@ def ask_qwen_ai(
         reply = reply[:900].rstrip() + "..."
     return reply
 
+
+
+
+def _respect_ai_reply_image_urls(req: RespectAIRequest) -> list[str]:
+    urls: list[str] = []
+    for raw in [*(req.imageUrls or []), req.imageUrl]:
+        url = str(raw or "").strip()
+        if not url:
+            continue
+        if not url.startswith(("http://", "https://", "data:image/")):
+            continue
+        if url not in urls:
+            urls.append(url)
+    return urls[:3]
+
+
+def _respect_ai_question_with_images(text: str, image_urls: list[str]) -> str:
+    clean = (text or "").strip() or "حلل هذه الصورة"
+    if not image_urls:
+        return clean
+    # ندخل روابط الصور داخل مفتاح الذاكرة حتى لا يخلط بين سؤال مثل "وش في الصورة؟" على صور مختلفة.
+    joined = " | ".join(image_urls[:3])
+    return f"{clean}\n[RespectAI image context: {joined}]"
+
+
+def ask_qwen_ai_multimodal(
+    text: str,
+    username: str = "",
+    mode: str = "chat",
+    post_text: str = "",
+    parent_reply_text: str = "",
+    recent_replies_text: str = "",
+    image_urls: Optional[list[str]] = None,
+) -> str:
+    urls = [str(u or "").strip() for u in (image_urls or []) if str(u or "").strip()]
+    if not urls:
+        return ask_qwen_ai(
+            text=text,
+            username=username,
+            mode=mode,
+            post_text=post_text,
+            parent_reply_text=parent_reply_text,
+            recent_replies_text=recent_replies_text,
+        )
+    if not QWEN_API_KEY:
+        raise HTTPException(status_code=500, detail="QWEN_API_KEY missing")
+
+    effective_mode = _auto_detect_mode(mode, text)
+    prompt_text = _build_user_prompt(
+        (text or "").strip() or "حلل هذه الصورة ورد باختصار.",
+        username,
+        post_text,
+        parent_reply_text,
+        recent_replies_text,
+    )
+    prompt_text += (
+        "\n\nالمستخدم أرفق صورة أو أكثر. حلل الصورة بدقة، وإذا كان السؤال عن محتوى الصورة فأجب بناءً عليها. "
+        "إذا لم تستطع معرفة شيء من الصورة قل ذلك بوضوح بدون اختلاق."
+    )
+
+    content_parts: list[Dict[str, Any]] = [{"type": "text", "text": prompt_text}]
+    for url in urls[:3]:
+        content_parts.append({"type": "image_url", "image_url": {"url": url}})
+
+    reply = _chat_completion_request(
+        model=QWEN_VISION_MODEL,
+        api_key=QWEN_API_KEY,
+        base_url=QWEN_BASE_URL,
+        messages=[
+            {"role": "system", "content": _respect_ai_system_prompt(effective_mode)},
+            {"role": "user", "content": content_parts},
+        ],
+        temperature=0.20,
+        max_tokens=520,
+        timeout=90,
+        log_label="QWEN_VISION_REPLY",
+    )
+
+    if not reply:
+        raise HTTPException(status_code=500, detail="Qwen vision returned empty reply")
+    reply = str(reply).replace("@RespectAI", "").replace("@respectai", "").strip()
+    if len(reply) > 1200:
+        reply = reply[:1200].rstrip() + "..."
+    return reply
 
 
 def _respect_cyber_system_prompt(mode: str = "defensive") -> str:
@@ -12781,18 +12868,26 @@ def respect_ai_reply(req: RespectAIRequest, x_app_secret: Optional[str] = Header
     _check_secret(x_app_secret)
 
     username = req.username.strip() or req.askerUsername.strip()
-    text = req.text.strip() or req.question.strip()
+    image_urls = _respect_ai_reply_image_urls(req)
+    text = (req.text.strip() or req.question.strip() or ("حلل هذه الصورة" if image_urls else "")).strip()
+    if not text and not image_urls:
+        raise HTTPException(status_code=400, detail="text or imageUrl is required")
+
     effective_mode = _auto_detect_mode(req.mode, text)
+    memory_question = _respect_ai_question_with_images(text, image_urls)
 
     _enforce_respect_ai_quota(username)
 
-    memory_reply = _qa_memory_lookup(
-        text,
-        mode=effective_mode,
-        post_text=req.postText,
-        parent_reply_text=req.parentReplyText,
-        recent_replies_text=req.recentRepliesText,
-    )
+    # أسئلة الصور لا تستخدم ذاكرة النص العامة حتى لا يخلط بين صورتين مختلفتين بنفس السؤال.
+    memory_reply = None
+    if not image_urls:
+        memory_reply = _qa_memory_lookup(
+            memory_question,
+            mode=effective_mode,
+            post_text=req.postText,
+            parent_reply_text=req.parentReplyText,
+            recent_replies_text=req.recentRepliesText,
+        )
     if memory_reply and str(memory_reply.get("reply") or "").strip():
         _record_respect_ai_usage(username)
         return RespectAIResponse(
@@ -12806,24 +12901,26 @@ def respect_ai_reply(req: RespectAIRequest, x_app_secret: Optional[str] = Header
             category=str(memory_reply.get("category") or "general"),
         )
 
-    reply = ask_qwen_ai(
+    reply = ask_qwen_ai_multimodal(
         text=text,
         username=username,
         mode=effective_mode,
         post_text=req.postText,
         parent_reply_text=req.parentReplyText,
         recent_replies_text=req.recentRepliesText,
+        image_urls=image_urls,
     )
 
-    _qa_memory_learn(
-        text,
+    used_model = QWEN_VISION_MODEL if image_urls else QWEN_MODEL
+    learned = _qa_memory_learn(
+        memory_question,
         reply,
         mode=effective_mode,
         username=username,
         post_text=req.postText,
         parent_reply_text=req.parentReplyText,
         recent_replies_text=req.recentRepliesText,
-        model=QWEN_MODEL,
+        model=used_model,
     )
 
     _record_respect_ai_usage(username)
@@ -12831,10 +12928,10 @@ def respect_ai_reply(req: RespectAIRequest, x_app_secret: Optional[str] = Header
     return RespectAIResponse(
         ok=True,
         reply=reply,
-        model=QWEN_MODEL,
+        model=used_model,
         source="respect_ai",
         memoryUsed=False,
-        memoryId="",
+        memoryId=str(learned.get("memoryId") or "") if isinstance(learned, dict) else "",
         confidence=0.0,
         category=_qa_memory_category(text, effective_mode),
     )
