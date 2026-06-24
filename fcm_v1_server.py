@@ -317,6 +317,23 @@ RESPECT_AI_QA_MEMORY_LEARN_EVERYTHING = os.getenv("RESPECT_AI_QA_MEMORY_LEARN_EV
 RESPECT_AI_QA_MEMORY_ALLOW_FRESH_TOPICS = os.getenv("RESPECT_AI_QA_MEMORY_ALLOW_FRESH_TOPICS", "true").strip().lower() not in {"0", "false", "no", "off"}
 RESPECT_AI_QA_MEMORY_ALLOW_MEDICAL_LEGAL = os.getenv("RESPECT_AI_QA_MEMORY_ALLOW_MEDICAL_LEGAL", "true").strip().lower() not in {"0", "false", "no", "off"}
 
+def _qa_memory_uses_unified_table() -> bool:
+    """True when Q&A memory is stored inside the unified local-memory table."""
+    return (
+        (RESPECT_AI_QA_MEMORY_TABLE or "").strip().lower()
+        == (RESPECT_AI_LOCAL_MEMORY_TABLE or "").strip().lower()
+    )
+
+
+def _qa_memory_apply_scope(payload: Dict[str, Any] | Dict[str, str]) -> Dict[str, Any]:
+    """Keep Q&A rows under memory_scope=qa when using the unified table."""
+    out: Dict[str, Any] = dict(payload or {})
+    if _qa_memory_uses_unified_table():
+        out["memory_scope"] = "qa"
+    return out
+
+
+
 
 # ================= Respect App AI Fixer / GitHub =================
 # يقرأ ملفات المشروع من GitHub، يجعل Qwen3-Coder يحلل البلاغ، ثم بعد موافقة الأدمن
@@ -4668,6 +4685,8 @@ def _qa_memory_rest_get(params: Dict[str, str], *, limit: int = 1) -> list[Dict[
         return []
     try:
         q = dict(params or {})
+        if _qa_memory_uses_unified_table() and "memory_scope" not in q:
+            q["memory_scope"] = "eq.qa"
         if limit:
             q["limit"] = str(limit)
         r = requests.get(
@@ -4685,7 +4704,6 @@ def _qa_memory_rest_get(params: Dict[str, str], *, limit: int = 1) -> list[Dict[
         logger.warning("qa_memory read exception: %s", e)
         return []
 
-
 def _qa_memory_touch(row: Dict[str, Any], *, memory_hit: bool = True, ai_hit: bool = False) -> None:
     try:
         row_id = str(row.get("id") or "").strip()
@@ -4698,6 +4716,8 @@ def _qa_memory_touch(row: Dict[str, Any], *, memory_hit: bool = True, ai_hit: bo
             "last_used_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
+        if _qa_memory_uses_unified_table():
+            payload["memory_scope"] = "qa"
         requests.patch(
             f"{SB_URL}/rest/v1/{RESPECT_AI_QA_MEMORY_TABLE}",
             headers={**_supabase_headers(use_service_role=True), "Prefer": "return=minimal"},
@@ -4834,7 +4854,7 @@ def _qa_memory_learn(
     if existing:
         row = existing[0]
         row_id = str(row.get("id") or "")
-        payload = {
+        payload = _qa_memory_apply_scope({
             "answer": clean_answer,
             "confidence": max(float(row.get("confidence") or 0.0), confidence),
             "hits": int(row.get("hits") or 0) + 1,
@@ -4845,7 +4865,7 @@ def _qa_memory_learn(
             "source": "respect_ai",
             "active": True,
             "updated_at": now,
-        }
+        })
         try:
             r = requests.patch(
                 f"{SB_URL}/rest/v1/{RESPECT_AI_QA_MEMORY_TABLE}",
@@ -4862,7 +4882,7 @@ def _qa_memory_learn(
             logger.warning("qa_memory patch exception: %s", e)
             return {"ok": False, "learned": False, "reason": "patch_exception"}
 
-    payload = {
+    payload = _qa_memory_apply_scope({
         "question_hash": q_hash,
         "normalized_question": normalized,
         "sample_question": sample_question,
@@ -4882,7 +4902,7 @@ def _qa_memory_learn(
         "created_at": now,
         "updated_at": now,
         "last_used_at": now,
-    }
+    })
     try:
         r = requests.post(
             f"{SB_URL}/rest/v1/{RESPECT_AI_QA_MEMORY_TABLE}",
