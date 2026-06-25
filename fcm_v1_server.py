@@ -5105,14 +5105,23 @@ def ask_qwen_ai_multimodal(
         file_attachments=file_attachments,
         deep_thinking=deep_thinking,
     )
-    prompt_text += (
-        "\n\nالمستخدم أرفق صورة أو أكثر. حلل الصورة بدقة، وإذا كان السؤال عن محتوى الصورة فأجب بناءً عليها. "
-        "إذا لم تستطع معرفة شيء من الصورة قل ذلك بوضوح بدون اختلاق."
-    )
+    if urls:
+        prompt_text += (
+            "\n\nالمستخدم أرفق صورة أو أكثر. حلل الصورة بدقة، وإذا كان السؤال عن محتوى الصورة فأجب بناءً عليها. "
+            "لا تقل إنك لا تستطيع رؤية الصورة ما دامت الصورة مرفقة في الرسالة؛ استخدم الصورة المرسلة فعليًا. "
+            "إذا لم تستطع معرفة تفصيل محدد من الصورة قل ذلك بوضوح بدون اختلاق."
+        )
+    if vurls:
+        prompt_text += (
+            "\n\nالمستخدم أرفق فيديو. ستصلك لقطات مختارة من الفيديو كصور. "
+            "حلل هذه اللقطات وأجب حسب السؤال، واذكر أن التحليل مبني على اللقطات المتاحة إذا كان الفيديو طويلًا."
+        )
 
     content_parts: list[Dict[str, Any]] = [{"type": "text", "text": prompt_text}]
     for url in urls[:3]:
         content_parts.append({"type": "image_url", "image_url": {"url": url}})
+    if vurls:
+        content_parts.extend(_respect_ai_video_frame_parts(vurls, max_frames_per_video=4))
 
     reply = _chat_completion_request(
         model=QWEN_VISION_MODEL,
