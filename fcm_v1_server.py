@@ -5105,23 +5105,14 @@ def ask_qwen_ai_multimodal(
         file_attachments=file_attachments,
         deep_thinking=deep_thinking,
     )
-    if urls:
-        prompt_text += (
-            "\n\nالمستخدم أرفق صورة أو أكثر. حلل الصورة بدقة، وإذا كان السؤال عن محتوى الصورة فأجب بناءً عليها. "
-            "لا تقل إنك لا تستطيع رؤية الصورة ما دامت الصورة مرفقة في الرسالة؛ استخدم الصورة المرسلة فعليًا. "
-            "إذا لم تستطع معرفة تفصيل محدد من الصورة قل ذلك بوضوح بدون اختلاق."
-        )
-    if vurls:
-        prompt_text += (
-            "\n\nالمستخدم أرفق فيديو. ستصلك لقطات مختارة من الفيديو كصور. "
-            "حلل هذه اللقطات وأجب حسب السؤال، واذكر أن التحليل مبني على اللقطات المتاحة إذا كان الفيديو طويلًا."
-        )
+    prompt_text += (
+        "\n\nالمستخدم أرفق صورة أو أكثر. حلل الصورة بدقة، وإذا كان السؤال عن محتوى الصورة فأجب بناءً عليها. "
+        "إذا لم تستطع معرفة شيء من الصورة قل ذلك بوضوح بدون اختلاق."
+    )
 
     content_parts: list[Dict[str, Any]] = [{"type": "text", "text": prompt_text}]
     for url in urls[:3]:
         content_parts.append({"type": "image_url", "image_url": {"url": url}})
-    if vurls:
-        content_parts.extend(_respect_ai_video_frame_parts(vurls, max_frames_per_video=4))
 
     reply = _chat_completion_request(
         model=QWEN_VISION_MODEL,
@@ -12326,6 +12317,17 @@ class CyberAdminUserActionRequest(BaseModel):
 class CyberAdminPostActionRequest(BaseModel):
     postId: str
     reason: str = "إجراء إداري من Respect Cyber Center"
+    adminUsername: str = ""
+
+
+class CyberAdminDeleteUserContentRequest(BaseModel):
+    username: str
+    adminUsername: str = ""
+
+
+class CyberAdminWipeAppContentRequest(BaseModel):
+    adminUsername: str = ""
+    confirm: str = ""
 
 
 class CyberAdminReviewReportRequest(BaseModel):
@@ -12420,6 +12422,294 @@ def _cyber_patch_table(table: str, filters: Dict[str, Any], payload: Dict[str, A
     except Exception:
         data = []
     return {"ok": True, "rows": data if isinstance(data, list) else []}
+
+
+def _admin_username_is_allowed(admin_username: str) -> bool:
+    """يتحقق من أن منفذ العملية أدمن بدون كشف Service Role للتطبيق.
+    وجود X-App-Secret يبقى مطلوبًا عبر _check_cyber_admin_secret.
+    """
+    clean = normalize_username(admin_username)
+    if not clean:
+        # للتوافق مع نسخ قديمة من التطبيق التي لا ترسل adminUsername، السر وحده يكفي.
+        return True
+    env_admins = {normalize_username(x) for x in os.getenv("RESPECT_ADMIN_USERNAMES", "nawafrp,@nawafrp").split(",") if x.strip()}
+    if clean in env_admins:
+        return True
+    try:
+        rows = _cyber_supabase_get(
+            "users",
+            {
+                "select": "username,is_admin,role,admin,permissions",
+                "or": f"(username.eq.@{clean},username.eq.{clean})",
+                "limit": "1",
+            },
+            timeout=10,
+        )
+        if not rows:
+            return False
+        row = rows[0]
+        role = str(row.get("role") or "").strip().lower()
+        permissions = row.get("permissions")
+        return (
+            _truthy(row.get("is_admin"))
+            or _truthy(row.get("admin"))
+            or role in {"admin", "owner", "super_admin", "moderator_admin"}
+            or (isinstance(permissions, list) and any(str(x).lower() in {"admin", "super_admin"} for x in permissions))
+        )
+    except Exception as exc:
+        logger.warning("admin check failed username=%s error=%s", admin_username, exc)
+        return False
+
+
+def _check_destructive_admin(x_app_secret: Optional[str], admin_username: str = "") -> None:
+    _check_cyber_admin_secret(x_app_secret)
+    if not _admin_username_is_allowed(admin_username):
+        raise HTTPException(status_code=403, detail="هذا الإجراء متاح للأدمن فقط")
+
+
+def _rest_select_ids_by_username(table: str, username_columns: list[str], usernames: set[str], id_column: str = "id") -> list[str]:
+    ids: set[str] = set()
+    for column in username_columns:
+        for username in usernames:
+            if not username:
+                continue
+            try:
+                rows = _cyber_supabase_get(table, {"select": id_column, column: f"eq.{username}"}, timeout=10)
+                for row in rows:
+                    value = str(row.get(id_column) or "").strip()
+                    if value:
+                        ids.add(value)
+            except Exception as exc:
+                logger.debug("select ids failed table=%s column=%s error=%s", table, column, exc)
+    return list(ids)
+
+
+def _rest_delete(table: str, params: Dict[str, Any], *, timeout: int = 18) -> int:
+    """يحذف من Supabase عبر Service Role ويرجع عددًا تقديريًا. الأخطاء غير القاتلة ترجع 0 حتى لا يتوقف المسح بسبب جدول غير موجود."""
+    if not SB_SERVICE:
+        raise HTTPException(status_code=500, detail="SUPABASE_SERVICE_ROLE_KEY غير مضبوط في Render")
+    count = 0
+    try:
+        cr = requests.get(
+            f"{SB_URL}/rest/v1/{table}",
+            headers={**_supabase_headers(use_service_role=True), "Prefer": "count=exact"},
+            params={"select": "*", "limit": "1", **params},
+            timeout=min(timeout, 12),
+        )
+        if cr.status_code < 400:
+            content_range = cr.headers.get("content-range", "")
+            if "/" in content_range:
+                tail = content_range.rsplit("/", 1)[-1].strip()
+                if tail.isdigit():
+                    count = int(tail)
+    except Exception:
+        count = 0
+
+    try:
+        r = requests.delete(
+            f"{SB_URL}/rest/v1/{table}",
+            headers={**_supabase_headers(use_service_role=True), "Prefer": "return=minimal"},
+            params=params,
+            timeout=timeout,
+        )
+        if r.status_code >= 400:
+            logger.debug("delete skipped/failed table=%s status=%s body=%s", table, r.status_code, _safe_response_text(r.text, 400))
+            return 0
+        return count
+    except Exception as exc:
+        logger.debug("delete exception table=%s error=%s", table, exc)
+        return 0
+
+
+def _rest_delete_by_username(table: str, columns: list[str], usernames: set[str]) -> int:
+    total = 0
+    for column in columns:
+        for username in usernames:
+            if username:
+                total += _rest_delete(table, {column: f"eq.{username}"})
+    return total
+
+
+def _rest_delete_by_ids(table: str, column: str, ids: list[str] | set[str]) -> int:
+    total = 0
+    for raw_id in set(str(x).strip() for x in ids if str(x).strip()):
+        total += _rest_delete(table, {column: f"eq.{raw_id}"})
+    return total
+
+
+def _delete_username_variants(username: str) -> set[str]:
+    clean = normalize_username(username)
+    out = {clean, f"@{clean}"} if clean else set()
+    return {x for x in out if x and x not in {"user", "@user", "@"}}
+
+
+def _delete_post_complete(post_id: str) -> Dict[str, Any]:
+    pid = str(post_id or "").strip()
+    if not pid:
+        return {"deleted": False, "postId": ""}
+
+    reply_ids = _rest_select_ids_by_username("post_replies", [], set())
+    try:
+        rows = _cyber_supabase_get("post_replies", {"select": "id", "post_id": f"eq.{pid}"}, timeout=10)
+        reply_ids = [str(r.get("id") or "").strip() for r in rows if str(r.get("id") or "").strip()]
+    except Exception:
+        reply_ids = []
+
+    related_counts = 0
+    for table in ["reply_likes", "reply_reposts", "reply_views"]:
+        related_counts += _rest_delete_by_ids(table, "reply_id", reply_ids)
+    for table in [
+        "post_reports", "post_mentions", "post_topics", "user_topic_interactions",
+        "post_likes", "post_reposts", "post_views", "post_events",
+        "post_saves", "saved_posts", "respect_saved_posts",
+    ]:
+        related_counts += _rest_delete(table, {"post_id": f"eq.{pid}"})
+    related_counts += _rest_delete("post_replies", {"post_id": f"eq.{pid}"})
+    result = _delete_supabase_post(pid)
+    result["relatedDeleted"] = related_counts
+    return result
+
+
+def _delete_storage_prefixes(bucket: str, prefixes: list[str], *, limit: int = 100) -> int:
+    """يمسح ملفات من Storage عبر Service Role. أي فشل هنا لا يفشل حذف قاعدة البيانات."""
+    if not SB_SERVICE:
+        return 0
+    deleted = 0
+    headers = _supabase_headers(use_service_role=True)
+    for prefix in prefixes:
+        offset = 0
+        while True:
+            try:
+                r = requests.post(
+                    f"{SB_URL}/storage/v1/object/list/{bucket}",
+                    headers=headers,
+                    json={"prefix": prefix, "limit": limit, "offset": offset, "sortBy": {"column": "name", "order": "asc"}},
+                    timeout=20,
+                )
+                if r.status_code >= 400:
+                    logger.debug("storage list failed bucket=%s prefix=%s status=%s body=%s", bucket, prefix, r.status_code, _safe_response_text(r.text, 300))
+                    break
+                rows = r.json() if r.text else []
+                if not isinstance(rows, list) or not rows:
+                    break
+                paths: list[str] = []
+                for item in rows:
+                    if not isinstance(item, dict):
+                        continue
+                    name = str(item.get("name") or "").strip()
+                    if not name or name == ".emptyFolderPlaceholder":
+                        continue
+                    full = name if not prefix else f"{prefix.rstrip('/')}/{name}"
+                    paths.append(full)
+                if paths:
+                    dr = requests.delete(
+                        f"{SB_URL}/storage/v1/object/{bucket}",
+                        headers=headers,
+                        json={"prefixes": paths},
+                        timeout=30,
+                    )
+                    if dr.status_code < 400:
+                        deleted += len(paths)
+                    else:
+                        logger.debug("storage delete failed bucket=%s status=%s body=%s", bucket, dr.status_code, _safe_response_text(dr.text, 300))
+                if len(rows) < limit:
+                    break
+                offset += limit
+            except Exception as exc:
+                logger.debug("storage prefix delete exception bucket=%s prefix=%s error=%s", bucket, prefix, exc)
+                break
+    return deleted
+
+
+def _delete_user_content_with_service_role(username: str) -> Dict[str, Any]:
+    usernames = _delete_username_variants(username)
+    if not usernames:
+        raise HTTPException(status_code=400, detail="اسم المستخدم غير صالح")
+
+    summary: Dict[str, int] = {
+        "posts": 0, "replies": 0, "stories": 0, "messages": 0, "groups": 0,
+        "reports": 0, "notifications": 0, "interactions": 0, "live": 0, "storage": 0,
+    }
+
+    post_ids = _rest_select_ids_by_username("posts", ["username", "author_username"], usernames)
+    for pid in post_ids:
+        try:
+            _delete_post_complete(pid)
+            summary["posts"] += 1
+        except Exception as exc:
+            logger.warning("admin delete user post failed post_id=%s error=%s", pid, exc)
+
+    reply_ids = _rest_select_ids_by_username("post_replies", ["author_username", "username"], usernames)
+    for rid in reply_ids:
+        for table in ["reply_likes", "reply_reposts", "reply_views"]:
+            summary["interactions"] += _rest_delete(table, {"reply_id": f"eq.{rid}"})
+        summary["replies"] += _rest_delete("post_replies", {"id": f"eq.{rid}"})
+
+    story_ids = _rest_select_ids_by_username("respect_stories", ["username", "author_username"], usernames)
+    for table in ["respect_story_likes", "respect_story_comments", "respect_story_notifications"]:
+        summary["interactions"] += _rest_delete_by_ids(table, "story_id", story_ids)
+    summary["stories"] += _rest_delete_by_ids("respect_stories", "id", story_ids)
+
+    summary["messages"] += _rest_delete_by_username("messages", ["sender_username", "username", "author_username"], usernames)
+    group_msg_ids = _rest_select_ids_by_username("respect_group_messages", ["sender_username", "username", "author_username"], usernames)
+    summary["messages"] += len(group_msg_ids)
+    _rest_delete_by_ids("respect_group_message_receipts", "message_id", group_msg_ids)
+    _rest_delete_by_ids("respect_group_messages", "id", group_msg_ids)
+
+    group_ids = _rest_select_ids_by_username("respect_chat_groups", ["founder_username", "owner_username", "username"], usernames)
+    _rest_delete_by_ids("respect_group_message_receipts", "group_id", group_ids)
+    _rest_delete_by_ids("respect_group_messages", "group_id", group_ids)
+    _rest_delete_by_ids("respect_chat_group_members", "group_id", group_ids)
+    summary["groups"] += _rest_delete_by_ids("respect_chat_groups", "id", group_ids)
+    summary["groups"] += _rest_delete_by_username("respect_chat_group_members", ["username", "member_username"], usernames)
+
+    for table in ["post_likes", "post_reposts", "post_views", "post_saves", "saved_posts", "respect_saved_posts", "reply_likes", "reply_reposts", "reply_views", "user_topic_interactions", "user_follows", "user_post_notifications"]:
+        summary["interactions"] += _rest_delete_by_username(table, ["username", "actor_username", "viewer_username", "follower_username", "target_username"], usernames)
+    for table in ["post_events", "post_mentions", "respect_story_notifications", "respect_general_notifications"]:
+        summary["notifications"] += _rest_delete_by_username(table, ["target_username", "actor_username", "username", "author_username", "story_owner_username", "sender_username"], usernames)
+    for table in ["post_reports", "respect_app_feedback_reports"]:
+        summary["reports"] += _rest_delete_by_username(table, ["reporter_username", "post_username", "reported_username", "username", "user_username"], usernames)
+    summary["live"] += _rest_delete_by_username("respect_live_streams", ["host_username", "username", "owner_username"], usernames)
+
+    # ملفات محتوى المستخدم داخل post-media فقط. لا نحذف avatars حتى تبقى صور الحسابات.
+    clean_names = [normalize_username(u) for u in usernames if normalize_username(u)]
+    prefixes = []
+    for clean in clean_names:
+        prefixes.extend([f"posts/{clean}", f"stories/{clean}", f"messages/{clean}", f"chat/{clean}", f"respect-ai/{clean}", f"live/{clean}"])
+    summary["storage"] += _delete_storage_prefixes("post-media", sorted(set(prefixes)))
+
+    return {"ok": True, "username": display_username(username), "summary": summary}
+
+
+def _wipe_app_content_with_service_role() -> Dict[str, Any]:
+    summary: Dict[str, int] = {"tables": 0, "rows": 0, "storage": 0}
+
+    # الترتيب مهم: نحذف العلاقات قبل الجداول الأصلية. لا نلمس users أو auth أو trusted devices أو subscriptions.
+    table_filters: list[tuple[str, str]] = [
+        ("reply_likes", "reply_id"), ("reply_reposts", "reply_id"), ("reply_views", "reply_id"),
+        ("post_reports", "post_id"), ("post_mentions", "post_id"), ("post_topics", "post_id"),
+        ("user_topic_interactions", "username"), ("post_events", "post_id"),
+        ("post_likes", "post_id"), ("post_reposts", "post_id"), ("post_views", "post_id"),
+        ("post_saves", "post_id"), ("saved_posts", "post_id"), ("respect_saved_posts", "post_id"),
+        ("post_replies", "post_id"), ("posts", "id"),
+        ("respect_story_likes", "story_id"), ("respect_story_comments", "story_id"), ("respect_story_notifications", "story_id"), ("respect_stories", "id"),
+        ("messages", "id"), ("respect_group_message_receipts", "message_id"), ("respect_group_messages", "id"),
+        ("respect_chat_group_members", "group_id"), ("respect_chat_groups", "id"),
+        ("respect_communities", "id"), ("communities", "id"), ("community_reports", "id"), ("community_posts", "id"),
+        ("respect_live_streams", "id"), ("respect_live_viewers", "stream_id"), ("respect_live_comments", "stream_id"),
+        ("respect_app_feedback_reports", "id"), ("respect_general_notifications", "id"),
+        ("ai_topic_memory", "id"), ("respect_ai_local_memory", "id"), ("respect_ai_media_memory", "id"), ("respect_ai_usage", "id"),
+    ]
+
+    for table, column in table_filters:
+        deleted = _rest_delete(table, {column: "not.is.null"}, timeout=25)
+        if deleted > 0:
+            summary["tables"] += 1
+            summary["rows"] += deleted
+
+    # يمسح كل ملفات المحتوى العامة، مع إبقاء avatars لأن الحسابات ستبقى.
+    summary["storage"] += _delete_storage_prefixes("post-media", [""])
+    return {"ok": True, "summary": summary}
 
 
 def _cyber_scan_report() -> Dict[str, Any]:
@@ -12758,6 +13048,30 @@ def respect_ai_cyber_admin_unhide_post(req: CyberAdminPostActionRequest, x_app_s
         result = _patch_supabase_post(req.postId, {"community_hidden": False, "hidden_reason": ""})
     return {"ok": bool(result.get("updated")), "result": result}
 
+
+
+@app.post("/respect-ai/cyber/admin/posts/delete")
+def respect_ai_cyber_admin_delete_post(req: CyberAdminPostActionRequest, x_app_secret: Optional[str] = Header(default=None)):
+    _check_destructive_admin(x_app_secret, req.adminUsername)
+    post_id = str(req.postId or "").strip()
+    if not post_id:
+        raise HTTPException(status_code=400, detail="postId مطلوب")
+    result = _delete_post_complete(post_id)
+    return {"ok": True, "deleted": True, "postId": post_id, "result": result}
+
+
+@app.post("/respect-ai/cyber/admin/users/delete-content")
+def respect_ai_cyber_admin_delete_user_content(req: CyberAdminDeleteUserContentRequest, x_app_secret: Optional[str] = Header(default=None)):
+    _check_destructive_admin(x_app_secret, req.adminUsername)
+    return _delete_user_content_with_service_role(req.username)
+
+
+@app.post("/respect-ai/cyber/admin/wipe-app-content")
+def respect_ai_cyber_admin_wipe_app_content(req: CyberAdminWipeAppContentRequest, x_app_secret: Optional[str] = Header(default=None)):
+    _check_destructive_admin(x_app_secret, req.adminUsername)
+    if str(req.confirm or "").strip() != "DELETE_APP_CONTENT":
+        raise HTTPException(status_code=400, detail="confirm يجب أن يكون DELETE_APP_CONTENT")
+    return _wipe_app_content_with_service_role()
 
 
 @app.post("/respect-ai/app-feedback/submit")
