@@ -279,6 +279,17 @@ QWEN_TEXT_MODEL = os.getenv("QWEN_TEXT_MODEL", os.getenv("QWEN_MODEL", "qwen-plu
 QWEN_TRANSLATION_MODEL = os.getenv("QWEN_TRANSLATION_MODEL", QWEN_TEXT_MODEL).strip() or QWEN_TEXT_MODEL
 # موديل الصور: راجع صور المنشورات بعد رفعها إلى Supabase Storage.
 QWEN_VISION_MODEL = os.getenv("QWEN_VISION_MODEL", "qwen-vl-plus").strip() or "qwen-vl-plus"
+
+# ================= Respect AI Media Understanding Memory =================
+# ذاكرة الصور والفيديوهات: تحفظ فهم Qwen للوسائط + قرار المراجعة.
+# الهدف: إذا تكررت نفس الصورة/الفيديو أو صورة قريبة بصريًا، يستخدم Respect AI الذاكرة أولًا.
+RESPECT_AI_MEDIA_MEMORY_TABLE = os.getenv("RESPECT_AI_MEDIA_MEMORY_TABLE", "respect_ai_media_memory").strip() or "respect_ai_media_memory"
+AI_MEDIA_MEMORY_ENABLED = os.getenv("AI_MEDIA_MEMORY_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
+AI_MEDIA_MEMORY_ALLOW_MIN_CONFIDENCE = float(os.getenv("AI_MEDIA_MEMORY_ALLOW_MIN_CONFIDENCE", "0.82") or "0.82")
+AI_MEDIA_MEMORY_DELETE_MIN_CONFIDENCE = float(os.getenv("AI_MEDIA_MEMORY_DELETE_MIN_CONFIDENCE", "0.88") or "0.88")
+AI_MEDIA_MEMORY_QA_MIN_CONFIDENCE = float(os.getenv("AI_MEDIA_MEMORY_QA_MIN_CONFIDENCE", "0.55") or "0.55")
+AI_MEDIA_MEMORY_MAX_IMAGE_BYTES = int(os.getenv("AI_MEDIA_MEMORY_MAX_IMAGE_BYTES", "6500000") or "6500000")
+AI_MEDIA_MEMORY_QA_SUMMARY_MAX_CHARS = int(os.getenv("AI_MEDIA_MEMORY_QA_SUMMARY_MAX_CHARS", "1600") or "1600")
 # اسم قديم للتوافق مع باقي الكود القديم.
 QWEN_MODEL = QWEN_TEXT_MODEL
 QWEN_BASE_URL = os.getenv("QWEN_BASE_URL", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1").rstrip("/")
@@ -1546,6 +1557,8 @@ class RespectAIRequest(BaseModel):
     language: str = "ar"
     imageUrls: list[str] = Field(default_factory=list)
     imageUrl: str = ""
+    videoUrls: list[str] = Field(default_factory=list)
+    videoUrl: str = ""
     mediaType: str = "text"
     conversationContext: str = ""
     deepThinking: bool = False
@@ -4564,6 +4577,434 @@ def _respect_ai_question_with_images(text: str, image_urls: list[str]) -> str:
     return f"{clean}\n[RespectAI image context: {joined}]"
 
 
+def _respect_ai_reply_video_urls(req: RespectAIRequest) -> list[str]:
+    urls: list[str] = []
+    raw_items = [*(getattr(req, "videoUrls", []) or []), getattr(req, "videoUrl", "")]
+    for item in (req.fileAttachments or []):
+        if not isinstance(item, dict):
+            continue
+        item_type = str(item.get("type") or item.get("mediaType") or "").strip().lower()
+        item_url = str(item.get("url") or item.get("fileUrl") or "").strip()
+        if item_type == "video" and item_url:
+            raw_items.append(item_url)
+    for raw in raw_items:
+        url = str(raw or "").strip()
+        if not url or not url.startswith(("http://", "https://")):
+            continue
+        if url not in urls:
+            urls.append(url)
+    return urls[:2]
+
+
+def _respect_ai_question_with_media(text: str, image_urls: list[str], video_urls: list[str]) -> str:
+    clean = (text or "").strip() or ("حلل هذا الفيديو" if video_urls else "حلل هذه الصورة")
+    parts = []
+    if image_urls:
+        parts.append("images=" + " | ".join(image_urls[:3]))
+    if video_urls:
+        parts.append("videos=" + " | ".join(video_urls[:2]))
+    if not parts:
+        return clean
+    return f"{clean}\n[RespectAI media context: {' ; '.join(parts)}]"
+
+
+def _media_memory_enabled() -> bool:
+    return bool(AI_MEDIA_MEMORY_ENABLED and SB_URL and SB_SERVICE and RESPECT_AI_MEDIA_MEMORY_TABLE)
+
+
+def _media_memory_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _media_memory_url_hash(url: str) -> str:
+    return hashlib.sha256(str(url or "").strip().encode("utf-8")).hexdigest()
+
+
+def _media_memory_key(kind: str, value: str) -> str:
+    return hashlib.sha256(f"{kind}:{value}".encode("utf-8")).hexdigest()
+
+
+def _media_memory_decode_data_url(data_url: str) -> bytes:
+    if not str(data_url or "").startswith("data:"):
+        return b""
+    try:
+        payload = str(data_url).split(",", 1)[1]
+        return base64.b64decode(payload, validate=False)
+    except Exception:
+        return b""
+
+
+def _media_memory_download_bytes(url: str, *, max_bytes: Optional[int] = None) -> bytes:
+    clean = str(url or "").strip()
+    if not clean:
+        return b""
+    if clean.startswith("data:image/"):
+        return _media_memory_decode_data_url(clean)[: (max_bytes or AI_MEDIA_MEMORY_MAX_IMAGE_BYTES)]
+    if not clean.startswith(("http://", "https://")):
+        return b""
+    limit = int(max_bytes or AI_MEDIA_MEMORY_MAX_IMAGE_BYTES)
+    out = bytearray()
+    try:
+        with requests.get(clean, stream=True, timeout=(8, 22)) as r:
+            if r.status_code >= 400:
+                return b""
+            for chunk in r.iter_content(chunk_size=1024 * 256):
+                if not chunk:
+                    continue
+                out.extend(chunk)
+                if len(out) >= limit:
+                    break
+        return bytes(out[:limit])
+    except Exception as e:
+        logger.debug("media_memory download skipped: %s", e)
+        return b""
+
+
+def _media_memory_image_phash_from_bytes(raw: bytes) -> str:
+    if not raw:
+        return ""
+    try:
+        import cv2  # type: ignore
+        import numpy as np  # type: ignore
+        arr = np.frombuffer(raw, dtype=np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            return ""
+        small = cv2.resize(img, (16, 16), interpolation=cv2.INTER_AREA)
+        avg = float(small.mean())
+        bits = ["1" if int(v) >= avg else "0" for v in small.flatten()]
+        return hex(int("".join(bits), 2))[2:].zfill(64)
+    except Exception as e:
+        logger.debug("media_memory image phash skipped: %s", e)
+        return ""
+
+
+def _media_memory_image_phash(url: str) -> str:
+    return _media_memory_image_phash_from_bytes(_media_memory_download_bytes(url))
+
+
+def _media_memory_keys_for(media_type: str, url: str) -> list[Dict[str, str]]:
+    clean_type = "video" if str(media_type or "").lower() == "video" else "image"
+    clean_url = str(url or "").strip()
+    if not clean_url:
+        return []
+    keys: list[Dict[str, str]] = []
+    url_hash = _media_memory_url_hash(clean_url)
+    if clean_type == "image":
+        phash = _media_memory_image_phash(clean_url)
+        if phash:
+            keys.append({"kind": "image_phash", "value": phash, "key": _media_memory_key("image_phash", phash)})
+    # رابط الفيديو/الصورة يبقى كطبقة دقيقة حتى لو فشل phash أو كان الفيديو كبيرًا.
+    keys.append({"kind": f"{clean_type}_url", "value": url_hash, "key": _media_memory_key(f"{clean_type}_url", url_hash)})
+    seen = set()
+    out = []
+    for item in keys:
+        if item["key"] in seen:
+            continue
+        seen.add(item["key"])
+        out.append(item)
+    return out
+
+
+def _media_memory_rest_get_by_key(media_key: str, purpose: str) -> Optional[Dict[str, Any]]:
+    if not _media_memory_enabled() or not media_key:
+        return None
+    try:
+        r = requests.get(
+            f"{SB_URL}/rest/v1/{RESPECT_AI_MEDIA_MEMORY_TABLE}",
+            headers=_supabase_headers(use_service_role=True),
+            params={
+                "select": "id,media_key,media_type,key_type,key_value,purpose,decision,category,reason,confidence,hits,ai_hits,memory_hits,ai_summary,ocr_text,source,model,active,updated_at",
+                "media_key": f"eq.{media_key}",
+                "purpose": f"eq.{purpose}",
+                "active": "eq.true",
+                "limit": "1",
+            },
+            timeout=8,
+        )
+        if r.status_code == 404 or (r.status_code == 400 and "does not exist" in r.text.lower()):
+            logger.warning("Media memory table is missing. Run the SQL migration for %s", RESPECT_AI_MEDIA_MEMORY_TABLE)
+            return None
+        if r.status_code >= 400:
+            logger.debug("media_memory lookup failed status=%s body=%s", r.status_code, _safe_response_text(r.text, 250))
+            return None
+        data = r.json() if r.text else []
+        if isinstance(data, list) and data:
+            return dict(data[0])
+    except Exception as e:
+        logger.debug("media_memory lookup exception: %s", e)
+    return None
+
+
+def _media_memory_touch(row: Dict[str, Any]) -> None:
+    if not _media_memory_enabled():
+        return
+    row_id = str(row.get("id") or "").strip()
+    if not row_id:
+        return
+    try:
+        payload = {
+            "hits": int(float(row.get("hits") or 0)) + 1,
+            "memory_hits": int(float(row.get("memory_hits") or 0)) + 1,
+            "last_used_at": _media_memory_now(),
+            "updated_at": _media_memory_now(),
+        }
+        requests.patch(
+            f"{SB_URL}/rest/v1/{RESPECT_AI_MEDIA_MEMORY_TABLE}",
+            headers={**_supabase_headers(use_service_role=True), "Prefer": "return=minimal"},
+            params={"id": f"eq.{row_id}"},
+            json=payload,
+            timeout=6,
+        )
+    except Exception as e:
+        logger.debug("media_memory touch skipped: %s", e)
+
+
+def _media_memory_moderation_result(row: Dict[str, Any], media_type: str, url: str) -> Dict[str, Any]:
+    _media_memory_touch(row)
+    decision = str(row.get("decision") or "allow").strip().lower()
+    should_delete = decision == "delete"
+    category = str(row.get("category") or ("media_violation" if should_delete else "safe"))
+    reason = str(row.get("reason") or ("قرار من ذاكرة فهم الوسائط" if should_delete else "وسائط آمنة حسب ذاكرة Respect AI"))
+    return {
+        "shouldDelete": should_delete,
+        "deleteParentReply": False,
+        "category": category,
+        "reason": reason,
+        "confidence": float(row.get("confidence") or (0.93 if should_delete else 0.86)),
+        "checks": 1,
+        "memoryUsed": True,
+        "mediaMemoryUsed": True,
+        "moderationMemoryUsed": True,
+        "decisionSource": "respect_ai_media_memory",
+        "source": "respect_ai_media_memory",
+        "model": str(row.get("model") or "respect_ai_media_memory_v1"),
+        "memoryId": str(row.get("id") or ""),
+        "mediaType": media_type,
+        "mediaUrl": url,
+        "ocrText": str(row.get("ocr_text") or ""),
+        "aiSummary": str(row.get("ai_summary") or ""),
+    }
+
+
+def _media_memory_lookup_moderation(media_type: str, url: str) -> Optional[Dict[str, Any]]:
+    for item in _media_memory_keys_for(media_type, url):
+        row = _media_memory_rest_get_by_key(item.get("key", ""), "moderation")
+        if not row:
+            continue
+        decision = str(row.get("decision") or "").strip().lower()
+        confidence = float(row.get("confidence") or 0.0)
+        if decision == "delete" and confidence >= AI_MEDIA_MEMORY_DELETE_MIN_CONFIDENCE:
+            return _media_memory_moderation_result(row, media_type, url)
+        if decision == "allow" and confidence >= AI_MEDIA_MEMORY_ALLOW_MIN_CONFIDENCE:
+            return _media_memory_moderation_result(row, media_type, url)
+    return None
+
+
+def _media_memory_lookup_summary(media_type: str, url: str) -> Optional[Dict[str, Any]]:
+    for item in _media_memory_keys_for(media_type, url):
+        row = _media_memory_rest_get_by_key(item.get("key", ""), "understanding")
+        if not row:
+            continue
+        if float(row.get("confidence") or 0.0) >= AI_MEDIA_MEMORY_QA_MIN_CONFIDENCE:
+            _media_memory_touch(row)
+            return row
+    return None
+
+
+def _media_memory_extract_summary(result: Dict[str, Any], fallback: str = "") -> str:
+    values = []
+    for key in ("aiSummary", "summary", "description", "reason", "ocrText"):
+        v = str(result.get(key) or "").strip()
+        if v:
+            values.append(v)
+    if not values and fallback:
+        values.append(str(fallback).strip())
+    text = "\n".join(dict.fromkeys(values)).strip()
+    return text[:AI_MEDIA_MEMORY_QA_SUMMARY_MAX_CHARS]
+
+
+def _media_memory_upsert(payload: Dict[str, Any]) -> Dict[str, Any]:
+    if not _media_memory_enabled():
+        return {"ok": False, "reason": "disabled_or_missing_service_role"}
+    media_key = str(payload.get("media_key") or "").strip()
+    purpose = str(payload.get("purpose") or "moderation").strip().lower()
+    if not media_key:
+        return {"ok": False, "reason": "missing_media_key"}
+    headers = _supabase_headers(use_service_role=True)
+    now = _media_memory_now()
+    try:
+        r = requests.get(
+            f"{SB_URL}/rest/v1/{RESPECT_AI_MEDIA_MEMORY_TABLE}",
+            headers=headers,
+            params={"select": "id,hits,ai_hits,confidence", "media_key": f"eq.{media_key}", "purpose": f"eq.{purpose}", "limit": "1"},
+            timeout=8,
+        )
+        if r.status_code == 404 or (r.status_code == 400 and "does not exist" in r.text.lower()):
+            return {"ok": False, "reason": "table_missing"}
+        rows = r.json() if r.status_code < 400 and r.text else []
+        existing = dict(rows[0]) if isinstance(rows, list) and rows else None
+        clean_payload = dict(payload)
+        clean_payload["updated_at"] = now
+        clean_payload.setdefault("active", True)
+        clean_payload.setdefault("hits", 1)
+        clean_payload.setdefault("ai_hits", 1)
+        clean_payload.setdefault("memory_hits", 0)
+        if existing:
+            row_id = str(existing.get("id") or "")
+            clean_payload["hits"] = int(float(existing.get("hits") or 0)) + 1
+            clean_payload["ai_hits"] = int(float(existing.get("ai_hits") or 0)) + 1
+            clean_payload["confidence"] = max(float(existing.get("confidence") or 0.0), float(clean_payload.get("confidence") or 0.0))
+            rr = requests.patch(
+                f"{SB_URL}/rest/v1/{RESPECT_AI_MEDIA_MEMORY_TABLE}",
+                headers={**headers, "Prefer": "return=minimal"},
+                params={"id": f"eq.{row_id}"},
+                json=clean_payload,
+                timeout=8,
+            )
+            if rr.status_code >= 400:
+                return {"ok": False, "status": rr.status_code, "body": rr.text[:300]}
+            return {"ok": True, "updated": True, "mediaKey": media_key, "purpose": purpose}
+        clean_payload.setdefault("created_at", now)
+        rr = requests.post(
+            f"{SB_URL}/rest/v1/{RESPECT_AI_MEDIA_MEMORY_TABLE}",
+            headers={**headers, "Prefer": "return=minimal"},
+            json=clean_payload,
+            timeout=8,
+        )
+        if rr.status_code >= 400:
+            return {"ok": False, "status": rr.status_code, "body": rr.text[:300]}
+        return {"ok": True, "inserted": True, "mediaKey": media_key, "purpose": purpose}
+    except Exception as e:
+        logger.debug("media_memory upsert exception: %s", e)
+        return {"ok": False, "error": str(e)[:250]}
+
+
+def _media_memory_learn_moderation(media_type: str, url: str, result: Dict[str, Any], *, source: str = "vision_moderation") -> Dict[str, Any]:
+    try:
+        should_delete = bool(result.get("shouldDelete") is True or result.get("delete") is True or result.get("blocked") is True)
+        confidence = max(0.0, min(1.0, float(result.get("confidence") or (0.91 if should_delete else 0.84))))
+        if should_delete and confidence < AI_MEDIA_MEMORY_DELETE_MIN_CONFIDENCE:
+            return {"learned": False, "reason": "delete_confidence_too_low"}
+        if not should_delete and confidence < AI_MEDIA_MEMORY_ALLOW_MIN_CONFIDENCE:
+            return {"learned": False, "reason": "allow_confidence_too_low"}
+        keys = _media_memory_keys_for(media_type, url)
+        if not keys:
+            return {"learned": False, "reason": "no_media_key"}
+        now = _media_memory_now()
+        category = str(result.get("category") or ("media_violation" if should_delete else "safe"))[:80]
+        reason = str(result.get("reason") or "")[:900]
+        ocr_text = str(result.get("ocrText") or result.get("ocr_text") or "")[:1200]
+        summary = _media_memory_extract_summary(result, fallback=reason or ocr_text)
+        rows = []
+        for item in keys:
+            rows.append({
+                "media_key": item["key"],
+                "media_type": "video" if str(media_type).lower() == "video" else "image",
+                "key_type": item["kind"],
+                "key_value": item["value"][:260],
+                "url_hash": _media_memory_url_hash(url),
+                "purpose": "moderation",
+                "decision": "delete" if should_delete else "allow",
+                "category": category,
+                "reason": reason,
+                "confidence": confidence,
+                "ai_summary": summary,
+                "ocr_text": ocr_text,
+                "sample_text": summary[:900],
+                "source": source,
+                "model": str(result.get("visionModel") or result.get("model") or QWEN_VISION_MODEL)[:120],
+                "active": True,
+                "created_at": now,
+                "updated_at": now,
+            })
+        results = [_media_memory_upsert(row) for row in rows]
+        ok = [x for x in results if x.get("ok") is True]
+        return {"learned": bool(ok), "count": len(ok), "results": results[:4], "table": RESPECT_AI_MEDIA_MEMORY_TABLE}
+    except Exception as e:
+        return {"learned": False, "reason": "exception", "error": str(e)[:250]}
+
+
+def _media_memory_learn_understanding(media_type: str, url: str, *, question: str, reply: str, source: str = "respect_ai_reply") -> Dict[str, Any]:
+    try:
+        clean_reply = str(reply or "").strip()
+        if not clean_reply:
+            return {"learned": False, "reason": "empty_reply"}
+        keys = _media_memory_keys_for(media_type, url)
+        if not keys:
+            return {"learned": False, "reason": "no_media_key"}
+        summary = clean_reply[:AI_MEDIA_MEMORY_QA_SUMMARY_MAX_CHARS]
+        confidence = 0.72 if len(summary) >= 80 else 0.58
+        now = _media_memory_now()
+        rows = []
+        for item in keys:
+            rows.append({
+                "media_key": item["key"],
+                "media_type": "video" if str(media_type).lower() == "video" else "image",
+                "key_type": item["kind"],
+                "key_value": item["value"][:260],
+                "url_hash": _media_memory_url_hash(url),
+                "purpose": "understanding",
+                "decision": "understand",
+                "category": _qa_memory_category(question, "chat")[:80],
+                "reason": "فهم وسائط تعلمه Respect AI من محادثة سابقة",
+                "confidence": confidence,
+                "ai_summary": summary,
+                "ocr_text": "",
+                "sample_text": str(question or "")[:900],
+                "source": source,
+                "model": QWEN_VISION_MODEL,
+                "active": True,
+                "created_at": now,
+                "updated_at": now,
+            })
+        results = [_media_memory_upsert(row) for row in rows]
+        ok = [x for x in results if x.get("ok") is True]
+        return {"learned": bool(ok), "count": len(ok), "results": results[:4], "table": RESPECT_AI_MEDIA_MEMORY_TABLE}
+    except Exception as e:
+        return {"learned": False, "reason": "exception", "error": str(e)[:250]}
+
+
+def _respect_ai_cached_media_context(image_urls: list[str], video_urls: list[str]) -> tuple[str, bool]:
+    lines: list[str] = []
+    memory_used = False
+    for i, url in enumerate(image_urls[:3], start=1):
+        row = _media_memory_lookup_summary("image", url) or _media_memory_lookup_moderation("image", url)
+        if row:
+            memory_used = True
+            if isinstance(row, dict) and row.get("mediaMemoryUsed"):
+                summary = str(row.get("aiSummary") or row.get("reason") or "")
+            else:
+                summary = str(row.get("ai_summary") or row.get("reason") or "")
+            if summary.strip():
+                lines.append(f"ملخص الصورة {i} من ذاكرة Respect AI: {summary.strip()[:900]}")
+    for i, url in enumerate(video_urls[:2], start=1):
+        row = _media_memory_lookup_summary("video", url) or _media_memory_lookup_moderation("video", url)
+        if row:
+            memory_used = True
+            if isinstance(row, dict) and row.get("mediaMemoryUsed"):
+                summary = str(row.get("aiSummary") or row.get("reason") or "")
+            else:
+                summary = str(row.get("ai_summary") or row.get("reason") or "")
+            if summary.strip():
+                lines.append(f"ملخص الفيديو {i} من ذاكرة Respect AI: {summary.strip()[:1200]}")
+    return "\n".join(lines), memory_used
+
+
+def _respect_ai_video_frame_parts(video_urls: list[str], *, max_frames_per_video: int = 4) -> list[Dict[str, Any]]:
+    parts: list[Dict[str, Any]] = []
+    for video_index, url in enumerate(video_urls[:2], start=1):
+        try:
+            frames = _extract_video_frame_data_urls(url, max_frames=max(2, min(max_frames_per_video, 6)))
+            for frame in frames[:max_frames_per_video]:
+                second = frame.get("second")
+                parts.append({"type": "text", "text": f"لقطة من الفيديو رقم {video_index} عند الثانية {second}:"})
+                parts.append({"type": "image_url", "image_url": {"url": str(frame.get("dataUrl") or "")}})
+        except Exception as e:
+            parts.append({"type": "text", "text": f"تعذر استخراج لقطات الفيديو رقم {video_index} مؤقتًا: {e}"})
+    return parts
+
+
 def ask_qwen_ai_multimodal(
     text: str,
     username: str = "",
@@ -4572,14 +5013,29 @@ def ask_qwen_ai_multimodal(
     parent_reply_text: str = "",
     recent_replies_text: str = "",
     image_urls: Optional[list[str]] = None,
+    video_urls: Optional[list[str]] = None,
     conversation_context: str = "",
     file_attachments: Optional[list[Dict[str, Any]]] = None,
     deep_thinking: bool = False,
 ) -> str:
     urls = [str(u or "").strip() for u in (image_urls or []) if str(u or "").strip()]
-    if not urls:
+    vurls = [str(u or "").strip() for u in (video_urls or []) if str(u or "").strip()]
+    cached_context, media_memory_used = _respect_ai_cached_media_context(urls, vurls)
+    if not urls and not vurls:
         return ask_qwen_ai(
             text=text,
+            username=username,
+            mode=mode,
+            post_text=post_text,
+            parent_reply_text=parent_reply_text,
+            recent_replies_text=recent_replies_text,
+            conversation_context=conversation_context,
+            file_attachments=file_attachments,
+            deep_thinking=deep_thinking,
+        )
+    if media_memory_used and cached_context and not deep_thinking:
+        return ask_qwen_ai(
+            text=f"{text}\n\nسياق وسائط محفوظ من ذاكرة Respect AI:\n{cached_context}",
             username=username,
             mode=mode,
             post_text=post_text,
@@ -8593,6 +9049,26 @@ def _moderate_videos_with_qwen_inner(req: RespectAIModerationRequest) -> Dict[st
 
     results: list[Dict[str, Any]] = []
     for video_index, url in enumerate(urls, start=1):
+        cached = _media_memory_lookup_moderation("video", url)
+        if cached:
+            cached["videoUrl"] = url
+            cached["videoIndex"] = video_index
+            cached["visionModel"] = str(cached.get("model") or "respect_ai_media_memory_v1")
+            results.append(cached)
+            if cached.get("shouldDelete") is True:
+                return {
+                    "shouldDelete": True,
+                    "category": str(cached.get("category") or "video_violation"),
+                    "reason": str(cached.get("reason") or "الفيديو مخالف حسب ذاكرة Respect AI"),
+                    "confidence": float(cached.get("confidence") or 0.92),
+                    "checks": len(results),
+                    "videoChecks": results,
+                    "memoryUsed": True,
+                    "mediaMemoryUsed": True,
+                    "moderationMemoryUsed": True,
+                    "decisionSource": "respect_ai_media_memory",
+                }
+            continue
         try:
             frames = _extract_video_frame_data_urls(url, max_frames=max_frames)
         except Exception as e:
@@ -8669,6 +9145,7 @@ def _moderate_videos_with_qwen_inner(req: RespectAIModerationRequest) -> Dict[st
                 )
 
             if r.get("shouldDelete") is True:
+                r["mediaMemoryLearnResult"] = _media_memory_learn_moderation("video", url, r, source="qwen_vision_video_moderation")
                 return {
                     "shouldDelete": True,
                     "category": str(r.get("category") or "video_violation"),
@@ -8676,16 +9153,26 @@ def _moderate_videos_with_qwen_inner(req: RespectAIModerationRequest) -> Dict[st
                     "confidence": float(r.get("confidence") or 1.0),
                     "checks": len(results),
                     "videoChecks": results,
+                    "mediaMemoryLearnResult": r.get("mediaMemoryLearnResult"),
                 }
 
-    return {
+    media_memory_used = any(bool(r.get("mediaMemoryUsed") or r.get("memoryUsed")) for r in results)
+    safe_video_result = {
         "shouldDelete": False,
         "category": "safe",
         "reason": "",
         "confidence": max([float(r.get("confidence") or 0.0) for r in results] or [0.0]),
         "checks": len(results),
         "videoChecks": results,
+        "memoryUsed": media_memory_used,
+        "mediaMemoryUsed": media_memory_used,
+        "moderationMemoryUsed": media_memory_used,
     }
+    learn_results = []
+    for url in urls:
+        learn_results.append(_media_memory_learn_moderation("video", url, safe_video_result, source="qwen_vision_video_moderation_safe"))
+    safe_video_result["mediaMemoryLearnResults"] = learn_results
+    return safe_video_result
 
 
 def _respect_ai_image_moderation_prompt() -> str:
@@ -8800,6 +9287,26 @@ def moderate_images_with_qwen(req: RespectAIModerationRequest) -> Dict[str, Any]
 
     results = []
     for i, url in enumerate(urls, start=1):
+        cached = _media_memory_lookup_moderation("image", url)
+        if cached:
+            cached["imageUrl"] = url
+            cached["imageIndex"] = i
+            cached["visionModel"] = str(cached.get("model") or "respect_ai_media_memory_v1")
+            results.append(cached)
+            if cached.get("shouldDelete") is True:
+                return {
+                    "shouldDelete": True,
+                    "category": str(cached.get("category") or "image_violation"),
+                    "reason": str(cached.get("reason") or "الصورة مخالفة حسب ذاكرة Respect AI"),
+                    "confidence": float(cached.get("confidence") or 0.92),
+                    "checks": len(results),
+                    "imageChecks": results,
+                    "memoryUsed": True,
+                    "mediaMemoryUsed": True,
+                    "moderationMemoryUsed": True,
+                    "decisionSource": "respect_ai_media_memory",
+                }
+            continue
         try:
             r = _single_image_moderation_pass(url, i)
         except Exception as e:
@@ -8824,6 +9331,7 @@ def moderate_images_with_qwen(req: RespectAIModerationRequest) -> Dict[str, Any]
                     "imageUrl": url,
                     "imageIndex": i,
                 }
+        r["mediaMemoryLearnResult"] = _media_memory_learn_moderation("image", url, r, source="qwen_vision_image_moderation")
         results.append(r)
         if r.get("shouldDelete") is True:
             return {
@@ -8835,6 +9343,7 @@ def moderate_images_with_qwen(req: RespectAIModerationRequest) -> Dict[str, Any]
                 "imageChecks": results,
             }
 
+    media_memory_used = any(bool(r.get("mediaMemoryUsed") or r.get("memoryUsed")) for r in results)
     return {
         "shouldDelete": False,
         "category": "safe",
@@ -8842,6 +9351,9 @@ def moderate_images_with_qwen(req: RespectAIModerationRequest) -> Dict[str, Any]
         "confidence": max([float(r.get("confidence") or 0.0) for r in results] or [0.0]),
         "checks": len(results),
         "imageChecks": results,
+        "memoryUsed": media_memory_used,
+        "mediaMemoryUsed": media_memory_used,
+        "moderationMemoryUsed": media_memory_used,
     }
 
 
@@ -9388,12 +9900,16 @@ def _combine_text_image_video_moderation(
         }
 
     if image_delete:
+        image_memory_used = bool(image_result.get("memoryUsed") or image_result.get("mediaMemoryUsed"))
         return {
             **image_result,
             "shouldDelete": True,
             "category": str(image_result.get("category") or "image_violation"),
             "reason": str(image_result.get("reason") or "الصورة مخالفة"),
-            "decisionSource": "qwen-vl-plus-image",
+            "decisionSource": "respect_ai_media_memory" if image_memory_used else "qwen-vl-plus-image",
+            "memoryUsed": image_memory_used,
+            "moderationMemoryUsed": image_memory_used,
+            "mediaMemoryUsed": image_memory_used,
             "textModeration": text_result,
             "imageModeration": image_result,
             "videoModeration": video_result,
@@ -9421,12 +9937,16 @@ def _combine_text_image_video_moderation(
         }
 
     if video_delete:
+        video_memory_used = bool(video_result.get("memoryUsed") or video_result.get("mediaMemoryUsed"))
         return {
             **video_result,
             "shouldDelete": True,
             "category": str(video_result.get("category") or "video_violation"),
             "reason": str(video_result.get("reason") or "الفيديو مخالف"),
-            "decisionSource": "qwen-vl-plus-video",
+            "decisionSource": "respect_ai_media_memory" if video_memory_used else "qwen-vl-plus-video",
+            "memoryUsed": video_memory_used,
+            "moderationMemoryUsed": video_memory_used,
+            "mediaMemoryUsed": video_memory_used,
             "textModeration": text_result,
             "imageModeration": image_result,
             "videoModeration": video_result,
@@ -12961,6 +13481,7 @@ def _respect_ai_thinking_summary(
     memory_used: bool,
     deep_thinking: bool,
     image_count: int = 0,
+    video_count: int = 0,
     file_count: int = 0,
 ) -> str:
     """High-level reasoning summary for UI. It is not a hidden chain-of-thought."""
@@ -12984,6 +13505,8 @@ def _respect_ai_thinking_summary(
     ]
     if image_count:
         lines.append(f"• حللت الصور المرفقة: {image_count}")
+    if video_count:
+        lines.append(f"• حللت الفيديوهات المرفقة عبر لقطات ذكية: {video_count}")
     if file_count:
         lines.append(f"• راجعت الملفات المرفقة: {file_count}")
     if deep_thinking:
@@ -12999,19 +13522,20 @@ def respect_ai_reply(req: RespectAIRequest, x_app_secret: Optional[str] = Header
 
     username = req.username.strip() or req.askerUsername.strip()
     image_urls = _respect_ai_reply_image_urls(req)
-    text = (req.text.strip() or req.question.strip() or ("حلل هذه الصورة" if image_urls else "")).strip()
-    if not text and not image_urls:
-        raise HTTPException(status_code=400, detail="text or imageUrl is required")
+    video_urls = _respect_ai_reply_video_urls(req)
+    text = (req.text.strip() or req.question.strip() or ("حلل هذا الفيديو" if video_urls else ("حلل هذه الصورة" if image_urls else ""))).strip()
+    if not text and not image_urls and not video_urls:
+        raise HTTPException(status_code=400, detail="text, imageUrl or videoUrl is required")
 
     effective_mode = _auto_detect_mode(req.mode, text)
     file_attachments = req.fileAttachments or []
-    memory_question = _respect_ai_question_with_images(text, image_urls)
+    memory_question = _respect_ai_question_with_media(text, image_urls, video_urls)
 
     _enforce_respect_ai_quota(username)
 
-    # أسئلة الصور لا تستخدم ذاكرة النص العامة حتى لا يخلط بين صورتين مختلفتين بنفس السؤال.
+    # أسئلة الوسائط لا تستخدم ذاكرة النص العامة حتى لا يخلط بين صورتين/فيديوهين بنفس السؤال.
     memory_reply = None
-    if not image_urls:
+    if not image_urls and not video_urls:
         memory_reply = _qa_memory_lookup(
             memory_question,
             mode=effective_mode,
@@ -13035,6 +13559,7 @@ def respect_ai_reply(req: RespectAIRequest, x_app_secret: Optional[str] = Header
                 memory_used=True,
                 deep_thinking=bool(req.deepThinking),
                 image_count=len(image_urls),
+                video_count=len(video_urls),
                 file_count=len(file_attachments),
             ),
             usedMode=effective_mode,
@@ -13048,12 +13573,18 @@ def respect_ai_reply(req: RespectAIRequest, x_app_secret: Optional[str] = Header
         parent_reply_text=req.parentReplyText,
         recent_replies_text=req.recentRepliesText,
         image_urls=image_urls,
+        video_urls=video_urls,
         conversation_context=req.conversationContext,
         file_attachments=file_attachments,
         deep_thinking=bool(req.deepThinking),
     )
 
-    used_model = QWEN_VISION_MODEL if image_urls else QWEN_MODEL
+    used_model = QWEN_VISION_MODEL if (image_urls or video_urls) else QWEN_MODEL
+    media_understanding_learned = []
+    for url in image_urls:
+        media_understanding_learned.append(_media_memory_learn_understanding("image", url, question=text, reply=reply))
+    for url in video_urls:
+        media_understanding_learned.append(_media_memory_learn_understanding("video", url, question=text, reply=reply))
     learned = _qa_memory_learn(
         memory_question,
         reply,
@@ -13081,6 +13612,7 @@ def respect_ai_reply(req: RespectAIRequest, x_app_secret: Optional[str] = Header
             memory_used=False,
             deep_thinking=bool(req.deepThinking),
             image_count=len(image_urls),
+            video_count=len(video_urls),
             file_count=len(file_attachments),
         ),
         usedMode=effective_mode,
