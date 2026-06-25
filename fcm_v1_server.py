@@ -1571,6 +1571,8 @@ class RespectAIResponse(BaseModel):
     model: str
     source: str = "respect_ai"
     memoryUsed: bool = False
+    qaMemoryUsed: bool = False
+    mediaMemoryUsed: bool = False
     memoryId: str = ""
     confidence: float = 0.0
     category: str = ""
@@ -4852,6 +4854,9 @@ def _media_memory_upsert(payload: Dict[str, Any]) -> Dict[str, Any]:
         clean_payload.setdefault("memory_hits", 0)
         if existing:
             row_id = str(existing.get("id") or "")
+            # مهم: عند التعلم من Qwen نزيد ai_hits، لكن لا نعيد تصفير memory_hits.
+            # سابقًا كان clean_payload يحتوي memory_hits=0 فيمسح عدّاد استخدام الذاكرة بعد كل تكرار.
+            clean_payload.pop("memory_hits", None)
             clean_payload["hits"] = int(float(existing.get("hits") or 0)) + 1
             clean_payload["ai_hits"] = int(float(existing.get("ai_hits") or 0)) + 1
             clean_payload["confidence"] = max(float(existing.get("confidence") or 0.0), float(clean_payload.get("confidence") or 0.0))
@@ -4965,31 +4970,70 @@ def _media_memory_learn_understanding(media_type: str, url: str, *, question: st
         return {"learned": False, "reason": "exception", "error": str(e)[:250]}
 
 
-def _respect_ai_cached_media_context(image_urls: list[str], video_urls: list[str]) -> tuple[str, bool]:
-    lines: list[str] = []
-    memory_used = False
-    for i, url in enumerate(image_urls[:3], start=1):
-        row = _media_memory_lookup_summary("image", url) or _media_memory_lookup_moderation("image", url)
-        if row:
-            memory_used = True
-            if isinstance(row, dict) and row.get("mediaMemoryUsed"):
-                summary = str(row.get("aiSummary") or row.get("reason") or "")
-            else:
-                summary = str(row.get("ai_summary") or row.get("reason") or "")
-            if summary.strip():
-                lines.append(f"ملخص الصورة {i} من ذاكرة Respect AI: {summary.strip()[:900]}")
-    for i, url in enumerate(video_urls[:2], start=1):
-        row = _media_memory_lookup_summary("video", url) or _media_memory_lookup_moderation("video", url)
-        if row:
-            memory_used = True
-            if isinstance(row, dict) and row.get("mediaMemoryUsed"):
-                summary = str(row.get("aiSummary") or row.get("reason") or "")
-            else:
-                summary = str(row.get("ai_summary") or row.get("reason") or "")
-            if summary.strip():
-                lines.append(f"ملخص الفيديو {i} من ذاكرة Respect AI: {summary.strip()[:1200]}")
-    return "\n".join(lines), memory_used
+def _respect_ai_cached_media_context_details(image_urls: list[str], video_urls: list[str]) -> tuple[str, bool, bool, str, float]:
+    """يرجع سياق الوسائط المحفوظ + هل استُخدمت الذاكرة + هل كل الوسائط مغطاة.
 
+    الفرق مهم جدًا:
+    - any_used: وجدنا ذاكرة لوسيط واحد على الأقل.
+    - all_covered: كل الصور/الفيديوهات المرفقة لها ذاكرة صالحة، وهنا نستطيع تجنب Qwen Vision بالكامل.
+    """
+    lines: list[str] = []
+    memory_ids: list[str] = []
+    confidence_values: list[float] = []
+    checked = 0
+    covered = 0
+
+    for i, url in enumerate(image_urls[:3], start=1):
+        checked += 1
+        row = _media_memory_lookup_summary("image", url) or _media_memory_lookup_moderation("image", url)
+        if not row:
+            continue
+        if isinstance(row, dict) and row.get("mediaMemoryUsed"):
+            summary = str(row.get("aiSummary") or row.get("reason") or "")
+            memory_id = str(row.get("memoryId") or row.get("id") or "")
+        else:
+            summary = str(row.get("ai_summary") or row.get("reason") or "")
+            memory_id = str(row.get("id") or "")
+        if summary.strip():
+            covered += 1
+            lines.append(f"ملخص الصورة {i} من ذاكرة Respect AI: {summary.strip()[:900]}")
+            if memory_id and memory_id not in memory_ids:
+                memory_ids.append(memory_id)
+            try:
+                confidence_values.append(float(row.get("confidence") or 0.0))
+            except Exception:
+                pass
+
+    for i, url in enumerate(video_urls[:2], start=1):
+        checked += 1
+        row = _media_memory_lookup_summary("video", url) or _media_memory_lookup_moderation("video", url)
+        if not row:
+            continue
+        if isinstance(row, dict) and row.get("mediaMemoryUsed"):
+            summary = str(row.get("aiSummary") or row.get("reason") or "")
+            memory_id = str(row.get("memoryId") or row.get("id") or "")
+        else:
+            summary = str(row.get("ai_summary") or row.get("reason") or "")
+            memory_id = str(row.get("id") or "")
+        if summary.strip():
+            covered += 1
+            lines.append(f"ملخص الفيديو {i} من ذاكرة Respect AI: {summary.strip()[:1200]}")
+            if memory_id and memory_id not in memory_ids:
+                memory_ids.append(memory_id)
+            try:
+                confidence_values.append(float(row.get("confidence") or 0.0))
+            except Exception:
+                pass
+
+    any_used = covered > 0
+    all_covered = checked > 0 and covered == checked
+    confidence = max(confidence_values) if confidence_values else 0.0
+    return "\n".join(lines), any_used, all_covered, ",".join(memory_ids[:6]), confidence
+
+
+def _respect_ai_cached_media_context(image_urls: list[str], video_urls: list[str]) -> tuple[str, bool]:
+    context, any_used, _all_covered, _memory_id, _confidence = _respect_ai_cached_media_context_details(image_urls, video_urls)
+    return context, any_used
 
 def _respect_ai_video_frame_parts(video_urls: list[str], *, max_frames_per_video: int = 4) -> list[Dict[str, Any]]:
     parts: list[Dict[str, Any]] = []
@@ -5020,7 +5064,7 @@ def ask_qwen_ai_multimodal(
 ) -> str:
     urls = [str(u or "").strip() for u in (image_urls or []) if str(u or "").strip()]
     vurls = [str(u or "").strip() for u in (video_urls or []) if str(u or "").strip()]
-    cached_context, media_memory_used = _respect_ai_cached_media_context(urls, vurls)
+    cached_context, media_memory_used, media_memory_all_covered, _media_memory_id, _media_memory_confidence = _respect_ai_cached_media_context_details(urls, vurls)
     if not urls and not vurls:
         return ask_qwen_ai(
             text=text,
@@ -5033,7 +5077,9 @@ def ask_qwen_ai_multimodal(
             file_attachments=file_attachments,
             deep_thinking=deep_thinking,
         )
-    if media_memory_used and cached_context and not deep_thinking:
+    # لا نستدعي Qwen Vision إذا كانت كل الصور/الفيديوهات مفهومة سابقًا في ذاكرة الوسائط.
+    # نستخدم Qwen النصي فقط لصياغة جواب حسب سؤال المستخدم، مع سياق الوسائط المحفوظ.
+    if media_memory_all_covered and cached_context and not deep_thinking:
         return ask_qwen_ai(
             text=f"{text}\n\nسياق وسائط محفوظ من ذاكرة Respect AI:\n{cached_context}",
             username=username,
@@ -13551,6 +13597,8 @@ def respect_ai_reply(req: RespectAIRequest, x_app_secret: Optional[str] = Header
             model=str(memory_reply.get("model") or "respect_ai_qa_memory_v1"),
             source="qa_memory",
             memoryUsed=True,
+            qaMemoryUsed=True,
+            mediaMemoryUsed=False,
             memoryId=str(memory_reply.get("memoryId") or ""),
             confidence=float(memory_reply.get("confidence") or 0.0),
             category=str(memory_reply.get("category") or "general"),
@@ -13558,6 +13606,56 @@ def respect_ai_reply(req: RespectAIRequest, x_app_secret: Optional[str] = Header
                 mode=effective_mode,
                 memory_used=True,
                 deep_thinking=bool(req.deepThinking),
+                image_count=len(image_urls),
+                video_count=len(video_urls),
+                file_count=len(file_attachments),
+            ),
+            usedMode=effective_mode,
+        )
+
+    media_context, media_memory_used, media_memory_all_covered, media_memory_id, media_memory_confidence = _respect_ai_cached_media_context_details(image_urls, video_urls)
+
+    if media_memory_all_covered and media_context and not bool(req.deepThinking):
+        # هنا لا نستدعي Qwen Vision ولا نزيد ai_hits للوسائط.
+        # نستخدم الذاكرة كفهم جاهز، ثم Qwen النصي فقط يصيغ الرد حسب سؤال المستخدم.
+        reply = ask_qwen_ai(
+            text=f"{text}\n\nسياق وسائط محفوظ من ذاكرة Respect AI:\n{media_context}",
+            username=username,
+            mode=effective_mode,
+            post_text=req.postText,
+            parent_reply_text=req.parentReplyText,
+            recent_replies_text=req.recentRepliesText,
+            conversation_context=req.conversationContext,
+            file_attachments=file_attachments,
+            deep_thinking=False,
+        )
+        used_model = QWEN_MODEL
+        learned = _qa_memory_learn(
+            memory_question,
+            reply,
+            mode=effective_mode,
+            username=username,
+            post_text=req.postText,
+            parent_reply_text=req.parentReplyText,
+            recent_replies_text=req.recentRepliesText,
+            model=used_model,
+        )
+        _record_respect_ai_usage(username)
+        return RespectAIResponse(
+            ok=True,
+            reply=reply,
+            model=used_model,
+            source="respect_ai_media_memory",
+            memoryUsed=True,
+            qaMemoryUsed=False,
+            mediaMemoryUsed=True,
+            memoryId=media_memory_id or (str(learned.get("memoryId") or "") if isinstance(learned, dict) else ""),
+            confidence=float(media_memory_confidence or 0.0),
+            category=_qa_memory_category(text, effective_mode),
+            thinkingSummary=_respect_ai_thinking_summary(
+                mode=effective_mode,
+                memory_used=True,
+                deep_thinking=False,
                 image_count=len(image_urls),
                 video_count=len(video_urls),
                 file_count=len(file_attachments),
@@ -13604,6 +13702,8 @@ def respect_ai_reply(req: RespectAIRequest, x_app_secret: Optional[str] = Header
         model=used_model,
         source="respect_ai",
         memoryUsed=False,
+        qaMemoryUsed=False,
+        mediaMemoryUsed=False,
         memoryId=str(learned.get("memoryId") or "") if isinstance(learned, dict) else "",
         confidence=0.0,
         category=_qa_memory_category(text, effective_mode),
