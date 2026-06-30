@@ -1747,24 +1747,14 @@ def _android_channel_id_for_type(msg_type: str) -> str:
 
 
 def _android_should_include_notification(msg_type: str, privacy_data_only: bool) -> bool:
-    # Data-only لا يظهر دائمًا إذا التطبيق مقفل/مقتول على Android.
-    # لذلك نضيف notification payload للأنواع غير الحساسة أو التي نصها عام/مترجم.
     kind = (msg_type or "").strip().lower()
     if kind == "call":
         return False
-    if not privacy_data_only:
-        return True
-    return kind in {
-        "message",                 # نص عام: لديك رسالة جديدة، بدون محتوى الرسالة.
-        "general_notification",    # إشعار إداري مقصود ظهوره خارج التطبيق.
-        "general",
-        "post_event",
-        "app_feedback_resolved",
-        "post_moderation_deleted",
-        "post_deleted_by_moderation",
-        "reply_moderation_deleted",
-        "reply_deleted_by_moderation",
-    }
+    # Default to Android data-only so the native FirebaseMessagingService can
+    # build the same high-priority channels while the Flutter process is dead.
+    if privacy_data_only:
+        return False
+    return True
 
 
 def _is_bad_fcm_token_error(detail: Any) -> bool:
@@ -1843,7 +1833,8 @@ def send_fcm_v1(token: str, msg_type: str, title: str, body: str, data: Dict[str
     channel_id = _android_channel_id_for_type(msg_type)
 
     if msg_type == "call" or not include_android_notification:
-        # Data-only يبقى للمكالمات أو الأنواع الحساسة فقط.
+        # Android data-only lets the app's native service render calls/messages
+        # even when Flutter is not alive. iOS still receives the APNs alert below.
         payload = {
             "message": {
                 "token": token,
